@@ -1,0 +1,127 @@
+@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@100;300;400;500;700;900&family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=JetBrains+Mono:wght@400;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Vazirmatn", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-paper: #FDFCFB;
+  --color-ink: #1A1A1A;
+  --color-accent: #2563EB;
+  --color-gold: #D4AF37;
+}
+
+:root {
+  font-family: "Vazirmatn", sans-serif;
+}
+
+body {
+  direction: rtl;
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  @apply antialiased selection:bg-blue-100 selection:text-blue-900 transition-colors duration-500;
+}
+
+.dark body {
+  background-color: #050505;
+  color: #FDFCFB;
+}
+
+/* Luxury Shadows */
+.shadow-lux {
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.04), 0 4px 10px -5px rgba(0, 0, 0, 0.02);
+}
+
+.dark .shadow-lux {
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.4), 0 4px 10px -5px rgba(0, 0, 0, 0.2);
+}
+
+.shadow-lux-hover {
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.shadow-lux-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.08), 0 10px 20px -10px rgba(0, 0, 0, 0.04);
+}
+
+.dark .shadow-lux-hover:hover {
+  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.6), 0 10px 20px -10px rgba(0, 0, 0, 0.4);
+}
+
+/* Glassmorphism */
+.glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.dark .glass {
+  background: rgba(26, 26, 26, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #E5E7EB;
+  border-radius: 10px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #1F2937;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #D1D5DB;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #374151;
+}
+
+/* Typography Utilities */
+.font-serif {
+  font-family: "Playfair Display", serif;
+}
+
+.font-mono {
+  font-family: "JetBrains Mono", monospace;
+}
+
+.tracking-tight-lux {
+  letter-spacing: -0.02em;
+}
+
+.tracking-wide-lux {
+  letter-spacing: 0.1em;
+}
+
+/* Layout Utilities */
+.grid-visible {
+  @apply border-collapse;
+}
+
+.grid-visible td, .grid-visible th {
+  @apply border border-black/5 dark:border-white/5;
+}
+
+/* Animations */
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes float {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+  100% { transform: translateY(0px); }
+}
