@@ -1,0 +1,223 @@
+@import "tailwindcss";
+@import "@fontsource-variable/vazirmatn";
+
+@theme {
+  --font-sans: "Vazirmatn Variable", "Vazirmatn", "Tahoma", "Arial", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
+
+@layer base {
+  :root {
+    --background: #f7fbff;
+    --foreground: #0f172a;
+    --card: #ffffff;
+    --card-foreground: #0f172a;
+    --popover: #ffffff;
+    --popover-foreground: #0f172a;
+    --primary: #2563eb;
+    --primary-foreground: #ffffff;
+    --secondary: #eaf3ff;
+    --secondary-foreground: #1e3a8a;
+    --muted: #f1f6fc;
+    --muted-foreground: #5b6b80;
+    --accent: #e8f2ff;
+    --accent-foreground: #1d4ed8;
+    --destructive: #dc2626;
+    --destructive-foreground: #ffffff;
+    --border: #dbe7f5;
+    --input: #d7e4f2;
+    --ring: #2563eb;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: #07111f;
+    --foreground: #f8fafc;
+    --card: #0f1b2d;
+    --card-foreground: #f8fafc;
+    --popover: #0f1b2d;
+    --popover-foreground: #f8fafc;
+    --primary: #60a5fa;
+    --primary-foreground: #07111f;
+    --secondary: #16243a;
+    --secondary-foreground: #f8fafc;
+    --muted: #16243a;
+    --muted-foreground: #9fb2c8;
+    --accent: #1c3150;
+    --accent-foreground: #f8fafc;
+    --destructive: #ef4444;
+    --destructive-foreground: #f8fafc;
+    --border: #20324d;
+    --input: #20324d;
+    --ring: #60a5fa;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased transition-colors duration-300;
+    direction: rtl;
+    font-size: 14px;
+    min-height: 100vh;
+  }
+}
+
+.app-shell {
+  background-color: var(--background);
+  background-image: none;
+}
+
+.app-main {
+  background: var(--background);
+}
+
+.app-page {
+  width: 100%;
+  max-width: 1440px;
+  margin-inline: auto;
+  padding: 1rem;
+}
+
+@media (min-width: 768px) {
+  .app-page {
+    padding: 1.25rem;
+  }
+}
+
+.dashboard-theme [class*="rounded-[2rem]"],
+.dashboard-theme [class*="rounded-[2.5rem]"],
+.dashboard-theme [class*="rounded-[3rem]"],
+.dashboard-theme [class*="rounded-[4rem]"],
+.dashboard-theme .rounded-3xl {
+  border-radius: 1rem !important;
+}
+
+.dashboard-theme .shadow-2xl,
+.dashboard-theme .shadow-3xl {
+  box-shadow: 0 18px 50px rgba(37, 99, 235, 0.12) !important;
+}
+
+[data-slot="dialog-overlay"] {
+  background: rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(6px);
+}
+
+[data-slot="dialog-content"],
+.app-modal-content {
+  border: 1px solid var(--border) !important;
+  border-radius: 1rem !important;
+  background: var(--popover) !important;
+  color: var(--popover-foreground) !important;
+  box-shadow: 0 22px 70px rgba(37, 99, 235, 0.16), 0 8px 24px rgba(15, 23, 42, 0.08) !important;
+}
+
+[data-slot="dialog-header"],
+.app-modal-header {
+  border-color: var(--border) !important;
+}
+
+[data-slot="dialog-title"],
+.app-modal-title {
+  color: var(--foreground);
+  font-weight: 900;
+}
+
+[data-slot="dialog-footer"],
+.app-modal-footer {
+  border-color: var(--border) !important;
+  background: color-mix(in srgb, var(--muted) 64%, white) !important;
+}
+
+[data-slot="dialog-content"] input,
+[data-slot="dialog-content"] textarea,
+[data-slot="dialog-content"] select,
+.app-modal-content input,
+.app-modal-content textarea,
+.app-modal-content select {
+  border-color: var(--input) !important;
+  background: color-mix(in srgb, var(--background) 72%, white) !important;
+}
+
+[data-slot="dialog-content"] input:focus,
+[data-slot="dialog-content"] textarea:focus,
+[data-slot="dialog-content"] select:focus,
+.app-modal-content input:focus,
+.app-modal-content textarea:focus,
+.app-modal-content select:focus {
+  border-color: var(--ring) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 18%, transparent) !important;
+}
+
+.scrollbar-hide {
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.ltr {
+  direction: ltr;
+}
+
+.skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--background) 58%, transparent),
+    transparent
+  );
+  animation: skeleton-shimmer 1.55s ease-in-out infinite;
+}
+
+@keyframes skeleton-shimmer {
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-blue-300 rounded-full;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-blue-500;
+}

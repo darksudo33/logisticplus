@@ -1,0 +1,17 @@
+{
+  "platform": "node",
+  "app": "logisticplus-staging",
+  "port": 3000,
+  "disks": [
+    {
+      "name": "logisticplus-documents-staging",
+      "mountTo": "storage/documents"
+    }
+  ],
+  "node": {
+    "version": "22"
+  },
+  "build": {
+    "command": "npm run build"
+  }
+}

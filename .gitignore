@@ -1,0 +1,15 @@
+node_modules/
+build/
+dist/
+coverage/
+playwright-report/
+test-results/
+storage/test-documents/
+storage/documents/
+backups/
+.DS_Store
+*.log
+.env*
+!.env.example
+/{
+/{console.error(e)
