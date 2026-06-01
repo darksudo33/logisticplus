@@ -11,5 +11,5 @@ backups/
 *.log
 .env*
 !.env.example
-/{
-/{console.error(e)
+/\{
+/\{console.error(e)
