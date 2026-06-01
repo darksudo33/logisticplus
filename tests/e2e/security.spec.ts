@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import pg from "pg";
 import {
   OWNER_EMAIL,
   OWNER_PASSWORD,
@@ -14,6 +15,19 @@ import {
   uniqueEmail,
 } from "./helpers";
 import { NORMAL_APP_ROUTE_FAMILIES, RBAC_TENANT_POLICY } from "./rbac-policy";
+
+const { Client } = pg;
+const testDatabaseUrl = process.env.TEST_DATABASE_URL || "postgres://postgres@localhost:5432/logisticplus_test";
+
+async function resetRateLimitBuckets() {
+  const client = new Client({ connectionString: testDatabaseUrl });
+  await client.connect();
+  try {
+    await client.query("DELETE FROM rate_limit_buckets");
+  } finally {
+    await client.end();
+  }
+}
 
 async function createTenantOwner(owner: Awaited<ReturnType<typeof loginApi>>) {
   const tenantEmail = uniqueEmail("e2e-owner");
@@ -133,10 +147,10 @@ test.describe.serial("security regression harness", () => {
     await expectForbidden(await employee.get("/api/admin/sms-deliveries"));
     await expectForbidden(await employee.get("/api/admin/sms-analytics"));
     await expectForbidden(await employee.get("/api/admin/sms-templates"));
-    await expectForbidden(await employee.get("/api/shipments"));
-    await expectForbidden(await employee.get("/api/documents"));
-    await expectForbidden(await employee.get("/api/quotations"));
-    await expectForbidden(await employee.get("/api/archive"));
+    await readOk(await employee.get("/api/shipments"));
+    await readOk(await employee.get("/api/documents"));
+    await readOk(await employee.get("/api/quotations"));
+    await readOk(await employee.get("/api/archive"));
 
     await disposeContexts(owner, employee);
   });
@@ -180,11 +194,18 @@ test.describe.serial("security regression harness", () => {
     await expectUnavailable(await tenant.get("/api/customers/c1"));
     await expectUnavailable(await tenant.patch("/api/customers/c1", { data: { phone: "09129999999" } }));
     await expectUnavailable(await tenant.post("/api/customers/c1/archive"));
+    const invalidCustomerCreate = await owner.post("/api/customers", { data: { email: "missing-name@example.test" } });
+    expect(invalidCustomerCreate.status(), await invalidCustomerCreate.text()).toBe(400);
+    expect((await invalidCustomerCreate.json()).error.code).toBe("VALIDATION_ERROR");
     await expectUnavailable(await tenant.get("/api/tasks/t1"));
     await expectUnavailable(await tenant.patch("/api/tasks/t1", { data: { title: "Cross tenant edit" } }));
     await expectUnavailable(await tenant.post("/api/tasks/t1/complete"));
     await expectUnavailable(await tenant.patch("/api/shipments/s1/steps/step-s1-0", { data: { status: "COMPLETED" } }));
     await expectUnavailable(await tenant.post("/api/shipments/s1/tasks", { data: { title: "Cross tenant task" } }));
+    await expectUnavailable(await tenant.patch("/api/shipments/s1/public-status", { data: { publicLabel: "Cross tenant status" } }));
+    const invalidPublicStatus = await owner.patch("/api/shipments/s1/public-status", { data: { publicLabel: "" } });
+    expect(invalidPublicStatus.status(), await invalidPublicStatus.text()).toBe(400);
+    expect((await invalidPublicStatus.json()).error.code).toBe("VALIDATION_ERROR");
     await expectUnavailable(await tenant.get("/api/documents/doc1"));
     await expectUnavailable(await tenant.get("/api/documents/doc1/download"));
     await expectUnavailable(await tenant.patch("/api/documents/doc1", { data: { title: "Cross tenant document" } }));
@@ -204,10 +225,15 @@ test.describe.serial("security regression harness", () => {
     await expectUnavailable(await tenant.post("/api/quotations/q1/archive"));
     await expectUnavailable(await tenant.post("/api/quotations/q1/convert-to-shipment"));
 
+    const invalidArchive = await owner.post("/api/archive/not-a-real-entity/q1");
+    expect(invalidArchive.status(), await invalidArchive.text()).toBe(400);
+    expect((await invalidArchive.json()).error.code).toBe("VALIDATION_ERROR");
+
     await readOk(await owner.post("/api/archive/quotation/q1"));
     await expectUnavailable(await tenant.get("/api/archive/quotation:q1"));
     await expectUnavailable(await tenant.post("/api/archive/quotation/q1"));
     await expectUnavailable(await tenant.post("/api/archive/quotation/q1/restore"));
+    await expectUnavailable(await tenant.delete("/api/archive/quotation/q1"));
 
     const changes = await readOk<any[]>(await owner.get("/api/changes"));
     expect(changes.length).toBeGreaterThan(0);
@@ -224,16 +250,19 @@ test.describe.serial("security regression harness", () => {
     const finance = await loginApi(financeEmail, USER_PASSWORD);
     await readOk(await finance.get("/api/cheques"));
     await readOk(await finance.get("/api/tasks/my"));
-    await expectForbidden(await finance.get("/api/shipments"));
-    await expectForbidden(await finance.get("/api/documents"));
-    await expectForbidden(await finance.get("/api/quotations"));
+    await readOk(await finance.get("/api/shipments"));
+    await readOk(await finance.get("/api/documents"));
+    await readOk(await finance.get("/api/quotations"));
+    await readOk(await finance.get("/api/compliance-meetings"));
     await expectForbidden(await finance.get("/api/admin/overview"));
 
     const operations = await loginApi(operationsEmail, USER_PASSWORD);
     await readOk(await operations.get("/api/tasks/my"));
+    await readOk(await operations.get("/api/shipments"));
+    await readOk(await operations.get("/api/documents"));
+    await readOk(await operations.get("/api/quotations"));
+    await readOk(await operations.get("/api/compliance-meetings"));
     await expectForbidden(await operations.get("/api/cheques"));
-    await expectForbidden(await operations.get("/api/documents"));
-    await expectForbidden(await operations.get("/api/quotations"));
     await expectForbidden(await operations.get("/api/admin/overview"));
 
     await disposeContexts(owner, finance, operations);
@@ -241,6 +270,7 @@ test.describe.serial("security regression harness", () => {
 
   test("hardens document upload, download, and public document access", async () => {
     const owner = await loginApi();
+    await readOk(await owner.post("/api/shipments/s1/customer-access/disable"));
     const tenantInfo = await createTenantOwner(owner);
     const tenant = await loginApi(tenantInfo.tenantEmail, USER_PASSWORD);
     const publicContext = await apiContext();
@@ -285,6 +315,19 @@ test.describe.serial("security regression harness", () => {
       buffer: Buffer.alloc(0),
     });
     expect(empty.status(), await empty.text()).toBe(400);
+
+    const invalidMetadata = await uploadDocument(owner, pdfFile, {
+      shipmentId: "s1",
+      visibility: "public",
+    });
+    expect(invalidMetadata.status(), await invalidMetadata.text()).toBe(400);
+    expect((await invalidMetadata.json()).error.code).toBe("VALIDATION_ERROR");
+
+    const invalidVisibility = await owner.patch(`/api/documents/${encodeURIComponent(uploaded.id)}/visibility`, {
+      data: { visibility: "public" },
+    });
+    expect(invalidVisibility.status(), await invalidVisibility.text()).toBe(400);
+    expect((await invalidVisibility.json()).error.code).toBe("VALIDATION_ERROR");
 
     const crossTenantParent = await uploadDocument(tenant, pdfFile, { shipmentId: "s1" });
     await expectUnavailable(crossTenantParent);
@@ -377,6 +420,18 @@ test.describe.serial("security regression harness", () => {
     expect(paidInvoice.status).toBe("paid");
     expect(paidInvoice.receipt?.paymentId).toBe(paidSignup.paymentId);
 
+    const replayPaidCallback = await publicContext.get(
+      `/api/billing/zarinpal/callback?Authority=${encodeURIComponent(started.authority)}&Status=OK`,
+      { maxRedirects: 0 }
+    );
+    expect(replayPaidCallback.status()).toBe(302);
+    expect(replayPaidCallback.headers().location).toContain("payment=paid");
+    const replayPaidInvoice = await readOk<any>(
+      await owner.get(`/api/admin/billing/invoices/${encodeURIComponent(paidSignup.invoiceId)}`)
+    );
+    expect(replayPaidInvoice.status).toBe("paid");
+    expect(replayPaidInvoice.receipt?.id).toBe(paidInvoice.receipt?.id);
+
     const paidPayments = await readOk<any[]>(await owner.get("/api/admin/payments"));
     const paidPayment = paidPayments.find((payment) => payment.id === paidSignup.paymentId);
     expect(paidPayment?.status).toBe("paid");
@@ -387,6 +442,23 @@ test.describe.serial("security regression harness", () => {
     expect(paidRequest?.status).toBe("pending_review");
     expect(paidRequest?.paymentStatus).toBe("paid");
     expect(paidRequest?.organizationStatus).toBe("pending_review");
+    expect(paidRequest?.abandonedCleanupEligible).toBe(false);
+
+    const blockedPaidCleanup = await owner.delete(`/api/admin/signup-requests/${encodeURIComponent(paidSignup.signupRequestId)}/abandoned`);
+    expect(blockedPaidCleanup.status(), await blockedPaidCleanup.text()).toBe(409);
+
+    const duplicatePaidSignup = await publicContext.post("/api/signup", {
+      data: {
+        companyName: "E2E Duplicate Paid",
+        ownerName: "E2E Billing Owner",
+        ownerEmail: paidSignup.ownerEmail,
+        password: USER_PASSWORD,
+        planId: "starter",
+        billingCycle: "monthly",
+        contactPhone: "09120000000",
+      },
+    });
+    expect(duplicatePaidSignup.status(), await duplicatePaidSignup.text()).toBe(409);
 
     const paidOrg = await readOk<any>(
       await owner.get(`/api/admin/organizations/${encodeURIComponent(paidSignup.organizationId)}`)
@@ -396,6 +468,66 @@ test.describe.serial("security regression harness", () => {
 
     const restartPaid = await publicContext.post(`/api/billing/payments/${encodeURIComponent(paidSignup.paymentId)}/start`);
     expect(restartPaid.status(), await restartPaid.text()).toBe(409);
+
+    const noStartSignup = await createPublicSignup(publicContext, "nostart-billing");
+    const noStartRetry = await readOk<any>(
+      await publicContext.post("/api/signup", {
+        data: {
+          companyName: "E2E No Start Retry",
+          ownerName: "E2E No Start Retry Owner",
+          ownerEmail: noStartSignup.ownerEmail,
+          password: USER_PASSWORD,
+          planId: "starter",
+          billingCycle: "monthly",
+          contactPhone: "09120000000",
+        },
+      })
+    );
+    expect(noStartRetry.signupRequestId).toBe(noStartSignup.signupRequestId);
+    expect(noStartRetry.paymentId).not.toBe(noStartSignup.paymentId);
+
+    const cleanupRequests = await readOk<any[]>(await owner.get("/api/admin/signup-requests"));
+    const cleanupRequest = cleanupRequests.find((request) => request.id === noStartSignup.signupRequestId);
+    expect(cleanupRequest?.abandonedCleanupEligible).toBe(true);
+    const cleaned = await readOk<any>(
+      await owner.delete(`/api/admin/signup-requests/${encodeURIComponent(noStartSignup.signupRequestId)}/abandoned`)
+    );
+    expect(cleaned.deleted).toBe(true);
+    expect(cleaned.releasedEmail).toBe(noStartSignup.ownerEmail);
+    const afterCleanupSignup = await readOk<any>(
+      await publicContext.post("/api/signup", {
+        data: {
+          companyName: "E2E Cleanup Reuse",
+          ownerName: "E2E Cleanup Reuse Owner",
+          ownerEmail: noStartSignup.ownerEmail,
+          password: USER_PASSWORD,
+          planId: "starter",
+          billingCycle: "monthly",
+          contactPhone: "09120000000",
+        },
+      })
+    );
+    expect(afterCleanupSignup.signupRequestId).not.toBe(noStartSignup.signupRequestId);
+
+    const startedNoCallbackSignup = await createPublicSignup(publicContext, "started-nocallback");
+    await readOk<any>(
+      await publicContext.post(`/api/billing/payments/${encodeURIComponent(startedNoCallbackSignup.paymentId)}/start`)
+    );
+    const startedNoCallbackRetry = await readOk<any>(
+      await publicContext.post("/api/signup", {
+        data: {
+          companyName: "E2E Started No Callback Retry",
+          ownerName: "E2E Started Retry Owner",
+          ownerEmail: startedNoCallbackSignup.ownerEmail,
+          password: USER_PASSWORD,
+          planId: "starter",
+          billingCycle: "monthly",
+          contactPhone: "09120000000",
+        },
+      })
+    );
+    expect(startedNoCallbackRetry.signupRequestId).toBe(startedNoCallbackSignup.signupRequestId);
+    expect(startedNoCallbackRetry.paymentId).not.toBe(startedNoCallbackSignup.paymentId);
 
     const failedSignup = await createPublicSignup(publicContext, "failed-billing");
     const failedStart = await readOk<any>(
@@ -425,7 +557,94 @@ test.describe.serial("security regression harness", () => {
     expect(failedRequest?.paymentStatus).toBe("failed");
     expect(failedRequest?.organizationStatus).toBe("payment_failed");
 
+    const retrySignup = await readOk<any>(
+      await publicContext.post("/api/signup", {
+        data: {
+          companyName: "E2E Billing Retry",
+          ownerName: "E2E Billing Retry Owner",
+          ownerEmail: failedSignup.ownerEmail,
+          password: USER_PASSWORD,
+          planId: "starter",
+          billingCycle: "monthly",
+          contactPhone: "09120000000",
+        },
+      })
+    );
+    expect(retrySignup.signupRequestId).toBe(failedSignup.signupRequestId);
+    expect(retrySignup.paymentId).not.toBe(failedSignup.paymentId);
+
+    const retryPayments = await readOk<any[]>(await owner.get("/api/admin/payments"));
+    expect(retryPayments.find((payment) => payment.id === failedSignup.paymentId)?.status).toBe("superseded");
+    expect(retryPayments.find((payment) => payment.id === retrySignup.paymentId)?.status).toBe("pending");
+
     await disposeContexts(owner, publicContext);
+  });
+
+  test("guards company and platform user management actions by tenant and deletion blockers", async () => {
+    const owner = await loginApi();
+    const tenantInfo = await createTenantOwner(owner);
+    const otherTenantInfo = await createTenantOwner(owner);
+    const tenant = await loginApi(tenantInfo.tenantEmail, USER_PASSWORD);
+
+    const employeeEmail = uniqueEmail("managed-user");
+    const created = await readOk<any>(
+      await tenant.post("/api/users", {
+        data: {
+          name: "Managed User",
+          email: employeeEmail,
+          password: USER_PASSWORD,
+          role: "OPERATIONS",
+        },
+      })
+    );
+
+    await readOk(await tenant.post(`/api/users/${created.id}/password`, { data: { password: "ChangedPass123!" } }));
+    const suspended = await readOk<any>(await tenant.post(`/api/users/${created.id}/suspend`));
+    expect(suspended.status).toBe("suspended");
+
+    const preview = await readOk<any>(await tenant.get(`/api/users/${created.id}/delete-preview`));
+    expect(preview.canDelete).toBe(true);
+    await readOk(await tenant.delete(`/api/users/${created.id}`));
+    const usersAfterDelete = await readOk<any[]>(await tenant.get("/api/users"));
+    expect(usersAfterDelete.some((user) => user.id === created.id)).toBe(false);
+
+    const otherOwner = await loginApi(otherTenantInfo.tenantEmail, USER_PASSWORD);
+    const otherUsers = await readOk<any[]>(await otherOwner.get("/api/users"));
+    await expectUnavailable(await tenant.get(`/api/users/${otherUsers[0].id}`));
+
+    const platformUser = await readOk<any>(
+      await otherOwner.post("/api/users", {
+        data: {
+          name: "Platform Managed User",
+          email: uniqueEmail("platform-managed-user"),
+          password: USER_PASSWORD,
+          role: "FINANCE",
+        },
+      })
+    );
+    const adminUsers = await readOk<any[]>(
+      await owner.get(`/api/admin/organizations/${otherTenantInfo.organizationId}/users`)
+    );
+    expect(adminUsers.some((user) => user.id === platformUser.id)).toBe(true);
+    const updatedByAdmin = await readOk<any>(
+      await owner.patch(`/api/admin/organizations/${otherTenantInfo.organizationId}/users/${platformUser.id}`, {
+        data: { role: "MANAGER" },
+      })
+    );
+    expect(updatedByAdmin.role).toBe("MANAGER");
+    await readOk(await owner.post(`/api/admin/organizations/${otherTenantInfo.organizationId}/users/${platformUser.id}/password`, { data: { password: "AdminPass123!" } }));
+    await readOk(await owner.post(`/api/admin/organizations/${otherTenantInfo.organizationId}/users/${platformUser.id}/suspend`));
+    const adminPreview = await readOk<any>(
+      await owner.get(`/api/admin/organizations/${otherTenantInfo.organizationId}/users/${platformUser.id}/delete-preview`)
+    );
+    expect(adminPreview.canDelete).toBe(true);
+    await readOk(await owner.delete(`/api/admin/organizations/${otherTenantInfo.organizationId}/users/${platformUser.id}`));
+
+    const selfPreview = await readOk<any>(await otherOwner.get(`/api/users/${otherUsers[0].id}/delete-preview`));
+    expect(selfPreview.canDelete).toBe(false);
+    expect(selfPreview.blockers.some((blocker: any) => blocker.code === "SELF_DELETE_BLOCKED")).toBe(true);
+
+    await disposeContexts(owner, tenant, otherOwner);
   });
 
   test("scopes company billing views to the authenticated organization", async () => {
@@ -519,12 +738,19 @@ test.describe.serial("security regression harness", () => {
     expect(bySearch.shipment.code).toBe("LS-9801");
     expectPublicTrackingPayloadIsSafe(bySearch);
 
+    const invalidSearch = await publicContext.post("/api/public/track/search", {
+      data: { shipmentCode: "", verification: "" },
+    });
+    expect(invalidSearch.status(), await invalidSearch.text()).toBe(400);
+    expect((await invalidSearch.json()).error.code).toBe("VALIDATION_ERROR");
+
     await expectUnavailable(await publicContext.get("/api/public/documents/doc1"));
 
     await disposeContexts(owner, publicContext);
   });
 
   test("uses the shared PostgreSQL limiter for production-sensitive throttles", async () => {
+    await resetRateLimitBuckets();
     const owner = await loginApi();
     const publicContext = await apiContext();
 
@@ -559,6 +785,24 @@ test.describe.serial("security regression harness", () => {
     expect(limitedDocumentUpload, "document upload should be throttled").not.toBeNull();
     expect(limitedDocumentUpload!.headers()["retry-after"]).toBeTruthy();
 
+    await readOk(await owner.post("/api/shipments/s1/customer-access/generate"));
+    let limitedPublicTrackSearch = null;
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const response = await publicContext.post("/api/public/track/search", {
+        data: {
+          shipmentCode: "LS-9801",
+          verification: "info@arian.com",
+        },
+      });
+      if (response.status() === 429) {
+        limitedPublicTrackSearch = response;
+        break;
+      }
+      await readOk(response);
+    }
+    expect(limitedPublicTrackSearch, "public tracking search should be throttled").not.toBeNull();
+    expect(limitedPublicTrackSearch!.headers()["retry-after"]).toBeTruthy();
+
     let limitedSignup = null;
     for (let attempt = 0; attempt < 12; attempt += 1) {
       const response = await publicContext.post("/api/signup", {
@@ -581,6 +825,7 @@ test.describe.serial("security regression harness", () => {
     expect(limitedSignup, "public signup should be throttled").not.toBeNull();
     expect(limitedSignup!.headers()["retry-after"]).toBeTruthy();
 
+    await resetRateLimitBuckets();
     await disposeContexts(owner, publicContext);
   });
 });

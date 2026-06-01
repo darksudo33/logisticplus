@@ -77,12 +77,17 @@ export function expectPublicTrackingPayloadIsSafe(data: any) {
   expect(Object.keys(data).sort()).toEqual(["company", "documents", "shipment", "steps"]);
   expect(Object.keys(data.shipment).sort()).toEqual([
     "code",
+    "completedPublicStepsCount",
+    "currentPublicLabel",
+    "currentPublicPhase",
     "destination",
     "estimatedDelivery",
     "lastPublicUpdate",
     "origin",
+    "publicNote",
     "publicStatusDescription",
     "publicStatusLabel",
+    "totalPublicStepsCount",
   ]);
   expect(Array.isArray(data.steps)).toBe(true);
   expect(Array.isArray(data.documents)).toBe(true);
