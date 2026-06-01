@@ -16,9 +16,10 @@ const protectedRoutes = [
   "/tasks",
   "/documents",
   "/cheques",
-  "/quotage",
+  "/commercial-cards",
+  "/quotations",
   "/archive",
-  "/compliance",
+  "/compliance-meetings",
   "/chat",
   "/management",
   "/changelog",
@@ -144,11 +145,12 @@ test.describe.serial("guided empty-state UX on a clean database", () => {
         await expectNoHorizontalOverflow(page);
       }
 
-      await page.goto("/admin");
+      await page.goto("/platform-admin");
       await expect(page.locator("h1").first()).toBeVisible();
       await expectNoHorizontalOverflow(page);
-      for (const tabName of [/ثبت/, /پرداخت/, /خطا/]) {
-        await page.locator("button", { hasText: tabName }).first().click();
+      for (const section of ["requests", "billing", "errors"]) {
+        await page.getByTestId(`admin-nav-${section}`).filter({ visible: true }).first().click();
+        await expect(page.getByTestId(`admin-section-${section}`)).toBeVisible();
         await expect(page.locator("[data-empty-state]").filter({ visible: true }).first()).toBeVisible();
         for (const forbidden of forbiddenVisibleText) {
           await expect(page.locator("body")).not.toContainText(forbidden);

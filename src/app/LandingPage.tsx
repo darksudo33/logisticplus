@@ -243,7 +243,7 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
       </span>
       <span className={cn("flex flex-col leading-none", compact && "hidden xs:flex")}>
         <span className="text-sm font-black text-foreground">لجستیک پلاس</span>
-        <span className="mt-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Logistic Plus</span>
+        <span className="mt-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">لجستیک پلاس</span>
       </span>
     </Link>
   );
@@ -334,7 +334,7 @@ function ProductPreviewHeroCard() {
             </span>
             <div>
               <div className="text-xs font-black sm:text-sm">میز پیگیری عملیات</div>
-              <div className="text-[10px] font-bold text-muted-foreground">Logistic Plus / لجستیک پلاس</div>
+              <div className="text-[10px] font-bold text-muted-foreground">لجستیک پلاس</div>
             </div>
           </div>
           <div className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[10px] font-black text-emerald-700 sm:text-xs">
@@ -684,7 +684,7 @@ export default function LandingPage() {
               </motion.div>
               <motion.p variants={fadeUp} className="mx-auto mb-4 inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1.5 text-[11px] font-black text-primary lg:mx-0">
                 <PackageCheck className="h-3.5 w-3.5" />
-                Logistic Plus / لجستیک پلاس
+                لجستیک پلاس
               </motion.p>
               <motion.h1 variants={fadeUp} className="text-3xl font-black leading-tight text-foreground sm:text-4xl md:text-5xl lg:text-[3.55rem]">
                 پنل عملیات لجستیک برای وقتی که پیگیری بار از کنترل خارج می‌شود

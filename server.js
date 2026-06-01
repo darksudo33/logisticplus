@@ -1,4 +1,5 @@
 import express from "express";
+import compression from "compression";
 import path from "path";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
@@ -6,6 +7,7 @@ import http from "node:http";
 import { WebSocketServer } from "ws";
 import {
   addChatThreadMember,
+  assignTaskRecord,
   archiveDocumentRecord,
   archiveChequeRecord,
   archiveComplianceMeetingRecord,
@@ -33,6 +35,8 @@ import {
   createShipmentTaskRecord,
   createTaskRecord,
   deleteSessionByToken,
+  deleteAbandonedSignupRequest,
+  deleteAppUserRecord,
   deleteArchivedEntityRecord,
   disableShipmentCustomerAccess,
   ensureDirectChat,
@@ -89,16 +93,20 @@ import {
   listBillingPayments,
   listQuotations,
   listRoles,
+  listOrganizationMembers,
   listSignupRequests,
   listSmsDeliveries,
   listSmsTemplates,
   listSubscriptionPlans,
   listShipmentSteps,
   listTasks,
+  listTaskEvents,
   markChatThreadRead,
   markBillingPaymentManually,
   markPaymentRequested,
-  markPaymentVerifiedByAuthority,
+  markPaymentVerifiedByAuthorityWithResult,
+  pool,
+  previewAppUserDeletion,
   replaceRecordsForUser,
   replaceDocumentFileRecord,
   recordImmediateSmsDelivery,
@@ -109,6 +117,8 @@ import {
   requirePermission,
   renewOrganizationSubscription,
   restoreEntityRecord,
+  normalizeOperationalSearchQuery,
+  searchOperationalRecords,
   searchPublicTracking,
   setQuotationStatus,
   setTaskStatus,
@@ -127,6 +137,7 @@ import {
   updateShipmentStepRecord,
   updateSmsTemplate,
   updateTaskRecord,
+  updateTaskStatusRecord,
   upsertMeetingRequiredDocument,
   updateUserNotificationPreferences,
   updateUserPassword,
@@ -144,17 +155,55 @@ import {
   uploadSingle,
 } from "./src/server/document-storage.js";
 import {
+  archiveEntityParamsSchema,
+  billingPaymentStartParamsSchema,
+  documentMetadataSchema,
+  documentParamsSchema,
+  documentVisibilitySchema,
+  organizationMembersQuerySchema,
+  shipmentParamsSchema,
+  shipmentProgressBlockerBodySchema,
+  shipmentProgressCurrentBodySchema,
+  shipmentProgressParamsSchema,
+  shipmentProgressStartBodySchema,
+  shipmentProgressUnblockBodySchema,
+  shipmentPublicStatusBodySchema,
+  shipmentStepParamsSchema,
+  shipmentTaskBodySchema,
+  signupRequestParamsSchema,
+  taskAssignBodySchema,
+  taskListQuerySchema,
+  taskParamsSchema,
+  taskStatusBodySchema,
+} from "./src/server/request-schemas.js";
+import { registerCustomerRoutes } from "./src/server/routes/customer-routes.js";
+import { registerNotificationRoutes } from "./src/server/routes/notification-routes.js";
+import { registerPublicTrackingRoutes } from "./src/server/routes/public-tracking-routes.js";
+import { registerShipmentProgressRoutes } from "./src/server/routes/shipment-progress-routes.js";
+import { registerUserRoutes } from "./src/server/routes/user-routes.js";
+import { startShipmentWorkflow as startShipmentWorkflowRecord } from "./src/server/repositories/shipment-progress.js";
+import { parseRequestValue } from "./src/server/validation.js";
+import { attachTenantContext, findClientTenantIdentifiers, requireTenantContext } from "./src/server/tenant-context.js";
+import {
   clearRateLimit,
   consumeRateLimit,
-  isRateLimited,
   rateLimitKey,
-  recordRateLimitHit,
 } from "./src/server/rate-limit.js";
 import { runStartupChecks, shouldTrustProxy } from "./src/server/startup-checks.js";
 import { runSmsWorkerOnce, startSmsWorker } from "./src/server/sms-worker.js";
 import { sendSmsMessage } from "./src/server/sms-provider.js";
 
 const SESSION_COOKIE = "logisticplus_session";
+const PASSWORD_LOGIN_LIMIT = { limit: 5, windowMs: 15 * 60 * 1000 };
+const PASSWORD_LOGIN_IP_LIMIT = { limit: 20, windowMs: 15 * 60 * 1000 };
+const PHONE_LOGIN_REQUEST_COOLDOWN = { limit: 1, windowMs: 60 * 1000 };
+const PHONE_LOGIN_REQUEST_LIMIT = { limit: 3, windowMs: 10 * 60 * 1000 };
+const PHONE_LOGIN_REQUEST_IP_LIMIT = { limit: 10, windowMs: 60 * 60 * 1000 };
+const PHONE_LOGIN_VERIFY_LIMIT = { limit: 6, windowMs: 15 * 60 * 1000 };
+const DOCUMENT_DOWNLOAD_LIMIT = { limit: 60, windowMs: 10 * 60 * 1000 };
+const PUBLIC_DOCUMENT_DOWNLOAD_LIMIT = { limit: 30, windowMs: 10 * 60 * 1000 };
+const PUBLIC_TRACK_SEARCH_LIMIT = { limit: 20, windowMs: 15 * 60 * 1000 };
+const ZARINPAL_MIN_AMOUNT_IRR = 10000;
 
 const chatClients = new Map();
 
@@ -305,7 +354,7 @@ function appBaseUrl(req) {
 }
 
 function normalizeZarinpalAmount(amount) {
-  return Math.max(1000, Math.round(Number(amount || 0)));
+  return Math.max(ZARINPAL_MIN_AMOUNT_IRR, Math.round(Number(amount || 0)));
 }
 
 function zarinpalTimeoutMs() {
@@ -445,12 +494,26 @@ async function requireAuthenticatedUser(req, res) {
     createApiError(res, 403, "SUBSCRIPTION_INACTIVE", "Subscription is not active.");
     return null;
   }
+  const permissions = await getUserPermissions(session.user.id);
+  session.user.permissions = permissions;
+  const tenantContext = attachTenantContext(req, session.user, { permissions });
+  if ((session.user.organizationId || session.user.organization_id) && !tenantContext) {
+    createApiError(res, 403, "ORGANIZATION_MEMBERSHIP_REQUIRED", "Active organization membership is required.");
+    return null;
+  }
+  session.user.organizationId = tenantContext?.organizationId || null;
+  session.user.organization_id = tenantContext?.organizationId || null;
+  req.clientTenantIdentifiers = findClientTenantIdentifiers(req);
   return session.user;
 }
 
 async function userHasPermission(user, permissionKey) {
-  const permissions = await getUserPermissions(user.id);
+  const permissions = user.permissions || await getUserPermissions(user.id);
   return permissions.includes(permissionKey);
+}
+
+function requireRequestTenant(req, res, operation) {
+  return requireTenantContext(req, res, { createApiError, operation });
 }
 
 async function requirePlatformAdmin(req, res) {
@@ -468,10 +531,13 @@ async function requirePlatformAdmin(req, res) {
 async function requireCompanyCeo(req, res) {
   const user = await requireAuthenticatedUser(req, res);
   if (!user) return null;
-  if (user.role !== "CEO" || !user.organizationId) {
+  const tenantContext = requireRequestTenant(req, res, "company CEO API");
+  if (!tenantContext) return null;
+  if (user.role !== "CEO") {
     createApiError(res, 403, "FORBIDDEN", "Company CEO access is required.");
     return null;
   }
+  user.organizationId = tenantContext.organizationId;
   return user;
 }
 
@@ -515,10 +581,14 @@ async function canAccessTask(user, task, action = "view") {
   if (taskOrganizationId && taskOrganizationId !== user.organizationId) return false;
   const permissions = await getUserPermissions(user.id);
   const canViewAll = permissions.includes("tasks.view_all");
-  const isAssigned = task.assigned_to_id === user.id;
+  const assignedToId = task.assigned_to_id || task.assignedToUserId;
+  const assignedById = task.assigned_by_id || task.assignedByUserId;
+  const ownerUserId = task.owner_user_id || task.ownerUserId;
+  const isAssigned = assignedToId === user.id;
+  const isCreator = ownerUserId === user.id || assignedById === user.id;
   if (canViewAll) return true;
-  if (action === "status" && isAssigned) return true;
-  return permissions.includes("tasks.view_own") && isAssigned;
+  if (action === "status" && (isAssigned || isCreator)) return true;
+  return permissions.includes("tasks.view_own") && (isAssigned || isCreator);
 }
 
 async function startServer() {
@@ -534,6 +604,7 @@ async function startServer() {
     throw new Error(`Invalid PORT value: ${process.env.PORT}`);
   }
   app.set("trust proxy", shouldTrustProxy());
+  app.use(compression());
   app.use(express.json({ limit: "1mb" }));
   app.use((req, res, next) => {
     res.on("finish", async () => {
@@ -656,17 +727,20 @@ async function startServer() {
 
   app.post("/api/billing/payments/:id/start", async (req, res) => {
     try {
+      const params = parseRequestValue(res, billingPaymentStartParamsSchema, req.params);
+      if (!params) return;
       if (!(await consumeRateLimit(req, res, "payment-start", {
         limit: 12,
         windowMs: 10 * 60 * 1000,
-        discriminator: req.params.id,
+        discriminator: params.id,
       }))) return;
-      const payment = await getBillingPayment(req.params.id);
+      const payment = await getBillingPayment(params.id);
       if (!payment) return createApiError(res, 404, "PAYMENT_NOT_FOUND", "Payment was not found.");
       if (!payment.signup_request_id || !payment.subscription_id || !payment.organization_id) {
         return createApiError(res, 404, "PAYMENT_NOT_FOUND", "Payment was not found.");
       }
       if (payment.status === "paid") return createApiError(res, 409, "PAYMENT_ALREADY_PAID", "Payment is already verified.");
+      if (payment.status === "superseded") return createApiError(res, 409, "PAYMENT_SUPERSEDED", "A newer payment attempt is available for this signup.");
       const gateway = await requestZarinpalPayment(req, payment);
       const updated = await markPaymentRequested(payment.id, {
         authority: gateway.authority,
@@ -687,18 +761,31 @@ async function startServer() {
       if (!authority) return res.redirect("/signup/pending?payment=missing");
       const payment = await getBillingPaymentByAuthority(authority);
       if (!payment) return res.redirect("/signup/pending?payment=unknown");
+      if (payment.status === "paid") {
+        return res.redirect(`/signup/pending?payment=paid&request=${encodeURIComponent(payment.signup_request_id || "")}`);
+      }
+      if (payment.status === "superseded") {
+        return res.redirect(`/signup/pending?payment=failed&request=${encodeURIComponent(payment.signup_request_id || "")}`);
+      }
+      if (payment.status === "failed" && status.toUpperCase() !== "OK") {
+        return res.redirect(`/signup/pending?payment=failed&request=${encodeURIComponent(payment.signup_request_id || "")}`);
+      }
       const verification = await verifyZarinpalPayment(payment, authority, status);
-      const updated = await markPaymentVerifiedByAuthority(authority, verification);
-      await auditLog({
-        organizationId: updated?.organization_id,
-        action: verification.ok ? "billing.payment_verified" : "billing.payment_failed",
-        entityType: "billing_payment",
-        entityId: updated?.id,
-        summary: verification.ok ? "Payment was verified by Zarinpal." : "Payment verification failed.",
-        after: { authority, refId: verification.refId, ok: verification.ok },
-        requestContext: requestContext(req),
-      });
-      res.redirect(`/signup/pending?payment=${verification.ok ? "paid" : "failed"}&request=${encodeURIComponent(updated?.signup_request_id || "")}`);
+      const result = await markPaymentVerifiedByAuthorityWithResult(authority, verification);
+      const updated = result.payment;
+      if (result.transitioned) {
+        await auditLog({
+          organizationId: updated?.organization_id,
+          action: verification.ok ? "billing.payment_verified" : "billing.payment_failed",
+          entityType: "billing_payment",
+          entityId: updated?.id,
+          summary: verification.ok ? "Payment was verified by Zarinpal." : "Payment verification failed.",
+          after: { authority, refId: verification.refId, ok: verification.ok },
+          requestContext: requestContext(req),
+        });
+      }
+      const redirectStatus = updated?.status === "paid" ? "paid" : "failed";
+      res.redirect(`/signup/pending?payment=${redirectStatus}&request=${encodeURIComponent(updated?.signup_request_id || "")}`);
     } catch (error) {
       console.error("Zarinpal callback failed:", errorForLog(error));
       res.redirect("/signup/pending?payment=failed");
@@ -737,41 +824,49 @@ async function startServer() {
 
   app.post("/api/auth/login", async (req, res) => {
     try {
-      const { email, password } = req.body || {};
-      const loginLimit = { limit: 5, windowMs: 15 * 60 * 1000 };
-      const loginKey = rateLimitKey(req, "login", email || "missing");
-      if (await isRateLimited(loginKey, loginLimit)) {
-        res.setHeader("Retry-After", "900");
-        return createApiError(res, 429, "RATE_LIMITED", "Too many login attempts. Please try again later.");
-      }
+      const email = String(req.body?.email || "").trim();
+      const password = String(req.body?.password || "");
+      const loginEmailKey = email.toLowerCase() || "missing";
+      const loginLimitMessage = "Too many login attempts. Please wait before trying again.";
+      const ipAllowed = await consumeRateLimit(req, res, "login-ip", {
+        ...PASSWORD_LOGIN_IP_LIMIT,
+        message: loginLimitMessage,
+      });
+      if (!ipAllowed) return;
+
+      const accountAllowed = await consumeRateLimit(req, res, "login-account", {
+        ...PASSWORD_LOGIN_LIMIT,
+        discriminator: loginEmailKey,
+        message: loginLimitMessage,
+        field: "email",
+      });
+      if (!accountAllowed) return;
+
       if (!email || !password) {
-        await recordRateLimitHit(loginKey, loginLimit);
-        return res.status(400).json({ message: "Email and password are required." });
+        return createApiError(res, 400, "VALIDATION_ERROR", "Email and password are required.");
       }
 
       const user = await getUserByEmail(email);
       if (!user) {
-        await recordRateLimitHit(loginKey, loginLimit);
-        return res.status(401).json({ message: "Invalid email or password." });
+        return createApiError(res, 401, "INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
       const loginBlock = loginBlockForUser(user);
       if (loginBlock) {
-        await recordRateLimitHit(loginKey, loginLimit);
         return sendLoginBlock(res, loginBlock);
       }
 
       const passwordMatches = await bcrypt.compare(password, user.password_hash);
       if (!passwordMatches) {
-        await recordRateLimitHit(loginKey, loginLimit);
-        return res.status(401).json({ message: "Invalid email or password." });
+        return createApiError(res, 401, "INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
-      await clearRateLimit(loginKey);
+      await clearRateLimit(rateLimitKey(req, "login-ip"));
+      await clearRateLimit(rateLimitKey(req, "login-account", loginEmailKey));
       await createAuthenticatedSessionResponse(req, res, user);
     } catch (error) {
       console.error("Login failed:", error);
-      res.status(500).json({ message: "Login failed." });
+      createApiError(res, 500, "LOGIN_FAILED", "Login failed.");
     }
   });
 
@@ -781,10 +876,26 @@ async function startServer() {
       if (!rawPhone) {
         return createApiError(res, 400, "VALIDATION_ERROR", "Phone number is required.", "phone");
       }
-      const allowed = await consumeRateLimit(req, res, "phone-login-request", {
-        limit: 3,
-        windowMs: 10 * 60 * 1000,
+      const ipAllowed = await consumeRateLimit(req, res, "phone-login-request-ip", {
+        ...PHONE_LOGIN_REQUEST_IP_LIMIT,
+        message: "Too many SMS login code requests. Please try again later.",
+        field: "phone",
+      });
+      if (!ipAllowed) return;
+
+      const cooldownAllowed = await consumeRateLimit(req, res, "phone-login-request-cooldown", {
+        ...PHONE_LOGIN_REQUEST_COOLDOWN,
         discriminator: rawPhone,
+        message: "Please wait before requesting another SMS login code.",
+        field: "phone",
+      });
+      if (!cooldownAllowed) return;
+
+      const allowed = await consumeRateLimit(req, res, "phone-login-request", {
+        ...PHONE_LOGIN_REQUEST_LIMIT,
+        discriminator: rawPhone,
+        message: "Too many SMS login code requests for this phone number. Please try again later.",
+        field: "phone",
       });
       if (!allowed) return;
 
@@ -885,18 +996,22 @@ async function startServer() {
         return createApiError(res, 400, "VALIDATION_ERROR", "Phone number and SMS code are required.");
       }
       const allowed = await consumeRateLimit(req, res, "phone-login-verify", {
-        limit: 6,
-        windowMs: 15 * 60 * 1000,
+        ...PHONE_LOGIN_VERIFY_LIMIT,
         discriminator: rawPhone,
+        message: "Too many SMS code attempts. Please wait before trying again.",
+        field: "code",
       });
       if (!allowed) return;
 
       const result = await verifyLoginSmsChallenge({ phone: rawPhone, code });
       if (!result.ok || !result.user) {
+        if (result.reason === "too_many_attempts") {
+          res.setHeader("Retry-After", "300");
+        }
         return createApiError(
           res,
           result.reason === "too_many_attempts" ? 429 : 401,
-          result.reason === "too_many_attempts" ? "RATE_LIMITED" : "INVALID_SMS_CODE",
+          result.reason === "too_many_attempts" ? "SMS_CODE_LOCKED" : "INVALID_SMS_CODE",
           "Invalid or expired SMS code."
         );
       }
@@ -1108,318 +1223,145 @@ async function startServer() {
     });
   }
 
-  app.get("/api/customers", async (req, res) => {
+  app.get("/api/search", async (req, res) => {
+    const startedAt = Date.now();
+    const type = String(req.query.type || "all");
+    const limit = req.query.limit || 20;
+    const offset = req.query.offset || 0;
+    const normalizedQuery = normalizeOperationalSearchQuery(req.query.q || "");
+
     try {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
-      await requirePermission(user, "customers.view");
-      const data = await listCustomersDetailed({
-        includeArchived: req.query.includeArchived === "true",
-        search: req.query.search || "",
-        organizationId: user.organizationId,
+
+      if (!normalizedQuery) {
+        return createApiError(res, 400, "SEARCH_QUERY_REQUIRED", "Search query is required.", "q");
+      }
+      if (normalizedQuery.length < 2) {
+        return createApiError(res, 400, "SEARCH_QUERY_TOO_SHORT", "Search query must be at least 2 characters.", "q");
+      }
+
+      const data = await searchOperationalRecords({
+        user,
+        q: normalizedQuery,
+        type,
+        limit,
+        offset,
       });
+
+      if (process.env.QA_SEARCH_LOGS === "true" || process.env.QA_MODE) {
+        console.info("Search query completed", {
+          queryLength: normalizedQuery.length,
+          type,
+          limit: data.limit,
+          offset: data.offset,
+          resultCount: data.results.length,
+          total: data.total,
+          durationMs: Date.now() - startedAt,
+          statusCode: 200,
+        });
+      }
+
+      res.json(data);
+    } catch (error) {
+      if (process.env.QA_SEARCH_LOGS === "true" || process.env.QA_MODE) {
+        console.info("Search query failed", {
+          queryLength: normalizedQuery.length,
+          type,
+          durationMs: Date.now() - startedAt,
+          statusCode: error.statusCode || 500,
+        });
+      }
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      console.error("Global search failed:", error);
+      createApiError(res, 500, "SEARCH_FAILED", "Could not run search.");
+    }
+  });
+
+  registerCustomerRoutes(app, {
+    archiveCustomerRecord,
+    auditLog,
+    createApiError,
+    createCustomerRecord,
+    getCustomerRecord,
+    listCustomerRelated,
+    listCustomersDetailed,
+    requestContext,
+    requireAuthenticatedUser,
+    requireTenantContext: requireRequestTenant,
+    requirePermission,
+    updateCustomerRecord,
+  });
+
+  registerNotificationRoutes(app, {
+    createApiError,
+    pool,
+    requireAuthenticatedUser,
+    requireTenantContext: requireRequestTenant,
+  });
+
+  registerShipmentProgressRoutes(app, {
+    auditLog,
+    createApiError,
+    getShipmentRecord,
+    getUserPermissions,
+    pool,
+    requestContext,
+    requireAuthenticatedUser,
+    requireTenantContext: requireRequestTenant,
+  });
+
+  registerUserRoutes(app, {
+    auditLog,
+    bcrypt,
+    createApiError,
+    createAppUserRecord,
+    deleteAppUserRecord,
+    listAppUsers,
+    listRoles,
+    previewAppUserDeletion,
+    requestContext,
+    requireAuthenticatedUser,
+    requireCompanyCeo,
+    requirePermission,
+    requirePlatformAdmin,
+    requireTenantContext: requireRequestTenant,
+    updateAppUserRecord,
+    updateUserPassword,
+  });
+
+  app.get("/api/organization/members", async (req, res) => {
+    try {
+      const user = await requireAuthenticatedUser(req, res);
+      if (!user) return;
+      const canAssignTasks = await userHasPermission(user, "tasks.assign");
+      const allowed = await Promise.all([
+        userHasPermission(user, "tasks.create"),
+        Promise.resolve(canAssignTasks),
+        userHasPermission(user, "shipment_steps.update"),
+        userHasPermission(user, "users.manage"),
+      ]);
+      if (!allowed.some(Boolean)) {
+        return createApiError(res, 403, "FORBIDDEN", "Missing permission: organization member lookup.");
+      }
+      const query = parseRequestValue(res, organizationMembersQuerySchema, req.query || {});
+      if (!query) return;
+      const data = canAssignTasks
+        ? await listOrganizationMembers({
+            organizationId: user.organizationId,
+            includeInactive: query.includeInactive,
+          })
+        : [{
+            userId: user.id,
+            displayName: user.name,
+            email: user.email,
+            roleName: user.role,
+            active: user.status !== "suspended",
+          }];
       res.json({ ok: true, data });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("List customers failed:", error);
-      createApiError(res, 500, "CUSTOMERS_LIST_FAILED", "Could not load customers.");
-    }
-  });
-
-  app.post("/api/customers", async (req, res) => {
-    try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "customers.create");
-      if (!req.body?.company && !req.body?.name) {
-        return createApiError(res, 400, "VALIDATION_FAILED", "Customer name or company is required.", "name");
-      }
-      const created = await createCustomerRecord({ ownerUserId: user.id, actorUserId: user.id, customer: req.body });
-      await auditLog({
-        actorUserId: user.id,
-        action: "customer.create",
-        entityType: "customer",
-        entityId: created.id,
-        summary: "Customer was created.",
-        after: created,
-        requestContext: requestContext(req),
-      });
-      res.status(201).json({ ok: true, data: created });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      if (error.statusCode === 409) return createApiError(res, 409, error.code || "DUPLICATE", error.message, "email");
-      console.error("Create customer failed:", error);
-      createApiError(res, 500, "CUSTOMER_CREATE_FAILED", "Could not create customer.");
-    }
-  });
-
-  app.get("/api/customers/:id", async (req, res) => {
-    try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "customers.view");
-      const customer = await getCustomerRecord(req.params.id, { organizationId: user.organizationId });
-      if (!customer) return createApiError(res, 404, "NOT_FOUND", "Customer was not found.");
-      res.json({ ok: true, data: customer });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("Get customer failed:", error);
-      createApiError(res, 500, "CUSTOMER_GET_FAILED", "Could not load customer.");
-    }
-  });
-
-  app.patch("/api/customers/:id", async (req, res) => {
-    try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "customers.update");
-      const result = await updateCustomerRecord(req.params.id, req.body || {}, { organizationId: user.organizationId });
-      if (!result.after) return createApiError(res, 404, "NOT_FOUND", "Customer was not found.");
-      await auditLog({
-        actorUserId: user.id,
-        action: "customer.update",
-        entityType: "customer",
-        entityId: req.params.id,
-        summary: "Customer was updated.",
-        before: result.before,
-        after: result.after,
-        requestContext: requestContext(req),
-      });
-      res.json({ ok: true, data: result.after });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      if (error.statusCode === 409) return createApiError(res, 409, error.code || "DUPLICATE", error.message, "email");
-      console.error("Update customer failed:", error);
-      createApiError(res, 500, "CUSTOMER_UPDATE_FAILED", "Could not update customer.");
-    }
-  });
-
-  for (const related of ["shipments", "documents", "quotations", "cheques"]) {
-    app.get(`/api/customers/:id/${related}`, async (req, res) => {
-      try {
-        const user = await requireAuthenticatedUser(req, res);
-        if (!user) return;
-        await requirePermission(user, "customers.view");
-        const data = await listCustomerRelated(req.params.id, related, { organizationId: user.organizationId });
-        if (!data) return createApiError(res, 404, "NOT_FOUND", "Customer was not found.");
-        res.json({ ok: true, data });
-      } catch (error) {
-        if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-        console.error(`Get customer ${related} failed:`, error);
-        createApiError(res, 500, "CUSTOMER_RELATED_FAILED", `Could not load customer ${related}.`);
-      }
-    });
-  }
-
-  app.post("/api/customers/:id/archive", async (req, res) => {
-    try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "customers.update");
-      const result = await archiveCustomerRecord(req.params.id, { organizationId: user.organizationId });
-      if (!result.after) return createApiError(res, 404, "NOT_FOUND", "Customer was not found.");
-      await auditLog({
-        actorUserId: user.id,
-        action: "customer.archive",
-        entityType: "customer",
-        entityId: req.params.id,
-        summary: "Customer was archived.",
-        before: result.before,
-        after: result.after,
-        requestContext: requestContext(req),
-      });
-      res.json({ ok: true, data: result.after });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("Archive customer failed:", error);
-      createApiError(res, 500, "CUSTOMER_ARCHIVE_FAILED", "Could not archive customer.");
-    }
-  });
-
-  app.get("/api/users/online", async (req, res) => {
-    try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "users.manage");
-      const data = (await listAppUsers({ includeSuspended: false, organizationId: user.organizationId })).filter((item) => item.isOnline);
-      res.json({ ok: true, data });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("Online users failed:", error);
-      createApiError(res, 500, "ONLINE_USERS_FAILED", "Could not load online users.");
-    }
-  });
-
-  app.get("/api/users", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      res.json({ ok: true, data: await listAppUsers({ organizationId: user.organizationId }) });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("List users failed:", error);
-      createApiError(res, 500, "USERS_LIST_FAILED", "Could not load users.");
-    }
-  });
-
-  app.post("/api/users", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      const allowedRoles = new Set(["CEO", "MANAGER", "OPERATIONS", "CUSTOMER_SERVICE", "FINANCE"]);
-      const role = String(req.body?.role || "OPERATIONS").toUpperCase();
-      const password = String(req.body?.password || "");
-      if (!req.body?.name || !req.body?.email || !password) {
-        return createApiError(res, 400, "VALIDATION_ERROR", "Name, email and password are required.");
-      }
-      if (password.length < 8) {
-        return createApiError(res, 400, "VALIDATION_ERROR", "Password must be at least 8 characters.", "password");
-      }
-      if (!allowedRoles.has(role)) {
-        return createApiError(res, 400, "VALIDATION_ERROR", "Selected role is not valid.", "role");
-      }
-      const passwordHash = await bcrypt.hash(password, 10);
-      const created = await createAppUserRecord({
-        actorUserId: user.id,
-        user: {
-          name: req.body.name,
-          email: req.body.email,
-          role,
-          avatar: req.body.avatar || "",
-          department: req.body.department || null,
-          status: "active",
-        },
-        passwordHash,
-      });
-      await auditLog({
-        actorUserId: user.id,
-        action: "user.create",
-        entityType: "user",
-        entityId: created.id,
-        summary: "User was created.",
-        after: created,
-        requestContext: requestContext(req),
-      });
-      res.status(201).json({ ok: true, data: created });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      if (error.statusCode === 402) return createApiError(res, 402, error.code || "PLAN_LIMIT_REACHED", error.message);
-      if (error.code === "23505") return createApiError(res, 409, "DUPLICATE_EMAIL", "A user with this email already exists.", "email");
-      console.error("Create user failed:", error);
-      createApiError(res, 500, "USER_CREATE_FAILED", "Could not create user.");
-    }
-  });
-
-  app.get("/api/users/:id", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      const data = (await listAppUsers({ organizationId: user.organizationId })).find((item) => item.id === req.params.id);
-      if (!data) return createApiError(res, 404, "NOT_FOUND", "User was not found.");
-      res.json({ ok: true, data });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("Get user failed:", error);
-      createApiError(res, 500, "USER_GET_FAILED", "Could not load user.");
-    }
-  });
-
-  app.patch("/api/users/:id", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      const target = await requireCompanyUserTarget(user, req.params.id, res);
-      if (!target) return;
-      if (req.params.id === user.id && req.body?.status && req.body.status !== "active") {
-        return createApiError(res, 400, "SELF_SUSPEND_BLOCKED", "You cannot suspend yourself.");
-      }
-      if (req.params.id === user.id && req.body?.role && req.body.role !== "CEO") {
-        return createApiError(res, 400, "SELF_ROLE_CHANGE_BLOCKED", "You cannot change your own CEO role.");
-      }
-      const result = await updateAppUserRecord(req.params.id, req.body || {}, user.id);
-      if (!result.after) return createApiError(res, 404, "NOT_FOUND", "User was not found.");
-      await auditLog({
-        actorUserId: user.id,
-        action: "user.update",
-        entityType: "user",
-        entityId: req.params.id,
-        summary: "User was updated.",
-        before: result.before,
-        after: result.after,
-        requestContext: requestContext(req),
-      });
-      res.json({ ok: true, data: result.after });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      if (error.code === "23505") return createApiError(res, 409, "DUPLICATE_EMAIL", "A user with this email already exists.", "email");
-      console.error("Update user failed:", error);
-      createApiError(res, 500, "USER_UPDATE_FAILED", "Could not update user.");
-    }
-  });
-
-  app.post("/api/users/:id/suspend", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      const target = await requireCompanyUserTarget(user, req.params.id, res);
-      if (!target) return;
-      if (req.params.id === user.id) {
-        return createApiError(res, 400, "SELF_SUSPEND_BLOCKED", "You cannot suspend yourself.");
-      }
-      const result = await updateAppUserRecord(req.params.id, { status: "suspended" }, user.id);
-      await auditLog({ actorUserId: user.id, action: "user.suspend", entityType: "user", entityId: req.params.id, summary: "User was suspended.", before: result.before, after: result.after, requestContext: requestContext(req) });
-      res.json({ ok: true, data: result.after });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "USER_SUSPEND_FAILED", "Could not suspend user.");
-    }
-  });
-
-  app.post("/api/users/:id/activate", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      const target = await requireCompanyUserTarget(user, req.params.id, res);
-      if (!target) return;
-      const result = await updateAppUserRecord(req.params.id, { status: "active" }, user.id);
-      await auditLog({ actorUserId: user.id, action: "user.activate", entityType: "user", entityId: req.params.id, summary: "User was activated.", before: result.before, after: result.after, requestContext: requestContext(req) });
-      res.json({ ok: true, data: result.after });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "USER_ACTIVATE_FAILED", "Could not activate user.");
-    }
-  });
-
-  app.patch("/api/users/:id/role", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      const target = await requireCompanyUserTarget(user, req.params.id, res);
-      if (!target) return;
-      const allowedRoles = new Set(["CEO", "MANAGER", "OPERATIONS", "CUSTOMER_SERVICE", "FINANCE"]);
-      const role = String(req.body?.role || "").toUpperCase();
-      if (!allowedRoles.has(role)) return createApiError(res, 400, "VALIDATION_ERROR", "Selected role is not valid.", "role");
-      if (req.params.id === user.id && role !== "CEO") {
-        return createApiError(res, 400, "SELF_ROLE_CHANGE_BLOCKED", "You cannot change your own CEO role.");
-      }
-      const result = await updateAppUserRecord(req.params.id, { role }, user.id);
-      await auditLog({ actorUserId: user.id, action: "user.role_change", entityType: "user", entityId: req.params.id, summary: "User role was changed.", before: result.before, after: result.after, requestContext: requestContext(req) });
-      res.json({ ok: true, data: result.after });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "USER_ROLE_FAILED", "Could not update user role.");
-    }
-  });
-
-  app.get("/api/roles", async (req, res) => {
-    try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "users.manage");
-      res.json({ ok: true, data: await listRoles() });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "ROLES_FAILED", "Could not load roles.");
+      console.error("List organization members failed:", error);
+      createApiError(res, 500, "ORGANIZATION_MEMBERS_FAILED", "Could not load organization members.");
     }
   });
 
@@ -1559,6 +1501,8 @@ async function startServer() {
     }
   });
 
+  // Platform-admin boundary: organizationId filters below are privileged admin targeting
+  // after requirePlatformAdmin, not tenant scope for normal protected APIs.
   app.get("/api/admin/billing/invoices", async (req, res) => {
     try {
       const user = await requirePlatformAdmin(req, res);
@@ -1695,6 +1639,41 @@ async function startServer() {
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       createApiError(res, 500, "SIGNUP_REQUESTS_FAILED", "Could not load signup requests.");
+    }
+  });
+
+  app.delete("/api/admin/signup-requests/:id/abandoned", async (req, res) => {
+    try {
+      const user = await requirePlatformAdmin(req, res);
+      if (!user) return;
+      const params = parseRequestValue(res, signupRequestParamsSchema, req.params);
+      if (!params) return;
+      const data = await deleteAbandonedSignupRequest(params.id, { actorUserId: user.id });
+      if (!data) return createApiError(res, 404, "NOT_FOUND", "Signup request was not found.");
+      await auditLog({
+        actorUserId: user.id,
+        action: "signup.abandoned_delete",
+        entityType: "signup_request",
+        entityId: params.id,
+        summary: "Abandoned unpaid signup was deleted and the owner email was released.",
+        after: data,
+        requestContext: requestContext(req),
+      });
+      res.json({ ok: true, data });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      if (error.statusCode === 409) {
+        return res.status(409).json({
+          ok: false,
+          error: {
+            code: error.code || "ABANDONED_SIGNUP_DELETE_BLOCKED",
+            message: error.message || "This signup cannot be deleted.",
+            blockers: error.blockers || [],
+          },
+        });
+      }
+      console.error("Abandoned signup delete failed:", error);
+      createApiError(res, 500, "ABANDONED_SIGNUP_DELETE_FAILED", "Could not delete abandoned signup.");
     }
   });
 
@@ -1946,7 +1925,7 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "quotations.manage");
-      const data = await listQuotations({ organizationId: user.organizationId, ownerUserId: user.role === "CEO" || user.role === "MANAGER" ? undefined : user.id, includeArchived: req.query.includeArchived === "true" });
+      const data = await listQuotations({ organizationId: user.organizationId, includeArchived: req.query.includeArchived === "true" });
       res.json({ ok: true, data });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -2077,11 +2056,13 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "archive.view");
-      const data = await archiveEntityRecord(req.params.entityType, req.params.entityId, user.id, {
+      const params = parseRequestValue(res, archiveEntityParamsSchema, req.params);
+      if (!params) return;
+      const data = await archiveEntityRecord(params.entityType, params.entityId, user.id, {
         organizationId: user.organizationId,
       });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Record was not found.");
-      await auditLog({ actorUserId: user.id, action: "archive.create", entityType: req.params.entityType, entityId: req.params.entityId, summary: "Record was archived.", after: data, requestContext: requestContext(req) });
+      await auditLog({ actorUserId: user.id, action: "archive.create", entityType: params.entityType, entityId: params.entityId, summary: "Record was archived.", after: data, requestContext: requestContext(req) });
       res.json({ ok: true, data });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -2094,11 +2075,13 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "archive.view");
-      const data = await restoreEntityRecord(req.params.entityType, req.params.entityId, {
+      const params = parseRequestValue(res, archiveEntityParamsSchema, req.params);
+      if (!params) return;
+      const data = await restoreEntityRecord(params.entityType, params.entityId, {
         organizationId: user.organizationId,
       });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Record was not found.");
-      await auditLog({ actorUserId: user.id, action: "archive.restore", entityType: req.params.entityType, entityId: req.params.entityId, summary: "Record was restored.", after: data, requestContext: requestContext(req) });
+      await auditLog({ actorUserId: user.id, action: "archive.restore", entityType: params.entityType, entityId: params.entityId, summary: "Record was restored.", after: data, requestContext: requestContext(req) });
       res.json({ ok: true, data });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -2111,11 +2094,13 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "archive.view");
+      const params = parseRequestValue(res, archiveEntityParamsSchema, req.params);
+      if (!params) return;
       const documentStorageKeys =
-        req.params.entityType === "document"
-          ? await listDocumentStorageKeysForCleanup(req.params.entityId, { organizationId: user.organizationId })
+        params.entityType === "document"
+          ? await listDocumentStorageKeysForCleanup(params.entityId, { organizationId: user.organizationId })
           : [];
-      const data = await deleteArchivedEntityRecord(req.params.entityType, req.params.entityId, {
+      const data = await deleteArchivedEntityRecord(params.entityType, params.entityId, {
         organizationId: user.organizationId,
       });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Archived record was not found.");
@@ -2126,8 +2111,8 @@ async function startServer() {
       await auditLog({
         actorUserId: user.id,
         action: "archive.delete",
-        entityType: req.params.entityType,
-        entityId: req.params.entityId,
+        entityType: params.entityType,
+        entityId: params.entityId,
         summary: "Archived record was permanently deleted.",
         before: { ...data, storageCleanup },
         requestContext: requestContext(req),
@@ -2239,13 +2224,34 @@ async function startServer() {
     try {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
+      const query = parseRequestValue(res, taskListQuerySchema, req.query || {});
+      if (!query) return;
       const canViewAll = await userHasPermission(user, "tasks.view_all");
       const canViewOwn = canViewAll || (await userHasPermission(user, "tasks.view_own"));
       if (!canViewOwn) {
         return createApiError(res, 403, "FORBIDDEN", "Missing permission: tasks.view_own");
       }
       const data = await listTasks(
-        canViewAll ? { organizationId: user.organizationId, includeAll: true } : { organizationId: user.organizationId, assignedToId: user.id, includeAll: true }
+        canViewAll
+          ? {
+              organizationId: user.organizationId,
+              includeAll: true,
+              shipmentId: query.shipmentId,
+              assignedToId: query.assignedTo === "me" ? user.id : undefined,
+              assignedById: query.assignedBy === "me" ? user.id : undefined,
+              status: query.status,
+              blocked: query.blocked,
+              overdue: query.overdue,
+            }
+          : {
+              organizationId: user.organizationId,
+              participantUserId: user.id,
+              includeAll: true,
+              shipmentId: query.shipmentId,
+              status: query.status,
+              blocked: query.blocked,
+              overdue: query.overdue,
+            }
       );
       res.json({ ok: true, data });
     } catch (error) {
@@ -2302,26 +2308,195 @@ async function startServer() {
     try {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
-      await requirePermission(user, "tasks.create");
-      const title = String(req.body?.title || "").trim();
+      const body = req.body || {};
+      const isWorkflowLinkedTask = Boolean(
+        body.workflowInstanceId || body.workflowStepCode || body.workflowBlockerId || body.blockerCode
+      );
+      const canCreateTask = await userHasPermission(user, "tasks.create");
+      const canCreateWorkflowTask =
+        isWorkflowLinkedTask &&
+        ((await userHasPermission(user, "shipments.update")) || (await userHasPermission(user, "shipment_steps.update")));
+      if (!canCreateTask && !canCreateWorkflowTask) {
+        return createApiError(res, 403, "FORBIDDEN", "Missing permission: tasks.create");
+      }
+      const title = String(body.title || "").trim();
       if (!title) return createApiError(res, 400, "VALIDATION_ERROR", "Task title is required.", "title");
-      const assignedToUserId = req.body?.assignedToUserId || user.id;
+      const assignedToUserId = body.assignedToUserId || user.id;
       if (assignedToUserId !== user.id) {
         await requirePermission(user, "tasks.assign");
+      }
+      const assignee = await getUserById(assignedToUserId);
+      if (!assignee || assignee.organization_id !== user.organizationId || assignee.status === "suspended") {
+        return createApiError(res, 404, "ASSIGNEE_NOT_FOUND", "Assignee was not found.");
+      }
+      if (body.shipmentId) {
+        const linkedShipment = await getShipmentRecord(body.shipmentId, { organizationId: user.organizationId });
+        if (!linkedShipment) {
+          return createApiError(res, 404, "SHIPMENT_NOT_FOUND", "Linked shipment was not found.", "shipmentId");
+        }
+      }
+      let workflowInstanceId = body.workflowInstanceId || null;
+      let currentWorkflow = null;
+      if (workflowInstanceId) {
+        const submittedWorkflowResult = await pool.query(
+          `SELECT id
+           FROM shipment_workflow_instances
+           WHERE id = $1
+             AND organization_id = $2
+             AND ($3::text IS NULL OR shipment_id = $3)
+           LIMIT 1`,
+          [workflowInstanceId, user.organizationId, body.shipmentId || null]
+        );
+        currentWorkflow = submittedWorkflowResult.rows[0] || null;
+        if (!currentWorkflow) workflowInstanceId = null;
+      }
+      if (body.shipmentId && isWorkflowLinkedTask) {
+        if (!currentWorkflow) {
+          const currentWorkflowResult = await pool.query(
+            `SELECT id
+             FROM shipment_workflow_instances
+             WHERE shipment_id = $1
+               AND organization_id = $2
+             ORDER BY updated_at DESC
+             LIMIT 1`,
+            [body.shipmentId, user.organizationId]
+          );
+          currentWorkflow = currentWorkflowResult.rows[0] || null;
+        }
+        if (!currentWorkflow) {
+          const startedWorkflow = await startShipmentWorkflowRecord(pool, {
+            shipmentId: body.shipmentId,
+            organizationId: user.organizationId,
+            actorUserId: user.id,
+            metadata: { source: "task.create" },
+          });
+          currentWorkflow = startedWorkflow?.workflow ? { id: startedWorkflow.workflow.id } : null;
+        }
+        if (currentWorkflow?.id) workflowInstanceId = currentWorkflow.id;
+      }
+      if (body.workflowInstanceId && !workflowInstanceId && !currentWorkflow?.id && !body.shipmentId) {
+        return createApiError(res, 404, "WORKFLOW_NOT_FOUND", "Workflow instance was not found.", "workflowInstanceId");
+      }
+      let workflowBlockerId = body.workflowBlockerId || null;
+      if (body.workflowBlockerId) {
+        const blockerResult = await pool.query(
+          `SELECT id
+           FROM shipment_workflow_blockers
+           WHERE id = $1
+             AND organization_id = $2
+             AND ($3::text IS NULL OR shipment_id = $3)
+          LIMIT 1`,
+          [body.workflowBlockerId, user.organizationId, body.shipmentId || null]
+        );
+        if (blockerResult.rows[0]) {
+          workflowBlockerId = blockerResult.rows[0].id;
+        } else if (body.shipmentId && body.blockerCode) {
+          const fallbackBlockerResult = await pool.query(
+            `SELECT id
+             FROM shipment_workflow_blockers
+             WHERE organization_id = $1
+               AND shipment_id = $2
+               AND blocker_code = $3
+               AND ($4::text IS NULL OR step_code = $4)
+               AND ($5::text IS NULL OR workflow_instance_id = $5)
+               AND status = 'open'
+             ORDER BY updated_at DESC, created_at DESC
+             LIMIT 1`,
+            [
+              user.organizationId,
+              body.shipmentId,
+              body.blockerCode,
+              body.workflowStepCode || null,
+              workflowInstanceId || null,
+            ]
+          );
+          if (fallbackBlockerResult.rows[0]) {
+            workflowBlockerId = fallbackBlockerResult.rows[0].id;
+          } else {
+            if (!workflowInstanceId) {
+              return createApiError(res, 404, "BLOCKER_NOT_FOUND", "Workflow blocker was not found.", "workflowBlockerId");
+            }
+            const recoveredBlockerResult = await pool.query(
+              `INSERT INTO shipment_workflow_blockers (
+                 id, organization_id, workflow_instance_id, shipment_id, step_code, blocker_code,
+                 status, internal_note, metadata, created_by_user_id
+               )
+               VALUES ($1, $2, $3, $4, $5, $6, 'open', $7, $8::jsonb, $9)
+               ON CONFLICT (id) DO NOTHING
+               RETURNING id`,
+              [
+                body.workflowBlockerId,
+                user.organizationId,
+                workflowInstanceId,
+                body.shipmentId,
+                body.workflowStepCode || null,
+                body.blockerCode,
+                body.description || body.assignmentNote || null,
+                JSON.stringify({ source: "task.create", recovered: true }),
+                user.id,
+              ]
+            );
+            if (recoveredBlockerResult.rows[0]) {
+              workflowBlockerId = recoveredBlockerResult.rows[0].id;
+            } else {
+              const recoveredVerification = await pool.query(
+                `SELECT id
+                 FROM shipment_workflow_blockers
+                 WHERE id = $1
+                   AND organization_id = $2
+                   AND shipment_id = $3
+                 LIMIT 1`,
+                [body.workflowBlockerId, user.organizationId, body.shipmentId]
+              );
+              if (!recoveredVerification.rows[0]) {
+                return createApiError(res, 404, "BLOCKER_NOT_FOUND", "Workflow blocker was not found.", "workflowBlockerId");
+              }
+              workflowBlockerId = recoveredVerification.rows[0].id;
+            }
+            await pool.query(
+              `INSERT INTO shipment_workflow_events (
+                 id, organization_id, workflow_instance_id, shipment_id, event_type,
+                 step_code, blocker_id, blocker_code, actor_user_id, internal_note, metadata
+               )
+               VALUES ($1, $2, $3, $4, 'workflow.blocker.recovered_for_task',
+                       $5, $6, $7, $8, $9, $10::jsonb)
+               ON CONFLICT (id) DO NOTHING`,
+              [
+                crypto.randomUUID(),
+                user.organizationId,
+                workflowInstanceId,
+                body.shipmentId,
+                body.workflowStepCode || null,
+                workflowBlockerId,
+                body.blockerCode,
+                user.id,
+                "Recovered a missing blocker while assigning a workflow task.",
+                JSON.stringify({ source: "task.create" }),
+              ]
+            );
+          }
+        } else {
+          return createApiError(res, 404, "BLOCKER_NOT_FOUND", "Workflow blocker was not found.", "workflowBlockerId");
+        }
       }
       const task = await createTaskRecord({
         ownerUserId: user.id,
         title,
-        description: req.body?.description,
-        status: req.body?.status,
-        priority: req.body?.priority,
+        description: body.description,
+        status: body.status,
+        priority: body.priority,
         assignedToUserId,
-        assignedToName: req.body?.assignedToName || user.name,
+        assignedToName: assignee.name || body.assignedToName || user.name,
         assignedByUserId: user.id,
         assignedByName: user.name,
-        dueDate: req.body?.dueDate,
-        deadline: req.body?.deadline,
-        shipmentId: req.body?.shipmentId || null,
+        dueDate: body.dueDate,
+        deadline: body.deadline,
+        shipmentId: body.shipmentId || null,
+        assignmentNote: body.assignmentNote,
+        workflowInstanceId,
+        workflowStepCode: body.workflowStepCode || null,
+        workflowBlockerId,
+        blockerCode: body.blockerCode || null,
       });
       await auditLog({
         actorUserId: user.id,
@@ -2351,8 +2526,13 @@ async function startServer() {
       }
       if (req.body?.assignedToUserId && req.body.assignedToUserId !== before.assigned_to_id) {
         await requirePermission(user, "tasks.assign");
+        const assignee = await getUserById(req.body.assignedToUserId);
+        if (!assignee || assignee.organization_id !== user.organizationId || assignee.status === "suspended") {
+          return createApiError(res, 404, "ASSIGNEE_NOT_FOUND", "Assignee was not found.", "assignedToUserId");
+        }
+        req.body.assignedToName = assignee.name;
       }
-      const result = await updateTaskRecord(req.params.id, req.body || {}, { organizationId: user.organizationId });
+      const result = await updateTaskRecord(req.params.id, { ...(req.body || {}), actorUserId: user.id }, { organizationId: user.organizationId });
       await auditLog({
         actorUserId: user.id,
         action: "task.update",
@@ -2371,6 +2551,106 @@ async function startServer() {
     }
   });
 
+  app.patch("/api/tasks/:taskId/assign", async (req, res) => {
+    try {
+      const user = await requireAuthenticatedUser(req, res);
+      if (!user) return;
+      const params = parseRequestValue(res, taskParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, taskAssignBodySchema, req.body || {});
+      if (!body) return;
+      const before = await getTaskRecord(params.taskId, { organizationId: user.organizationId });
+      if (!before) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
+      const canAssign = (await userHasPermission(user, "tasks.assign")) || before.owner_user_id === user.id || before.assigned_by_id === user.id;
+      if (!canAssign) {
+        return createApiError(res, 403, "FORBIDDEN", "Missing permission: tasks.assign");
+      }
+      const result = await assignTaskRecord(params.taskId, {
+        assignedToUserId: body.assignedToUserId,
+        actorUser: user,
+        dueAt: body.dueAt,
+        dueDate: body.dueDate,
+        priority: body.priority,
+        assignmentNote: body.assignmentNote,
+        status: body.status || "assigned",
+        organizationId: user.organizationId,
+      });
+      if (!result) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
+      if (result.invalidAssignee) return createApiError(res, 404, "ASSIGNEE_NOT_FOUND", "Assignee was not found.", "assignedToUserId");
+      await auditLog({
+        actorUserId: user.id,
+        action: "task.assign",
+        entityType: "TASK",
+        entityId: params.taskId,
+        summary: "Task was assigned.",
+        before: result.before,
+        after: result.after,
+        requestContext: requestContext(req),
+      });
+      res.json({ ok: true, data: result.after });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      console.error("Assign task failed:", error);
+      createApiError(res, 500, "TASK_ASSIGN_FAILED", "Could not assign task.");
+    }
+  });
+
+  app.patch("/api/tasks/:taskId/status", async (req, res) => {
+    try {
+      const user = await requireAuthenticatedUser(req, res);
+      if (!user) return;
+      const params = parseRequestValue(res, taskParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, taskStatusBodySchema, req.body || {});
+      if (!body) return;
+      const before = await getTaskRecord(params.taskId, { organizationId: user.organizationId });
+      if (!before) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
+      if (!(await canAccessTask(user, before, "status"))) {
+        return createApiError(res, 403, "FORBIDDEN", "You cannot update this task status.");
+      }
+      const result = await updateTaskStatusRecord(params.taskId, {
+        status: body.status,
+        note: body.note,
+        actorUser: user,
+        organizationId: user.organizationId,
+      });
+      if (!result) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
+      await auditLog({
+        actorUserId: user.id,
+        action: "task.status_update",
+        entityType: "TASK",
+        entityId: params.taskId,
+        summary: `Task status changed to ${result.after.status}.`,
+        before: result.before,
+        after: result.after,
+        requestContext: requestContext(req),
+      });
+      res.json({ ok: true, data: result.after });
+    } catch (error) {
+      console.error("Update task status failed:", error);
+      createApiError(res, 500, "TASK_STATUS_UPDATE_FAILED", "Could not update task status.");
+    }
+  });
+
+  app.get("/api/tasks/:taskId/events", async (req, res) => {
+    try {
+      const user = await requireAuthenticatedUser(req, res);
+      if (!user) return;
+      const params = parseRequestValue(res, taskParamsSchema, req.params);
+      if (!params) return;
+      const task = await getTaskRecord(params.taskId, { organizationId: user.organizationId });
+      if (!task) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
+      if (!(await canAccessTask(user, task))) {
+        return createApiError(res, 403, "FORBIDDEN", "You cannot view this task.");
+      }
+      const data = await listTaskEvents(params.taskId, { organizationId: user.organizationId });
+      res.json({ ok: true, data });
+    } catch (error) {
+      console.error("List task events failed:", error);
+      createApiError(res, 500, "TASK_EVENTS_FAILED", "Could not load task events.");
+    }
+  });
+
   async function updateTaskStatusEndpoint(req, res, status, action) {
     try {
       const user = await requireAuthenticatedUser(req, res);
@@ -2380,7 +2660,11 @@ async function startServer() {
       if (!(await canAccessTask(user, before, "status"))) {
         return createApiError(res, 403, "FORBIDDEN", "You cannot update this task status.");
       }
-      const result = await setTaskStatus(req.params.id, status, { organizationId: user.organizationId });
+      const result = await updateTaskStatusRecord(req.params.id, {
+        status,
+        actorUser: user,
+        organizationId: user.organizationId,
+      });
       await auditLog({
         actorUserId: user.id,
         action,
@@ -2412,7 +2696,9 @@ async function startServer() {
     try {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
-      const data = await listShipmentSteps(req.params.id, user.id, { organizationId: user.organizationId });
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const data = await listShipmentSteps(params.id, null, { organizationId: user.organizationId });
       res.json({ ok: true, data });
     } catch (error) {
       console.error("List shipment steps failed:", error);
@@ -2425,9 +2711,11 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "shipment_steps.update");
+      const params = parseRequestValue(res, shipmentStepParamsSchema, req.params);
+      if (!params) return;
       const result = await updateShipmentStepRecord({
-        shipmentId: req.params.id,
-        stepId: req.params.stepId,
+        shipmentId: params.id,
+        stepId: params.stepId,
         updates: req.body || {},
         actorUser: user,
       });
@@ -2436,7 +2724,7 @@ async function startServer() {
         actorUserId: user.id,
         action: "shipment_step.update",
         entityType: "SHIPMENT_STEP",
-        entityId: req.params.stepId,
+        entityId: params.stepId,
         summary: "Shipment step was updated.",
         before: result.before,
         after: { step: result.after, workflowTask: result.workflowTask },
@@ -2455,15 +2743,52 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "tasks.create");
-      const assignedToUserId = req.body?.assignedToUserId || user.id;
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, shipmentTaskBodySchema, req.body || {});
+      if (!body) return;
+      const assignedToUserId = body.assignedToUserId || user.id;
       if (assignedToUserId !== user.id) {
         await requirePermission(user, "tasks.assign");
       }
+      const assignee = await getUserById(assignedToUserId);
+      if (!assignee || assignee.organization_id !== user.organizationId || assignee.status === "suspended") {
+        return createApiError(res, 404, "ASSIGNEE_NOT_FOUND", "Assignee was not found.", "assignedToUserId");
+      }
+      if (body.workflowInstanceId) {
+        const workflowResult = await pool.query(
+          `SELECT id
+           FROM shipment_workflow_instances
+           WHERE id = $1
+             AND organization_id = $2
+             AND shipment_id = $3
+           LIMIT 1`,
+          [body.workflowInstanceId, user.organizationId, params.id]
+        );
+        if (!workflowResult.rows[0]) {
+          return createApiError(res, 404, "WORKFLOW_NOT_FOUND", "Workflow instance was not found.", "workflowInstanceId");
+        }
+      }
+      if (body.workflowBlockerId) {
+        const blockerResult = await pool.query(
+          `SELECT id
+           FROM shipment_workflow_blockers
+           WHERE id = $1
+             AND organization_id = $2
+             AND shipment_id = $3
+           LIMIT 1`,
+          [body.workflowBlockerId, user.organizationId, params.id]
+        );
+        if (!blockerResult.rows[0]) {
+          return createApiError(res, 404, "BLOCKER_NOT_FOUND", "Workflow blocker was not found.", "workflowBlockerId");
+        }
+      }
+      body.assignedToName = assignee.name || body.assignedToName;
       const result = await createShipmentTaskRecord({
-        shipmentId: req.params.id,
-        stepId: req.body?.stepId,
+        shipmentId: params.id,
+        stepId: body.stepId,
         actorUser: user,
-        task: req.body || {},
+        task: body,
       });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       await auditLog({
@@ -2642,7 +2967,7 @@ async function startServer() {
       if (!user) return;
       const canManage = await userHasPermission(user, "compliance.manage");
       const data = await listComplianceMeetings(
-        canManage ? { organizationId: user.organizationId, ownerUserId: user.id } : { organizationId: user.organizationId, assignedToId: user.id }
+        canManage ? { organizationId: user.organizationId } : { organizationId: user.organizationId, assignedToId: user.id }
       );
       res.json({ ok: true, data });
     } catch (error) {
@@ -2881,17 +3206,33 @@ async function startServer() {
     management: "management",
   };
 
+  app.get("/api/dashboard", async (req, res) => {
+    try {
+      const user = await requireAuthenticatedUser(req, res);
+      if (!user) return;
+      const permissions = await requirePermission(user, "dashboard.view");
+      const data = await getDashboardData(user, permissions);
+      if (!(permissions.includes("tasks.view_all") || user.role === "CEO" || user.role === "MANAGER")) {
+        delete data.management;
+      }
+      res.json({ ok: true, data });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      console.error("Dashboard failed:", error);
+      createApiError(res, 500, "DASHBOARD_FAILED", "Could not load dashboard data.");
+    }
+  });
+
   for (const [pathName, dataKey] of Object.entries(dashboardSections)) {
     app.get(`/api/dashboard/${pathName}`, async (req, res) => {
       try {
         const user = await requireAuthenticatedUser(req, res);
         if (!user) return;
-        await requirePermission(user, "dashboard.view");
+        const permissions = await requirePermission(user, "dashboard.view");
         if (dataKey === "management") {
-          const allowed = (await userHasPermission(user, "tasks.view_all")) || user.role === "CEO" || user.role === "MANAGER";
+          const allowed = permissions.includes("tasks.view_all") || user.role === "CEO" || user.role === "MANAGER";
           if (!allowed) return createApiError(res, 403, "FORBIDDEN", "Management dashboard is not available.");
         }
-        const permissions = await getUserPermissions(user.id);
         const data = await getDashboardData(user, permissions);
         res.json({ ok: true, data: data[dataKey] });
       } catch (error) {
@@ -2909,7 +3250,6 @@ async function startServer() {
       await requirePermission(user, "documents.view_all");
       const data = await listDocuments({
         organizationId: user.organizationId,
-        ownerUserId: user.id,
         includeArchived: req.query.includeArchived === "true",
       });
       res.json({ ok: true, data });
@@ -2933,10 +3273,12 @@ async function startServer() {
         discriminator: user.id,
       }))) return;
       await uploadSingle(req, res);
+      const metadata = parseRequestValue(res, documentMetadataSchema, req.body || {});
+      if (!metadata) return;
 
       await validateDocumentAssociations({
-        shipmentId: req.body?.shipmentId || null,
-        customerId: req.body?.customerId || null,
+        shipmentId: metadata.shipmentId || null,
+        customerId: metadata.customerId || null,
         organizationId: user.organizationId,
       });
 
@@ -2955,8 +3297,8 @@ async function startServer() {
       try {
         document = await createDocumentRecord({
           ownerUserId: user.id,
-          title: String(req.body?.title || persisted.sanitizedName).trim(),
-          type: String(req.body?.type || "OTHER"),
+          title: metadata.title || persisted.sanitizedName,
+          type: metadata.type || "OTHER",
           fileName: persisted.sanitizedName,
           mimeType: persisted.mimeType,
           fileSize: persisted.fileSize,
@@ -2964,9 +3306,9 @@ async function startServer() {
           checksum: persisted.checksum,
           uploadedById: user.id,
           uploadedByName: user.name,
-          shipmentId: req.body?.shipmentId || null,
-          customerId: req.body?.customerId || null,
-          visibility: req.body?.visibility,
+          shipmentId: metadata.shipmentId || null,
+          customerId: metadata.customerId || null,
+          visibility: metadata.visibility,
         });
       } catch (error) {
         await cleanupPersistedDocument(persisted);
@@ -3008,7 +3350,9 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.view_all");
-      const data = await getDocumentDetail(req.params.id, { organizationId: user.organizationId });
+      const params = parseRequestValue(res, documentParamsSchema, req.params);
+      if (!params) return;
+      const data = await getDocumentDetail(params.id, { organizationId: user.organizationId });
       if (!data) {
         return createApiError(res, 404, "NOT_FOUND", "Document was not found.");
       }
@@ -3027,7 +3371,13 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.view_all");
-      const document = await getDocumentForDownload(req.params.id, { organizationId: user.organizationId });
+      const params = parseRequestValue(res, documentParamsSchema, req.params);
+      if (!params) return;
+      if (!(await consumeRateLimit(req, res, "document-download", {
+        ...DOCUMENT_DOWNLOAD_LIMIT,
+        discriminator: user.id,
+      }))) return;
+      const document = await getDocumentForDownload(params.id, { organizationId: user.organizationId });
       if (!document) {
         return createApiError(res, 404, "NOT_FOUND", "Document was not found.");
       }
@@ -3046,19 +3396,23 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.view_all");
+      const params = parseRequestValue(res, documentParamsSchema, req.params);
+      if (!params) return;
+      const metadata = parseRequestValue(res, documentMetadataSchema, req.body || {});
+      if (!metadata) return;
       await validateDocumentAssociations({
-        shipmentId: req.body?.shipmentId || null,
-        customerId: req.body?.customerId || null,
+        shipmentId: metadata.shipmentId || null,
+        customerId: metadata.customerId || null,
         organizationId: user.organizationId,
       });
       const result = await updateDocumentMetadata(
-        req.params.id,
+        params.id,
         {
-          title: req.body?.title,
-          type: req.body?.type,
-          shipmentId: req.body?.shipmentId,
-          customerId: req.body?.customerId,
-          visibility: req.body?.visibility,
+          title: metadata.title,
+          type: metadata.type,
+          shipmentId: metadata.shipmentId,
+          customerId: metadata.customerId,
+          visibility: metadata.visibility,
         },
         { organizationId: user.organizationId }
       );
@@ -3069,7 +3423,7 @@ async function startServer() {
         actorUserId: user.id,
         action: "document.update",
         entityType: "DOCUMENT",
-        entityId: req.params.id,
+        entityId: params.id,
         summary: "Document metadata was updated.",
         before: result.before,
         after: result.after,
@@ -3093,6 +3447,8 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.upload");
+      const params = parseRequestValue(res, documentParamsSchema, req.params);
+      if (!params) return;
       if (!(await consumeRateLimit(req, res, "document-replace", {
         limit: 20,
         windowMs: 15 * 60 * 1000,
@@ -3114,7 +3470,7 @@ async function startServer() {
       let result = null;
       try {
         result = await replaceDocumentFileRecord({
-          documentId: req.params.id,
+          documentId: params.id,
           fileName: persisted.sanitizedName,
           mimeType: persisted.mimeType,
           fileSize: persisted.fileSize,
@@ -3135,7 +3491,7 @@ async function startServer() {
         actorUserId: user.id,
         action: "document.replace",
         entityType: "DOCUMENT",
-        entityId: req.params.id,
+        entityId: params.id,
         summary: "Document file was replaced.",
         before: { id: result.before.id, version: result.before.version, fileName: result.before.file_name },
         after: { id: result.after.id, version: result.after.version, fileName: result.after.file_name },
@@ -3159,7 +3515,12 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.archive");
-      const result = await archiveDocumentRecord(req.params.id, { organizationId: user.organizationId });
+      const params = parseRequestValue(res, documentParamsSchema, req.params);
+      if (!params) return;
+      const result = await archiveDocumentRecord(params.id, {
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+      });
       if (!result) {
         return createApiError(res, 404, "NOT_FOUND", "Document was not found.");
       }
@@ -3167,7 +3528,7 @@ async function startServer() {
         actorUserId: user.id,
         action: "document.archive",
         entityType: "DOCUMENT",
-        entityId: req.params.id,
+        entityId: params.id,
         summary: "Document was archived.",
         before: result.before,
         after: result.after,
@@ -3188,7 +3549,9 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.view_all");
-      const data = await listDocuments({ organizationId: user.organizationId, ownerUserId: user.id, shipmentId: req.params.id });
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const data = await listDocuments({ organizationId: user.organizationId, shipmentId: params.id });
       res.json({ ok: true, data });
     } catch (error) {
       if (error.statusCode === 403) {
@@ -3199,28 +3562,14 @@ async function startServer() {
     }
   });
 
-  app.get("/api/customers/:id/documents", async (req, res) => {
-    try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "documents.view_all");
-      const data = await listDocuments({ organizationId: user.organizationId, ownerUserId: user.id, customerId: req.params.id });
-      res.json({ ok: true, data });
-    } catch (error) {
-      if (error.statusCode === 403) {
-        return createApiError(res, 403, "FORBIDDEN", error.message);
-      }
-      console.error("List customer documents failed:", error);
-      createApiError(res, 500, "LIST_CUSTOMER_DOCUMENTS_FAILED", "Could not load customer documents.");
-    }
-  });
-
   app.get("/api/shipments/:id/customer-access", async (req, res) => {
     try {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "customer_access.manage");
-      const data = await getShipmentCustomerAccess(req.params.id, { organizationId: user.organizationId });
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const data = await getShipmentCustomerAccess(params.id, { organizationId: user.organizationId, ownerUserId: user.id });
       if (!data) {
         return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       }
@@ -3244,7 +3593,9 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "customer_access.manage");
-      const result = await generateShipmentCustomerAccess(req.params.id, { organizationId: user.organizationId, rotate: false });
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const result = await generateShipmentCustomerAccess(params.id, { organizationId: user.organizationId, ownerUserId: user.id, rotate: false });
       if (!result) {
         return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       }
@@ -3252,7 +3603,7 @@ async function startServer() {
         actorUserId: user.id,
         action: "customer_access.generate",
         entityType: "SHIPMENT",
-        entityId: req.params.id,
+        entityId: params.id,
         summary: "Customer tracking access was generated.",
         before: result.before,
         after: result.after,
@@ -3280,7 +3631,9 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "customer_access.manage");
-      const result = await generateShipmentCustomerAccess(req.params.id, { organizationId: user.organizationId });
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const result = await generateShipmentCustomerAccess(params.id, { organizationId: user.organizationId, ownerUserId: user.id });
       if (!result) {
         return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       }
@@ -3288,7 +3641,7 @@ async function startServer() {
         actorUserId: user.id,
         action: "customer_access.reset",
         entityType: "SHIPMENT",
-        entityId: req.params.id,
+        entityId: params.id,
         summary: "Customer tracking access was reset.",
         before: result.before,
         after: result.after,
@@ -3316,7 +3669,9 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "customer_access.manage");
-      const result = await disableShipmentCustomerAccess(req.params.id, { organizationId: user.organizationId });
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const result = await disableShipmentCustomerAccess(params.id, { organizationId: user.organizationId, ownerUserId: user.id });
       if (!result) {
         return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       }
@@ -3324,7 +3679,7 @@ async function startServer() {
         actorUserId: user.id,
         action: "customer_access.disable",
         entityType: "SHIPMENT",
-        entityId: req.params.id,
+        entityId: params.id,
         summary: "Customer tracking access was disabled.",
         before: result.before,
         after: result.after,
@@ -3345,18 +3700,18 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "customer_access.manage");
-      const publicLabel = String(req.body?.publicLabel || "").trim();
-      const publicDescription = String(req.body?.publicDescription || "").trim();
-      if (!publicLabel) {
-        return createApiError(res, 400, "VALIDATION_ERROR", "Public status label is required.", "publicLabel");
-      }
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, shipmentPublicStatusBodySchema, req.body || {});
+      if (!body) return;
       const event = await updateShipmentPublicStatus({
-        shipmentId: req.params.id,
-        publicLabel,
-        publicDescription,
-        isCustomerVisible: req.body?.isCustomerVisible !== false,
+        shipmentId: params.id,
+        publicLabel: body.publicLabel,
+        publicDescription: body.publicDescription || "",
+        isCustomerVisible: body.isCustomerVisible !== false,
         createdById: user.id,
         organizationId: user.organizationId,
+        ownerUserId: user.id,
       });
       if (!event) {
         return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
@@ -3365,7 +3720,7 @@ async function startServer() {
         actorUserId: user.id,
         action: "shipment.public_status.update",
         entityType: "SHIPMENT",
-        entityId: req.params.id,
+        entityId: params.id,
         summary: "Public shipment status was updated.",
         after: event,
         requestContext: requestContext(req),
@@ -3385,7 +3740,11 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.view_all");
-      const result = await updateDocumentVisibility(req.params.id, req.body?.visibility, {
+      const params = parseRequestValue(res, documentParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, documentVisibilitySchema, req.body || {});
+      if (!body) return;
+      const result = await updateDocumentVisibility(params.id, body.visibility, {
         organizationId: user.organizationId,
       });
       if (!result) {
@@ -3395,7 +3754,7 @@ async function startServer() {
         actorUserId: user.id,
         action: "document.visibility.update",
         entityType: "DOCUMENT",
-        entityId: req.params.id,
+        entityId: params.id,
         summary: "Document customer visibility was updated.",
         before: result.before,
         after: result.after,
@@ -3411,59 +3770,16 @@ async function startServer() {
     }
   });
 
-  app.get("/api/public/track/:token/documents/:documentId", async (req, res) => {
-    try {
-      const document = await getPublicDocumentByTrackingToken(req.params.token, req.params.documentId);
-      if (!document) {
-        return createApiError(res, 404, "TRACKING_DOCUMENT_UNAVAILABLE", "Document is unavailable.");
-      }
-      await sendStoredDocument(res, document);
-    } catch (error) {
-      console.error("Public tracking document failed:", error);
-      createApiError(res, 500, "PUBLIC_TRACK_DOCUMENT_FAILED", "Could not load document.");
-    }
-  });
-
-  app.get("/api/public/track/:token", async (req, res) => {
-    try {
-      const data = await getPublicTrackingByToken(req.params.token);
-      if (!data) {
-        return createApiError(res, 404, "TRACKING_UNAVAILABLE", "Tracking is unavailable.");
-      }
-      res.json({ ok: true, data });
-    } catch (error) {
-      console.error("Public track failed:", error);
-      createApiError(res, 500, "PUBLIC_TRACK_FAILED", "Could not load tracking.");
-    }
-  });
-
-  app.post("/api/public/track/search", async (req, res) => {
-    try {
-      const data = await searchPublicTracking({
-        shipmentCode: req.body?.shipmentCode,
-        verification: req.body?.verification,
-      });
-      if (!data) {
-        return createApiError(res, 404, "TRACKING_UNAVAILABLE", "Tracking is unavailable for the provided details.");
-      }
-      res.json({ ok: true, data });
-    } catch (error) {
-      console.error("Public track search failed:", error);
-      createApiError(res, 500, "PUBLIC_TRACK_SEARCH_FAILED", "Could not search tracking.");
-    }
-  });
-
-  app.get("/api/public/documents/:id", async (req, res) => {
-    try {
-      const document = await getPublicDocument(req.params.id);
-      if (!document) {
-        return createApiError(res, 404, "NOT_FOUND", "Document was not found.");
-      }
-      await sendStoredDocument(res, document);
-    } catch (error) {
-      console.error("Public document failed:", error);
-      createApiError(res, 500, "PUBLIC_DOCUMENT_FAILED", "Could not load document.");
-    }
+  registerPublicTrackingRoutes(app, {
+    createApiError,
+    consumeRateLimit,
+    getPublicDocument,
+    getPublicDocumentByTrackingToken,
+    getPublicTrackingByToken,
+    publicDocumentDownloadLimit: PUBLIC_DOCUMENT_DOWNLOAD_LIMIT,
+    publicTrackSearchLimit: PUBLIC_TRACK_SEARCH_LIMIT,
+    searchPublicTracking,
+    sendStoredDocument,
   });
 
   app.get("/api/changes", async (req, res) => {
@@ -3518,8 +3834,16 @@ async function startServer() {
   } else {
     // Serve static files in production
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(
+      "/assets",
+      express.static(path.join(distPath, "assets"), {
+        immutable: true,
+        maxAge: "1y",
+      })
+    );
+    app.use(express.static(distPath, { maxAge: "1h" }));
     app.get('*', (req, res) => {
+      res.setHeader("Cache-Control", "no-cache");
       res.sendFile(path.join(distPath, 'index.html'));
     });
     console.log("Production mode: Serving static files from dist.");

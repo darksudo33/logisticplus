@@ -52,55 +52,41 @@ const permissionKeys = [
 ];
 const platformPermissionKeys = ["platform.admin"];
 
+const companyOperationalPermissions = [
+  "archive.view",
+  "changes.view",
+  "chat.use",
+  "compliance.manage",
+  "customer_access.manage",
+  "customers.create",
+  "customers.update",
+  "customers.view",
+  "documents.archive",
+  "documents.upload",
+  "documents.view_all",
+  "documents.view_related",
+  "quotations.manage",
+  "shipment_steps.update",
+  "shipments.archive",
+  "shipments.create",
+  "shipments.update",
+  "shipments.view_all",
+  "shipments.view_assigned",
+  "tasks.assign",
+  "tasks.create",
+  "tasks.view_all",
+  "tasks.view_own",
+];
+
 const rolePermissions = {
   CEO: permissionKeys,
   MANAGER: permissionKeys.filter((key) => key !== "users.promote"),
-  OPERATIONS: [
-    "dashboard.view",
-    "shipments.view_assigned",
-    "shipment_steps.update",
-    "tasks.view_own",
-    "documents.upload",
-    "documents.view_related",
-    "customers.view",
-    "chat.use",
-  ],
-  CUSTOMER_SERVICE: [
-    "dashboard.view",
-    "shipments.view_assigned",
-    "customers.view",
-    "tasks.view_own",
-    "documents.view_related",
-    "chat.use",
-  ],
-  FINANCE: [
-    "dashboard.view",
-    "tasks.view_own",
-    "documents.upload",
-    "documents.view_related",
-    "customers.view",
-    "cheques.manage",
-    "chat.use",
-  ],
-  QUOTATION_MANAGER: [
-    "dashboard.view",
-    "customers.view",
-    "tasks.create",
-    "tasks.view_own",
-    "documents.upload",
-    "documents.view_related",
-    "quotations.manage",
-    "chat.use",
-  ],
-  COMPLIANCE_STAFF: [
-    "dashboard.view",
-    "tasks.view_own",
-    "documents.upload",
-    "documents.view_related",
-    "compliance.manage",
-    "chat.use",
-  ],
-  EMPLOYEE: ["dashboard.view", "tasks.view_own", "documents.view_related", "chat.use"],
+  OPERATIONS: ["dashboard.view", ...companyOperationalPermissions],
+  CUSTOMER_SERVICE: ["dashboard.view", ...companyOperationalPermissions],
+  FINANCE: ["dashboard.view", "cheques.manage", ...companyOperationalPermissions],
+  QUOTATION_MANAGER: ["dashboard.view", ...companyOperationalPermissions],
+  COMPLIANCE_STAFF: ["dashboard.view", ...companyOperationalPermissions],
+  EMPLOYEE: ["dashboard.view", ...companyOperationalPermissions],
   CUSTOMER_VIEWER: [],
 };
 
@@ -126,6 +112,10 @@ function permissionId(permission: string) {
 
 function asJson(value: unknown) {
   return JSON.stringify(value ?? {});
+}
+
+function isLegacyDemoNotification(notification: any) {
+  return ["n1", "n2", "n3", "n4"].includes(String(notification?.id || ""));
 }
 
 const defaultPlans = pricingPlans.map((plan, index) => ({
@@ -459,6 +449,7 @@ async function bridgeDocuments(client: Client, documents: any[]) {
 
 async function bridgeNotifications(client: Client, notifications: any[]) {
   for (const notification of notifications) {
+    if (isLegacyDemoNotification(notification)) continue;
     await client.query(
       `INSERT INTO notifications (
          id, user_id, title, body, type, source_type, source_id, legacy_data, read_at, created_at

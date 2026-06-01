@@ -12,6 +12,186 @@ This handoff was prepared from the live repository, the external planning pack, 
 
 ## Latest Changes / Working Notes
 
+### 2026-05-24 - Workflow persistence bridge fix and Liara deploy
+
+What changed:
+
+- Fixed the shipment workflow disappearing after app refresh/autosave.
+- Root cause: the legacy `/api/users/:id/records` compatibility bridge deleted and reinserted canonical `shipments` for the owner. Because `shipment_workflow_instances.shipment_id` is `ON DELETE CASCADE`, that bridge save could delete the Iran import workflow instance, step states, blockers, and events.
+- Changed shipment bridge sync in `src/server/db.js` to non-destructive upserts. Canonical shipment rows are no longer removed just because a legacy store payload is saved.
+- Changed task bridge sync to preserve workflow-linked tasks and their `task_events`, while still allowing legacy non-workflow task rows to be removed when absent from the payload.
+- Hardened legacy task bridge writes against stale user IDs for assignee, assigner, and completer fields so deleted employee references do not break `/api/users/:id/records` saves.
+- Added a regression test that starts a workflow, completes step `001`, adds a blocker, creates a workflow-linked task, runs the legacy bootstrap save endpoint, and verifies workflow state, blocker, task link, and task history survive.
+- Updated `docs/app-architecture.md` to mark the canonical Iran import workflow tables and document the non-destructive bridge rule.
+
+Verification run:
+
+- `node --check src/server/db.js` passed.
+- `npx tsc --noEmit --pretty false` passed.
+- `npx playwright test tests/e2e/shipment-detail-workflow-tasks.spec.ts --reporter=line` passed 9/9.
+- `npm run lint` passed.
+- `npm run build` passed with the existing Vite large chunk warning only.
+- `npx playwright test tests/e2e/security.spec.ts --grep "serves public tracking through a customer-safe payload only" --reporter=line` passed 1/1.
+- `npm run db:migrate:status` passed with 0 pending migrations. Applied migrations are baseline, tenant access indexes, and `20260523090000_iran_import_customs_workflow.sql`.
+
+Liara deploy and production smoke:
+
+- Pushed to Liara app `logisticplus` with `npx liara deploy --detach --no-app-logs --message "workflow persistence bridge fix 2026-05-24"`.
+- Liara CLI returned `Deployment created successfully` and `Upload finished`, then exited cleanly.
+- `https://logisticplus.ir/api/health` returned `{"status":"ok"}` at `2026-05-24T01:27:14.262Z`.
+- `https://logisticplus.ir/api/db/health` returned `{"status":"ok"}` with database timestamp `2026-05-24T01:27:14.287Z`.
+
+Remaining risks / notes:
+
+- Already-deleted workflow history cannot be reconstructed without a database backup.
+- The legacy bridge remains active for compatibility, but shipment rows and workflow-linked tasks must stay non-destructive until those bounded contexts are fully canonicalized.
+
+### 2026-05-21 - Documents/customers/shipments hardening and Liara v54
+
+What changed:
+
+- Added `refreshShipments()` to `src/store/useMockStore.ts` while preserving `useMockStore`, `useAppDataStore`, `user_records`, and `/api/users/:id/bootstrap`.
+- Normal shipment create/update/status/archive/restore store actions now persist through the existing compatibility bridge before refreshing only shipments from `/api/shipments`.
+- Replaced safe shipment-detail document upload/archive/visibility broad refreshes with `refreshDocuments()`.
+- Customer create/archive flows already use `refreshCustomers()` and remain on the targeted refresh path.
+- Extracted the protected customer API route group from `server.js` into `src/server/routes/customer-routes.js` with the same route paths and response shapes.
+- Continued bounded repository extraction:
+  - `src/server/repositories/documents.js` now owns protected document list/detail/download/storage-key read queries.
+  - `src/server/repositories/customers.js` owns tenant-scoped customer list/detail reads.
+  - `src/server/repositories/shipments.js` owns tenant-scoped shipment list/detail reads.
+  - `src/server/db.js` keeps backward-compatible exports for existing call sites.
+- Added or expanded Zod schemas for protected document params, customer params/create/update/related paths, shipment params/task/public-status inputs.
+- Tightened tenant scoping for touched document/customer/shipment paths, including customer related-record joins, shipment workflow-task updates, and customer-visible shipment SMS lookup.
+- Converted document file replacement (`documents` + `document_versions` + compatibility sync) to the shared `withTransaction()` helper.
+- Extended `tests/e2e/security.spec.ts` for invalid customer create, invalid shipment public status, and cross-tenant shipment public-status access.
+- Updated `docs/app-architecture.md` with the current targeted refresh, repository, route-module, validation, tenant-safety, and transaction status.
+
+Verification run:
+
+- `git diff --check` passed; only Git line-ending warnings were printed.
+- `node --check server.js` passed.
+- `node --check src/server/db.js` passed.
+- `node --check src/server/routes/customer-routes.js` passed.
+- `node --check src/server/repositories/documents.js` passed.
+- `node --check src/server/repositories/customers.js` passed.
+- `node --check src/server/repositories/shipments.js` passed.
+- `node --check src/server/request-schemas.js` passed.
+- `npm run lint` passed.
+- `npm run build` passed with the existing Vite large chunk warning only.
+- `npm run db:migrate:status` passed with 0 pending migrations.
+- `npm run smoke:production-config` passed.
+- `npm run test:e2e:setup` passed.
+- `npx playwright test tests/e2e/security.spec.ts` passed 13/13 after the test DB reset. A prior run before reset failed because seeded customer `c1` was missing from the stale test DB.
+- `npm run test:e2e` passed 79/79 after a fresh `npm run test:e2e:setup`. A prior full run failed only with 429 rate-limit responses because the focused security run had consumed test rate-limit counters.
+
+Liara deploy and production smoke:
+
+- Liara release `v54` was observed in production logs at `2026-05-21 09:53:40` running `npm start`, serving static files from `dist`, enabling the SMS worker, and starting on `http://localhost:3000`.
+- No new schema migration was introduced in this slice; local migration status was 0 pending before deploy.
+- `https://logisticplus.ir/api/health` returned 200 with `{"status":"ok"}` at `2026-05-21T06:39:12.699Z`.
+- `https://logisticplus.ir/api/db/health` returned 200 with database timestamp `2026-05-21T06:39:12.727Z`.
+
+Remaining risks / notes:
+
+- `server.js` and `src/server/db.js` are still large. Extraction should continue by bounded context only.
+- Core shipment create/update/status/archive still flows through the `user_records` compatibility bridge; dedicated canonical shipment mutation routes are intentionally deferred.
+- Broad `loadCurrentUserRecords()` remains justified for initial bootstrap, archive restore/permanent-delete screens, and shipment step/task workflows because those update multiple compatibility projections.
+- `user_records` and `/api/users/:id/bootstrap` remain supported and must not be removed until each bounded context has canonical APIs plus regression coverage.
+- Live production Zarinpal merchant validation remains pending.
+
+### 2026-05-21 - Liara deploy, production migrations, and custom-domain smoke
+
+What changed:
+
+- Pushed the current local version to Liara app `logisticplus` with `liara deploy --detach --no-app-logs --message "architecture hardening 2026-05-21"`.
+- Liara created release `v53`; app logs show `npm start`, production static serving from `dist`, SMS worker startup, and `Server running on http://localhost:3000`.
+- Correct production URL is `https://logisticplus.ir`. The Liara default domain `https://logisticplus.liara.run` returned Liara's platform 503 page during this smoke and should not be treated as the canonical public URL.
+- Created a manual Liara PostgreSQL backup before production migrations: `manual/2026-05-21T07-33-25-1779336205316.dump.tar.gz` for database `logisticplusbe`.
+- Applied production migrations from inside the Liara applet with `npm run db:migrate`; both `20260521000000_baseline.sql` and `20260521010000_tenant_access_indexes.sql` applied successfully.
+- Verified production migration status with `npm run db:migrate:status` from inside Liara: 0 pending migrations.
+
+Verification run:
+
+- `npm run lint` passed before deploy.
+- `npm run build` passed before deploy with the existing Vite large chunk warning only.
+- Local `npm run db:migrate:status` passed before deploy with 0 pending migrations.
+- `https://logisticplus.ir/api/health` returned 200 with `{"status":"ok"}` at `2026-05-21T04:03:56.925Z`.
+- `https://logisticplus.ir/api/db/health` returned 200 with a database timestamp at `2026-05-21T04:03:56.941Z`.
+- In-applet checks against `http://127.0.0.1:3000/api/health` and `/api/db/health` also returned 200.
+
+Remaining risks / notes:
+
+- No browser workflow smoke was run after this deploy; only health, DB health, applet logs, backup, and migration status were verified.
+- Live Zarinpal merchant validation is still pending. Current production env still uses a staging placeholder merchant id, so do not treat payment completion as live-validated.
+- The Liara CLI still prints a raw-mode warning after some successful `liara shell` commands; use the command output and exit status, and recheck with health/status commands when in doubt.
+
+### 2026-05-21 - Architecture hardening Phase 1/2 foundations and local migrations
+
+What changed:
+
+- Added a raw SQL migration workflow through `scripts/migrate.ts`, `db/migrations/`, and package scripts `db:migrate`, `db:migrate:status`, and `db:migrate:baseline`.
+- Added baseline migration `20260521000000_baseline.sql` and tenant access/index migration `20260521010000_tenant_access_indexes.sql`.
+- Applied the local migrations with `npm run db:migrate`; `npm run db:migrate:status` now reports 0 pending migrations for the local DB.
+- Added Zod request validation primitives in `src/server/validation.js` and `src/server/request-schemas.js`.
+- Added explicit allowlisted public tracking DTO/query code in `src/server/public-tracking.js`; public tracking payloads remain limited to `shipment`, `steps`, `documents`, and `company`.
+- Added fail-closed tenant scope helpers in `src/server/tenant-scope.js` and applied them to protected document and common tenant-owned lookup-by-id paths.
+- Added `src/server/transaction.js` and started bounded extraction with `src/server/repositories/billing.js`.
+- Hardened Zarinpal callback handling so duplicate callbacks are idempotent and do not repeat invoice, receipt, subscription, or audit side effects.
+- Added rate limiting for public tracking search and public/protected document download paths; login, SMS challenge, signup/contact, payment start, and upload/replace limits already exist.
+- Document archive behavior is now documented as source-row `archived_at` being canonical, with `archive_records` as the searchable projection.
+- Archive/restore paths that update both source rows and `archive_records` now use transaction semantics.
+- Added `useAppDataStore` as the non-breaking frontend store alias while keeping `useMockStore` imports working.
+- Added targeted `refreshDocuments()` and switched `/documents` to use it instead of a broad bootstrap refresh.
+- Added route-level frontend permission guards in `src/App.tsx` for sections with matching backend permissions.
+- Added `AGENTS.md` with repo-specific safety rules for future Codex work.
+- Updated `docs/app-architecture.md` and README architecture/security notes.
+
+Files of interest:
+
+- `scripts/migrate.ts`
+- `db/migrations/20260521000000_baseline.sql`
+- `db/migrations/20260521010000_tenant_access_indexes.sql`
+- `db/schema.sql`
+- `server.js`
+- `src/server/db.js`
+- `src/server/public-tracking.js`
+- `src/server/repositories/billing.js`
+- `src/server/request-schemas.js`
+- `src/server/tenant-scope.js`
+- `src/server/transaction.js`
+- `src/server/validation.js`
+- `src/store/useMockStore.ts`
+- `src/app/Documents.tsx`
+- `src/App.tsx`
+- `tests/e2e/security.spec.ts`
+- `docs/app-architecture.md`
+- `AGENTS.md`
+
+Verification run:
+
+- `node --check server.js` passed.
+- `node --check src/server/db.js` passed.
+- `node --check src/server/public-tracking.js` passed.
+- `node --check src/server/repositories/billing.js` passed.
+- `node --check src/server/transaction.js` passed.
+- `npm run lint` passed.
+- `npm run build` passed with the existing Vite large chunk warning only.
+- `npm run db:migrate:status` initially showed the baseline and tenant-index migrations pending.
+- `npm run test:e2e:setup` passed.
+- `npm run test:e2e` passed: 79/79. The known non-fatal Vite WebSocket port warning still appears.
+- `npm run db:migrate:baseline` refused to baseline while a non-baseline migration was pending, which is the intended safety behavior.
+- `npm run db:migrate` then applied both migrations locally.
+- Final `npm run db:migrate:status` passed and reported 0 pending migrations.
+
+Remaining risks / notes:
+
+- The worktree already had many unrelated local changes before this pass. Do not assume every dirty file listed by Git belongs to the architecture hardening patch.
+- `server.js` and `src/server/db.js` are still large. Extraction has started but should continue by bounded context only.
+- Shipment create/update, document upload, archive, and billing workflows now have better transaction patterns, but a full service/repository split is intentionally deferred.
+- `user_records` and `/api/users/:id/bootstrap` remain supported. The retirement plan is incremental: add canonical endpoint-specific refreshes, keep response compatibility, then retire one bounded context at a time after tests.
+- Live production Zarinpal still needs a controlled merchant validation even though sandbox duplicate callback behavior is covered.
+- Any production/staging DB should be backed up before running migrations.
+
 ### 2026-05-18 - Skeleton loaders everywhere and Liara deploy
 
 What changed:
@@ -297,9 +477,9 @@ Verification run:
 - Local `/api/health` and `/api/db/health` both returned ok on `http://localhost:3000`.
 - Browser smoke checked `/`, `/contact`, `/login`, `/dashboard`, and `/admin`; no console errors or horizontal overflow were detected on the checked surfaces.
 
-Current app notes:
+Current app notes from that pass:
 
-- The workspace is not currently a Git repository, so there is no `git diff` source of truth.
+- Historical note: this workspace was not treated as a Git source during that pass. As of 2026-05-21, Git metadata exists, but the worktree is dirty and includes unrelated changes.
 - Local browser session is authenticated as the seeded owner and `/admin` exposes overview, organizations, contact requests, signups, subscription limits, SMS, billing/payment, and errors tabs.
 - There are two zero-byte stray files at the repo root named `{` and `{console.error(e)`; they were not touched.
 
@@ -502,7 +682,7 @@ Remaining risks / notes:
 
 - This pass keeps Liara disk/volume as the production document storage target. S3/object storage remains deferred.
 - Live Zarinpal validation still requires real merchant credentials and a controlled production/sandbox merchant-side test; it is not automated in CI.
-- The app still does not have a full migration framework; the limiter table is added idempotently through `db/schema.sql` and startup DDL.
+- Historical note, superseded on 2026-05-21: at this point the app did not yet have the raw SQL migration scaffold.
 - PostgreSQL-backed rate limits are suitable for the chosen Liara/PostgreSQL plan, but Redis remains the stronger option if traffic grows substantially.
 
 ### 2026-05-17 - Combined security hardening and billing QA
@@ -1069,9 +1249,11 @@ What appears already implemented:
   - Secure public tracking at `/track/:token`
   - Public tracking search at `/track/search`
 - Current Liara production status:
-  - App name/domain in use: `logisticplus` at `https://logisticplus.liara.run`.
-  - Latest production deploy booted successfully with disk `logisticplus-documents` mounted at `storage/documents`.
-  - `/api/health` and `/api/db/health` were verified OK after deploy and cleanup.
+  - App name in use: `logisticplus`.
+  - Canonical public domain in use: `https://logisticplus.ir`.
+  - Latest production deploy booted successfully as release `v54` with disk `logisticplus-documents` mounted at `storage/documents`.
+  - `/api/health` and `/api/db/health` were verified OK on `https://logisticplus.ir` after the v54 deploy.
+  - `https://logisticplus.liara.run` returned Liara's platform 503 page during the 2026-05-21 smoke; use the custom domain for public checks unless the Liara domain is repaired.
   - Liara DB cleanup ran after backup/export; operational/test records are empty while owner/org/subscription scaffolding is preserved.
 - Clean database UX:
   - Shared empty-state components are wired into protected app pages.
@@ -1098,8 +1280,9 @@ What appears already implemented:
   - Document download and replacement endpoints.
 - Production hardening:
   - Liara disk/volume startup probe for document storage.
-  - Memory/PostgreSQL-backed rate limiting for login, signup, payment start, and document upload/replace.
+  - Memory/PostgreSQL-backed rate limiting for login, SMS challenge, signup/contact, payment start, document upload/replace/download, public tracking search, and public document downloads.
   - Production config smoke script and Liara launch checklist.
+  - Raw SQL migration workflow through `scripts/migrate.ts` and `db/migrations`.
 - Automated testing:
   - Playwright e2e security regression harness with isolated test database/storage.
 - Chat backend endpoints and WebSocket support exist, but chat frontend is currently disabled by design.
@@ -1109,7 +1292,7 @@ What is partially implemented:
 - RBAC:
   - Permission keys and server checks exist.
   - Frontend navigation is partly filtered by role/email checks.
-  - Route-level frontend permission checks are not fully granular.
+  - Route-level frontend permission guards now exist for protected sections with matching backend permissions; backend checks remain authoritative.
   - Protected API RBAC/tenant coverage has a Playwright policy map, but new routes should still be mapped before release.
 - Audit logging:
   - `change_logs` table and `auditLog` helper exist.
@@ -1129,6 +1312,7 @@ What is partially implemented:
 - Billing:
   - SaaS billing tables and admin endpoints exist.
   - Zarinpal integration uses `ZARINPAL_*` config.
+  - Zarinpal callback state transitions are idempotent for duplicate callbacks in the sandbox/API path.
   - Production payment behavior needs verification with real credentials.
 - Documents:
   - Local storage and metadata are implemented.
@@ -1137,12 +1321,11 @@ What is partially implemented:
 
 What is missing or incomplete:
 
-- A migration system. The app uses `db/schema.sql` directly through seed/bridge scripts.
+- Broader migration discipline for future schema work. A raw SQL migration workflow now exists and has been applied locally, but every future schema change must be added as a migration first and mirrored into `db/schema.sql`.
 - Production-ready background jobs.
 - S3/object-storage adapter, if the project later outgrows Liara disk storage.
-- Fine-grained frontend permission routing.
+- Full service/repository extraction from `server.js` and `src/server/db.js`.
 - Global search/pagination consistency across all major lists.
-- Git metadata. This local folder is not currently a Git repository.
 
 Broken, placeholder, or unfinished areas:
 
@@ -1155,6 +1338,7 @@ Runnable status:
 
 - The project appears runnable with Node.js, npm dependencies, and PostgreSQL configured.
 - After the latest code changes, `npm run lint`, `npm run build`, `npm run smoke:production-config`, `npm run test:e2e:setup`, and `npm run test:e2e` were reported as passing.
+- After the 2026-05-21 architecture pass, `npm run db:migrate` was run locally and `npm run db:migrate:status` reported 0 pending migrations.
 - Browser smoke checks were also performed for:
   - `/chat` disabled/blurred state.
   - Sidebar still showing Chat and no longer showing panel Tracking.
@@ -1535,21 +1719,21 @@ Unclear or needs verification:
 
 | Feature | Status | Relevant Files | Notes |
 |---|---|---|---|
-| App shell and protected layout | Done | `src/App.tsx`, `src/components/layout/Navbar.tsx`, `src/components/layout/MobileBottomNav.tsx` | Protected layout requires current user and store hydration. Permission granularity in frontend needs review. |
+| App shell and protected layout | Done | `src/App.tsx`, `src/components/layout/Navbar.tsx`, `src/components/layout/MobileBottomNav.tsx` | Protected layout requires current user and store hydration. Route-level frontend permission guards now mirror key backend permissions, but backend checks remain authoritative. |
 | Login/session auth | Partial to Done | `server.js`, `src/server/db.js`, `src/app/LoginPage.tsx`, `db/schema.sql` | Password hashing and sessions exist. Password reset/2FA are optional in plan and not verified. |
-| RBAC/permissions | Partial | `src/server/db.js`, `scripts/bridge-canonical-db.ts`, `db/schema.sql`, `src/app/UserManagement.tsx` | Permission keys and roles exist. Endpoint coverage needs audit. |
+| RBAC/permissions | Partial to Done | `src/server/db.js`, `scripts/bridge-canonical-db.ts`, `db/schema.sql`, `src/app/UserManagement.tsx`, `src/App.tsx` | Permission keys, roles, server checks, and frontend route guards exist. New routes still need policy-map updates. |
 | User management | Partial to Done | `src/app/UserManagement.tsx`, `server.js`, `src/server/db.js` | Current route is `/management`. Needs verification for role/permission editing and self-suspension rules. |
 | Change log/audit | Partial | `src/app/ChangeLog.tsx`, `server.js`, `src/server/db.js`, `db/schema.sql` | Current route is `/changelog`. Audit table and APIs exist. Coverage and filtering need tests. |
 | Dashboard | Partial | `src/app/Dashboard.tsx`, `server.js`, `src/server/db.js` | Role-specific dashboard exists. Data freshness and role filtering need verification. |
-| Customers | Partial to Done | `src/app/Customers.tsx`, `src/app/CustomerDetail.tsx`, `server.js`, `src/server/db.js` | List/detail/API exist. Duplicate warnings and full related sections need review. |
-| Shipments list | Partial to Done | `src/app/Shipments.tsx`, `server.js`, `src/server/db.js` | Legacy `/track` shortcuts were removed. Search/filter/permissions need verification. |
-| Shipment detail/workspace | Partial | `src/app/ShipmentDetail.tsx`, `src/app/ShipmentEdit.tsx`, `server.js`, `src/server/db.js` | Secure customer access controls exist. Canonical workflow schema differs from plan. |
-| Secure customer tracking | Done to Partial | `src/app/PublicTrack.tsx`, `src/app/ShipmentDetail.tsx`, `server.js`, `src/server/db.js` | `/track/:token` and `/track/search` remain active with safe-field regression coverage and rate limiting. Future field changes should update tests. |
+| Customers | Partial to Done | `src/app/Customers.tsx`, `src/app/CustomerDetail.tsx`, `server.js`, `src/server/routes/customer-routes.js`, `src/server/repositories/customers.js`, `src/server/db.js` | List/detail/API exist. Normal create/archive flows use `refreshCustomers()`. Customer route group and read repository are extracted; writes remain behind `db.js` compatibility exports. |
+| Shipments list | Partial to Done | `src/app/Shipments.tsx`, `src/server/repositories/shipments.js`, `server.js`, `src/server/db.js` | Legacy `/track` shortcuts were removed. Normal create/update/status/archive actions now persist via the compatibility bridge and then use `refreshShipments()`. Canonical shipment mutation APIs are still deferred. |
+| Shipment detail/workspace | Partial | `src/app/ShipmentDetail.tsx`, `src/app/ShipmentEdit.tsx`, `server.js`, `src/server/db.js` | Secure customer access controls exist. Document flows use `refreshDocuments()`. Step/task flows still use broad refresh because they mutate multiple compatibility projections. |
+| Secure customer tracking | Done to Partial | `src/app/PublicTrack.tsx`, `src/app/ShipmentDetail.tsx`, `server.js`, `src/server/public-tracking.js`, `src/server/db.js` | `/track/:token` and `/track/search` remain active with allowlisted DTOs, safe-field regression coverage, validation, and rate limiting. Future field changes should update tests. |
 | Legacy protected tracking panel | Removed | `src/App.tsx`, deleted `src/app/Track.tsx`, nav files | Bare `/track` falls through to wildcard behavior. Public `/track/*` remains. |
-| Documents | Partial to Done | `src/app/Documents.tsx`, `server.js`, `src/server/db.js`, `src/server/document-storage.js` | Upload/download/versioning exist. Validation, public filtering, and Liara-disk startup probing are implemented. S3/object storage is deferred. |
+| Documents | Partial to Done | `src/app/Documents.tsx`, `server.js`, `src/server/repositories/documents.js`, `src/server/db.js`, `src/server/document-storage.js` | Upload/download/versioning exist. Validation, tenant-scoped lookups, targeted document refresh, public filtering, shared transaction helper for replacement, and Liara-disk startup probing are implemented. S3/object storage is deferred. |
 | Tasks | Partial to Done | `src/app/Tasks.tsx`, `server.js`, `src/server/db.js` | My/team task endpoints exist. Workflow and notification behavior need tests. |
 | Chat | Planned / Disabled | `src/app/Chat.tsx`, `server.js`, `src/server/db.js` | UI route kept, blurred with coming-soon overlay. Chat side effects are guarded off. |
-| Archive | Partial to Done | `src/app/Archive.tsx`, `server.js`, `src/server/db.js` | Archive/search/restore endpoints exist. Entity coverage needs verification. |
+| Archive | Partial to Done | `src/app/Archive.tsx`, `server.js`, `src/server/db.js` | Source-row `archived_at` is canonical; `archive_records` is the searchable projection. Archive/restore projection updates now use transaction patterns. Entity coverage still needs periodic verification. |
 | Cheques | Partial to Done | `src/app/ChequeManagement.tsx`, `server.js`, `src/server/db.js` | Cheque CRUD/status/archive/due-soon APIs exist. Dashboard/task/document integrations need review. |
 | Compliance meetings | Partial to Done | `src/app/Compliance.tsx`, `server.js`, `src/server/db.js` | Current route is `/compliance`. Required documents and outcome APIs exist. |
 | Quotations/quotage | Partial to Done | `src/app/QuotageManagement.tsx`, `server.js`, `src/server/db.js` | Current route is `/quotage`. Status actions and convert-to-shipment exist. Naming should be decided. |
@@ -1558,23 +1742,24 @@ Unclear or needs verification:
 | Platform admin panel | Partial to Done | `src/app/AdminPanel.tsx`, `server.js`, `src/server/db.js` | Organizations, subscriptions, payments, invoices, signup requests, error logs, manual signup. Platform admin access is email-gated in nav. |
 | Manual admin company signup | Done | `src/app/AdminPanel.tsx`, `server.js`, `src/server/db.js` | Creates organization/user/subscription/signup record manually. |
 | Error reporting/logs | Partial | `src/lib/errorReporting.ts`, `src/components/ClientErrorBoundary.tsx`, `server.js`, `src/app/AdminPanel.tsx` | Client errors can be reported and viewed/admin-resolved. Coverage and privacy need review. |
-| Billing/invoicing | Partial | `src/app/AdminPanel.tsx`, `server.js`, `src/server/db.js`, `db/schema.sql` | Manual payment marking/invoices/renew/expire exist. Zarinpal production behavior needs verification. |
+| Billing/invoicing | Partial to Done | `src/app/AdminPanel.tsx`, `server.js`, `src/server/db.js`, `src/server/repositories/billing.js`, `db/schema.sql` | Manual payment marking/invoices/renew/expire exist. Zarinpal duplicate callbacks are idempotent in the server path. Live production payment behavior still needs controlled verification. |
 | Notifications/background jobs | Partial / Missing | `src/store/useMockStore.ts`, `db/schema.sql`, `src/App.tsx`, `src/server/db.js` | UI/store notifications exist. Real background scheduler not found. |
-| Tests | Partial / Active | `package.json`, `playwright.config.ts`, `tests/e2e/security.spec.ts` | Playwright e2e security suite exists and currently covers 12 regression scenarios. Unit/API test frameworks are not added. |
-| Documentation | Partial to Done | `README.md`, `.env.example`, `PROJECT_HANDOFF.md` | README/env cover local setup, Playwright, Liara launch, storage, rate limiting, and Zarinpal configuration. |
-| Deployment | Partial to Done | `liara.json`, `package.json`, `server.js`, `src/server/startup-checks.js` | Liara config exists with production startup checks. Real deploy and live Zarinpal validation still require production credentials. |
+| Migrations/schema | Partial to Done | `scripts/migrate.ts`, `db/migrations`, `db/schema.sql`, `package.json` | Raw SQL migration workflow exists. Local DB has applied baseline plus tenant-access index migration. Future schema changes should be migrations first, schema snapshot second. |
+| Tests | Partial / Active | `package.json`, `playwright.config.ts`, `tests/e2e/security.spec.ts` | Playwright e2e suite exists and currently passes 79/79 after setup. Security coverage includes public tracking DTO safety, tenant isolation, protected validation, and rate limiting. Unit/API test frameworks are not added. |
+| Documentation | Partial to Done | `README.md`, `.env.example`, `PROJECT_HANDOFF.md`, `docs/app-architecture.md`, `AGENTS.md` | README/env/architecture/handoff cover local setup, Playwright, Liara launch, storage, rate limiting, migrations, archive canonical source, and Zarinpal configuration. |
+| Deployment | Partial to Done | `liara.json`, `package.json`, `server.js`, `src/server/startup-checks.js` | Liara config exists with production startup checks. Latest production release is `v54` on `https://logisticplus.ir`; live Zarinpal validation still requires production credentials. |
 
 ## 7. Known Issues and Gaps
 
-- Local folder is not a Git repository, so there is no commit history/status safety in this copy.
 - Backend is large and monolithic:
-  - `server.js` is about 126 KB.
+  - `server.js` is large and still owns route orchestration, Zarinpal calls, and many endpoint responsibilities.
   - `src/server/db.js` contains most data access and business logic.
+  - Extraction has started with public tracking, customer routes, billing, documents/customers/shipments repositories, tenant-scope, validation, and transaction helper modules, but most domains still need gradual decomposition.
 - Hybrid state architecture:
   - Zustand store plus `user_records`.
   - Canonical PostgreSQL feature tables.
   - Legacy JSON fields.
-  - This is workable but easy to regress.
+  - Documents, customers, and normal shipment mutations now use targeted refresh helpers, but this hybrid path is still easy to regress.
 - Plan/code route naming mismatches:
   - `/changes` vs `/changelog`
   - `/users` vs `/management`
@@ -1582,11 +1767,11 @@ Unclear or needs verification:
   - `/quotations` vs `/quotage`
 - Chat is intentionally disabled, but backend code remains active. Keep UI guards until the feature is intentionally re-enabled.
 - Public tracking must remain safe. Existing tests cover the current safe payload; update them before changing exposed fields.
-- Full organization isolation is a major risk. Any query missing `organization_id` filtering could leak tenant data.
+- Full organization isolation is a major risk. Common lookup-by-id helpers now fail closed for tenant-owned entities, but any new query missing `organization_id` filtering could still leak tenant data.
 - Audit logging coverage is broad but not proven for every mutation.
 - File upload security has strict validation and regression tests; re-audit when adding new file types or storage backends.
 - `npm run clean` is Unix-specific and may fail in Windows PowerShell.
-- No migration/versioning system exists for schema changes.
+- Migration/versioning exists through raw SQL migrations, but production rollout still requires backups and disciplined use of `db/migrations` before editing `db/schema.sql`.
 - No separate `.env.production` file is committed; production variables are documented in `.env.example` and `README.md`.
 
 ## 8. Recommended Next Moves
@@ -1598,21 +1783,21 @@ Unclear or needs verification:
 | Live document/tracking smoke | Log in as owner, upload/download a private document, create a customer/shipment/tracking token, expose one customer-visible document, verify public tracking, then archive the test records. | Authenticated route smoke is green, but document storage and tracking token behavior still need a post-cleanup production rehearsal. | Browser, Liara app, `server.js`, document storage disk | Owner session and cleanup after test. |
 | Live Zarinpal validation | Run one controlled live merchant payment from signup through callback, invoice, receipt, and admin billing state. | Sandbox is covered; live payment behavior still requires real credentials and gateway validation. | `server.js`, `src/server/db.js`, `src/app/SaasSignup.tsx`, `src/app/AdminPanel.tsx` | Real merchant credentials and test payment plan. |
 | Audit log coverage review | Verify every create/update/archive/status/assignment/upload action calls `auditLog` and add missing regression cases. | Audit trail is a non-negotiable planning requirement. | `server.js`, `src/server/db.js`, feature pages, `tests/e2e/` | Current Playwright harness. |
-| Stabilize state model | Document which features still use Zustand/user_records vs canonical tables, then plan a safe migration path. | Hybrid state is now the main maintainability risk. | `src/store/useMockStore.ts`, `server.js`, `src/server/db.js`, feature pages | Product decision on migration scope. |
+| Continue state-model stabilization | Add targeted refresh helpers for remaining projections such as archive, shipment steps, and tasks; keep replacing broad `loadCurrentUserRecords()` only where the state boundary is clear. | Hybrid state is now the main maintainability risk. | `src/store/useMockStore.ts`, `server.js`, `src/server/db.js`, feature pages | Tests around each migrated screen. |
 
 ### Short-Term Tasks
 
 | Task | What to do | Why it matters | Likely files/folders | Dependencies |
 |---|---|---|---|---|
-| Permission coverage review | Map every route/API endpoint to required permission keys and add missing guards. | RBAC is central to the product and plan. | `server.js`, `src/server/db.js`, `src/App.tsx`, nav components | Decide role behavior for SaaS platform admin. |
+| Permission coverage review | Keep the API/frontend route permission matrix current and add policy-map entries for any new routes. | RBAC is central to the product and plan. | `server.js`, `src/server/db.js`, `src/App.tsx`, nav components, `tests/e2e/rbac-policy.ts` | Decide role behavior for SaaS platform admin. |
 | Route naming decision | Decide whether to keep current paths or align with planning docs. | Reduces future confusion. | `src/App.tsx`, nav components, docs | Product owner decision. |
 
 ### Medium-Term Tasks
 
 | Task | What to do | Why it matters | Likely files/folders | Dependencies |
 |---|---|---|---|---|
-| Introduce migrations | Replace direct schema reapplication with a migration workflow. | Safer production schema evolution. | `db/`, scripts, package scripts | Pick tool or simple SQL migration convention. |
-| Split backend modules | Gradually extract route groups and data services from `server.js`/`db.js`. | Improves maintainability and testability. | `server.js`, `src/server/` | Tests first are strongly recommended. |
+| Migration discipline | Require each future schema change to add a raw SQL migration first, then mirror the schema snapshot. | Prevents drift now that the migration workflow exists. | `db/migrations`, `db/schema.sql`, `scripts/migrate.ts` | Back up target DB before applying. |
+| Split backend modules | Gradually extract route groups and data services from `server.js`/`db.js`, continuing with shipments/archive/documents/billing. Customer routes and document/customer/shipment read repositories are already started. | Improves maintainability and testability. | `server.js`, `src/server/` | Tests first are strongly recommended. |
 | Object storage adapter | Add S3-compatible storage only if Liara disk storage is no longer enough. | Optional future scale/durability path beyond the chosen Liara disk setup. | `src/server/document-storage.js`, `.env.example` | Choose provider. |
 | Background jobs | Implement reminders for free-time, tasks, cheques, compliance meetings, and quotations. | Dashboard/notifications need real automation. | new server job module, `notifications`, dashboard APIs | Decide runtime/job scheduler. |
 | Re-enable chat deliberately | When ready, remove `CHAT_DISABLED`, verify WebSocket/API behavior, unread counts, permissions, and mobile UX. | Chat is planned but currently postponed. | `src/app/Chat.tsx`, `server.js`, `src/server/db.js` | Product approval and tests. |
@@ -1645,16 +1830,23 @@ Important current state:
 - The old protected panel /track page was removed. Keep public secure tracking active at /track/:token and /track/search.
 - Admin manual company signup was added in the admin panel.
 - Public customer tracking must never expose internal data.
-- Playwright e2e security regression tests exist and should be run before/after high-risk changes.
+- Playwright e2e regression tests exist and should be run before/after high-risk changes; latest clean run passed 79/79 after setup.
+- Raw SQL migrations now exist in db/migrations and are run with npm run db:migrate. The local DB has applied the baseline and tenant-access index migrations.
 - Liara production hardening is implemented: document storage uses a Liara disk path, production rate limiting can use PostgreSQL, and startup checks validate required production env vars.
-- Liara production is live at https://logisticplus.liara.run and health/db-health were verified after the latest deploy and cleanup.
+- Zarinpal callback mutation handling is idempotent for duplicate callbacks in the server path, but live merchant validation is still needed.
+- Frontend route-level permission guards exist for protected sections with matching backend permissions; backend checks remain the source of truth.
+- Public tracking responses use allowlisted DTOs in src/server/public-tracking.js.
+- Archive canonical state is source-row archived_at; archive_records is the searchable projection.
+- Documents, customers, and normal shipment mutations have targeted refresh helpers: refreshDocuments(), refreshCustomers(), and refreshShipments().
+- Customer routes are extracted in src/server/routes/customer-routes.js, and document/customer/shipment read repositories exist under src/server/repositories/.
+- Liara production is live at https://logisticplus.ir and health/db-health were verified after the latest deploy and production migrations.
 - Guided empty states are implemented for clean protected-app pages.
 - Customer creation now captures phone/address/notes, and customer archive/delete uses an async confirmation flow.
 - The live Liara database was backed up and cleaned. Operational/test tables are empty; owner/org/subscription scaffolding is preserved.
 - The production owner password was reset at the user's request, and authenticated smoke for dashboard/customers/shipments/documents/tasks/admin passed.
 - The login page no longer pre-fills or renders the internal admin email.
 
-Please start with the current Recommended Next Moves from PROJECT_HANDOFF.md. The highest-value next lanes are live document/tracking smoke, live Zarinpal validation, audit-log coverage, or hybrid state stabilization.
+Please start with the current Recommended Next Moves from PROJECT_HANDOFF.md. The highest-value next lanes are live document/tracking smoke, live Zarinpal validation, audit-log coverage, bounded backend extraction, or hybrid state stabilization.
 
 As you work, preserve existing user changes, keep edits scoped, and run npm run lint/build/test:e2e when relevant.
 ```
@@ -1678,7 +1870,7 @@ Technical architecture:
 - Is the hybrid Zustand `user_records` plus canonical table model temporary or intentional?
 - Should shipment steps and team members be moved into canonical tables matching the plan?
 - Should the backend be split into route/service modules now, or only after tests are added?
-- Should a migration tool be introduced, or should the project keep raw SQL schema files?
+- Should the raw SQL migration scaffold remain the long-term migration approach, or should the project later adopt a fuller migration tool?
 
 UX/UI choices:
 
@@ -1695,7 +1887,7 @@ Data model:
 
 Deployment:
 
-- `APP_PUBLIC_URL` for the current production app is `https://logisticplus.liara.run`.
+- `APP_PUBLIC_URL` for the current production app is `https://logisticplus.ir`.
 - Liara production app in use is `logisticplus`; staging app tooling targets `logisticplus-staging`.
 - What live Zarinpal merchant credential should be used for the controlled validation?
 
@@ -1721,12 +1913,16 @@ Commands inferred from `package.json` and scripts:
 | Start production server | `npm run start` | Runs `node server.js`; set `NODE_ENV=production` in the host environment for production static serving/startup checks. |
 | Preview Vite build only | `npm run preview` | Vite preview. May not represent full Express API behavior. |
 | Type check/lint | `npm run lint` | Runs `tsc --noEmit`. Reported passing in this conversation after latest code changes. |
+| Apply schema snapshot | `npm run db:schema` | Applies `db/schema.sql` directly. Prefer migrations for future schema changes. |
+| Apply migrations | `npm run db:migrate` | Applies pending raw SQL migrations from `db/migrations`. Local DB applied baseline plus tenant-index migrations on 2026-05-21. |
+| Check migration status | `npm run db:migrate:status` | Shows applied/pending migrations from `schema_migrations`. Latest local status: 0 pending. |
+| Baseline existing DB | `npm run db:migrate:baseline` | Marks baseline migrations only; refuses when non-baseline migrations are pending. |
 | Seed database | `npm run db:seed` | Applies schema, creates DB if needed, seeds owner user and legacy records. Needs PostgreSQL and env values. |
 | Bridge canonical DB | `npm run db:bridge` | Applies schema, seeds roles/permissions/plans/default organization, bridges legacy records into canonical tables. |
 | Clean build output | `npm run clean` | Uses `rm -rf dist`; needs verification on Windows PowerShell. |
 | Deploy | `npm run deploy` | Runs `liara deploy`; needs Liara CLI auth and env config. |
 | Prepare e2e DB | `npm run test:e2e:setup` | Resets only `TEST_DATABASE_URL` databases whose name includes `test`, then seeds/bridges. |
-| Run e2e tests | `npm run test:e2e` | Runs the Playwright security regression suite. Latest run passed 12/12. |
+| Run e2e tests | `npm run test:e2e` | Runs the Playwright regression suite. Latest clean run after setup passed 79/79. |
 | Production config smoke | `npm run smoke:production-config` | Confirms missing production Liara/Zarinpal settings fail loudly at startup. |
 
 Suggested local setup sequence:
@@ -1776,7 +1972,7 @@ Do not commit real secrets.
 
 Current test framework:
 
-- Playwright e2e security regression suite in `tests/e2e/security.spec.ts`.
+- Playwright e2e regression suite under `tests/e2e/`, including security, public funnel, production readiness, document, pricing/billing, search, SMS, UI/UX, and empty-state specs.
 - `playwright.config.ts` runs the app on isolated `TEST_PORT` with `TEST_DATABASE_URL`, isolated document storage, and `RATE_LIMIT_STORE=postgres`.
 - `scripts/reset-test-db.ts` resets and seeds only databases whose name includes `test`.
 
@@ -1787,7 +1983,7 @@ Existing verification commands:
 - `npm run test:e2e:setup` prepares the Playwright database/storage.
 - `npm run test:e2e` runs the current e2e suite.
 - `npm run smoke:production-config` checks production startup validation.
-- All of the above were reported as passing after the clean launch/customer CRUD polish pass. Current full Playwright status is 26/26 passing.
+- The 2026-05-21 architecture pass verified `npm run lint`, `npm run build`, `npm run test:e2e:setup`, and `npm run test:e2e`; current full Playwright status is 79/79 passing after setup. The known non-fatal Vite WebSocket port warning still appears.
 
 Browser smoke checks performed across recent passes:
 
@@ -1808,6 +2004,7 @@ Recommended tests to add next:
 | 1 | Audit logging tests for representative mutations | Ensures compliance with planning requirements. |
 | 1 | More route/permission matrix cases | Broadens the existing RBAC policy harness. |
 | 1 | Live Zarinpal manual validation checklist | Covers real gateway behavior without committing secrets. |
+| 1 | Migration rollout checks for staging/production | Ensures backups, baseline strategy, and tenant indexes are applied safely. |
 | 2 | Browser smoke tests for core pages | Catches routing/layout regressions beyond the current security harness. |
 | 2 | Chat disabled regression test | Ensures no chat fetch/WebSocket side effects while disabled. |
 | 3 | Unit/API tests for data helpers | Adds faster coverage beyond Playwright. |
@@ -1822,8 +2019,8 @@ Playwright is already installed. Vitest/Supertest remain optional if faster unit
 
 ## 14. Final Summary
 
-The project is a fairly complete logistics operations web app with a newer SaaS/admin layer. Most planned pages and APIs exist, and the latest requested product changes are in place: clean empty states, customer contact capture, async customer archive/delete confirmation, temporarily disabled chat, removed legacy protected panel tracking, secure public tracking, and admin manual company signup.
+The project is a fairly complete logistics operations web app with a newer SaaS/admin layer. Most planned pages and APIs exist, and the latest requested product and architecture changes are in place: clean empty states, customer contact capture, async customer archive/delete confirmation, temporarily disabled chat, removed legacy protected panel tracking, secure public tracking, admin manual company signup, migration scaffolding, public tracking DTOs, idempotent Zarinpal callback handling, route-level frontend permission guards, and targeted document refresh.
 
-The biggest risk is not missing UI. The biggest remaining risk is unverified correctness in areas not fully covered by the current Playwright harness: audit logging completeness, hybrid legacy/canonical state, migrations, background jobs, production data hygiene, and live payment behavior.
+The biggest risk is not missing UI. The biggest remaining risk is unverified correctness in areas not fully covered by the current Playwright harness: audit logging completeness, hybrid legacy/canonical state, continued backend modularization, migration rollout discipline across environments, background jobs, production data hygiene, and live payment behavior.
 
-The best next action is to finish the production launch-readiness lane: deploy the current patch, back up and clean the Liara database, run live post-cleanup smoke, then move to live Zarinpal validation or audit/state hardening.
+The best next action is to finish the production launch-readiness lane: back up the target database, run migrations in staging/production, deploy the current patch, smoke document/tracking flows, then move to live Zarinpal validation or audit/state hardening.

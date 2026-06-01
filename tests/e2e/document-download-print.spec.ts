@@ -223,7 +223,7 @@ test.describe.serial("document download, public access, archive, and print/expor
     });
 
     await loginViaUi(page);
-    for (const route of ["/documents", "/shipments/s1", "/track/search", "/quotage"]) {
+    for (const route of ["/documents", "/shipments/s1", "/track/search", "/quotations"]) {
       await page.goto(route);
       await expect(page.locator("h1").first()).toBeVisible();
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
@@ -240,7 +240,7 @@ test.describe.serial("document download, public access, archive, and print/expor
     await expect(shipmentDownload).toBeVisible();
     expect(await shipmentDownload.getAttribute("href")).toBe(`/api/documents/${uploaded.id}/download`);
 
-    await page.goto("/quotage");
+    await page.goto("/quotations");
     const originalTitle = await page.title();
     await page.getByLabel(`Print quotation ${quote.id}`).first().click();
     await expect.poll(() => page.evaluate(() => (window as any).__printCalls)).toBe(1);

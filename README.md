@@ -83,6 +83,25 @@ http://localhost:3000
 
 `npm run db:bridge` reapplies the schema foundation, seeds roles, permissions, subscription plans, the default organization, and bridges legacy records into canonical PostgreSQL tables.
 
+`npm run db:migrate` applies raw SQL migrations from `db/migrations` and records them in `schema_migrations`. The first migration is a no-op baseline for databases that already match `db/schema.sql`; it does not destroy or rewrite existing data.
+
+For an existing local, staging, or production database, take a database backup first, then run:
+
+```powershell
+npm run db:migrate
+npm run db:migrate:status
+```
+
+For a fresh local database, keep using the existing setup path first, then run migrations:
+
+```powershell
+npm run db:seed
+npm run db:bridge
+npm run db:migrate
+```
+
+Future schema changes should be added as migration files first, then mirrored into `db/schema.sql` as the current schema snapshot.
+
 Default local owner login if `SEED_USER_PASSWORD` is not changed:
 
 - Email: `darksudo22@gmail.com`
@@ -101,6 +120,8 @@ Important variables:
 - `SEED_USER_PASSWORD`: password assigned to the seeded owner user.
 - `SEED_USER_ID`: owner user id used by the bridge script; defaults to `u1`.
 - `SEED_ORGANIZATION_ID`: default organization id used by the bridge script.
+- `DEMO_SEED_PASSWORD`: password assigned to the independent Parsrah showcase users by `npm run db:seed:demo`.
+- `DEMO_SEED_ALLOW_PRODUCTION`: must be `true` before `db:seed:demo` can run with `NODE_ENV=production`.
 - `APP_PUBLIC_URL`: public base URL used for generated links and Zarinpal callbacks.
 - `PORT`: HTTP port used by `server.js`; defaults to `3000`.
 - `DOCUMENT_STORAGE_DIR`: local upload storage directory.
@@ -108,6 +129,7 @@ Important variables:
 - `ZARINPAL_SANDBOX`: use sandbox-style local callback behavior unless set to `false`.
 - `ZARINPAL_MERCHANT_ID`: required for real Zarinpal payment requests.
 - `ZARINPAL_TIMEOUT_MS`: timeout for Zarinpal request/verify calls; defaults to `10000`.
+- Zarinpal production setup details live in [docs/zarinpal-production-setup.md](docs/zarinpal-production-setup.md).
 - `SMS_ENABLED`: enables SMS sending path; dry-run mode can still be used without provider credentials.
 - `SMS_DRY_RUN`: defaults to `true`; keep it enabled until SMS.ir account settings are verified.
 - `SMSIR_API_KEY` / `SMSIR_LINE_NUMBER`: SMS.ir credentials required only when `SMS_DRY_RUN=false`.
@@ -139,9 +161,13 @@ Do not commit real secrets.
 
 Document uploads are intentionally strict. The server accepts only matching extension/MIME pairs for PDF, common image formats, Word/Excel files, CSV, TXT, and RTF. Empty files, executable/script extensions, unknown extensions, and MIME mismatches are rejected. Document `shipmentId` and `customerId` parents must belong to the authenticated user's organization before any file bytes are stored.
 
-Abuse protection rate-limits login failures, public signup, payment start, and document upload/replace requests. Local development uses an in-memory limiter by default. Production should use `RATE_LIMIT_STORE=postgres`, which stores counters in the `rate_limit_buckets` table so limits are shared across app instances.
+Abuse protection rate-limits login failures, SMS login challenges, public signup/contact requests, payment start, document upload/replace/download requests, and public tracking search/document downloads. Local development uses an in-memory limiter by default. Production should use `RATE_LIMIT_STORE=postgres`, which stores counters in the `rate_limit_buckets` table so limits are shared across app instances.
 
 Public document downloads are limited to customer-visible documents attached to shipments with customer tracking access enabled. Token-based public tracking remains the safer customer-facing document path.
+
+Archive state is canonical on the tenant-owned source row through `archived_at`. `archive_records` is the searchable/indexed projection for archive screens and restore/delete flows, and archive/restore updates should keep both tables in the same transaction. Avoid hard deletes except through the explicit archive permanent-delete endpoints.
+
+`user_records` and `/api/users/:id/bootstrap` remain the compatibility bridge for the current frontend store. New work should add canonical endpoint-specific refreshes first, keep successful response shapes backward-compatible, and retire `user_records` only after all app screens no longer depend on bootstrap hydration or compatibility saves.
 
 ## SMS Alerts
 
@@ -159,6 +185,8 @@ npm run lint
 npm run build
 npm run preview
 npm run db:schema
+npm run db:migrate
+npm run db:migrate:status
 npm run db:seed
 npm run db:bridge
 npm run test:e2e:setup
@@ -175,6 +203,7 @@ Command notes:
 - `npm run build` runs the production Vite build.
 - `npm run preview` previews the Vite build only and may not represent the full Express API behavior.
 - `npm run db:schema` applies `db/schema.sql` to the current `DATABASE_URL` without seeding records.
+- `npm run db:migrate` applies pending SQL migrations from `db/migrations`; `npm run db:migrate:status` shows applied and pending migrations.
 - `npm run test:e2e:setup` drops/recreates only `TEST_DATABASE_URL`, then runs `db:seed` and `db:bridge` against it.
 - `npm run test:e2e` runs the Playwright security regression suite against `TEST_PORT`.
 - `npm run test:e2e:headed` runs the same suite with a visible browser.
@@ -240,8 +269,9 @@ The current document storage adapter is local filesystem storage. On Liara, use 
 2. Create a Liara PostgreSQL database and set `DATABASE_URL` in app environment variables.
 3. Create a Liara disk and mount it to `storage/documents` for uploaded documents.
 4. Set production env vars: `NODE_ENV=production`, `APP_PUBLIC_URL=https://<your-domain>`, `DOCUMENT_STORAGE_DIR=storage/documents`, `RATE_LIMIT_STORE=postgres`, `TRUST_PROXY=true`, `ZARINPAL_SANDBOX=false`, the live `ZARINPAL_MERCHANT_ID`, and `SMS_DRY_RUN=true` for the first SMS rollout.
-5. Run `npm run build`, then deploy with `npm run deploy` or the Liara Console flow.
-6. After deploy, smoke check `/api/health`, login, upload/download a private document, expose one customer-visible document through a tracking token, and run one controlled live Zarinpal payment.
+5. Back up the Liara PostgreSQL database, then run `npm run db:migrate` once in the target environment.
+6. Run `npm run build`, then deploy with `npm run deploy` or the Liara Console flow.
+7. After deploy, smoke check `/api/health`, login, upload/download a private document, expose one customer-visible document through a tracking token, and run one controlled live Zarinpal payment.
 
 For live SMS rollout, rotate the SMS.ir API key first, then set `SMS_ENABLED=true`, `SMS_DRY_RUN=false`, and either `SMSIR_LINE_NUMBER` or `SMSIR_USE_DEFAULT_LINE=true`. Use `npm run sms:prod-smoke -- precheck`, `prepare`, `run-worker`, and `report` in order for a controlled production send.
 

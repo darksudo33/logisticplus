@@ -45,7 +45,7 @@ const emptyCustomerForm: CustomerFormState = {
 export default function Customers() {
   const navigate = useNavigate();
   const customers = useMockStore(state => state.customers);
-  const loadCurrentUserRecords = useMockStore(state => state.loadCurrentUserRecords);
+  const refreshCustomers = useMockStore(state => state.refreshCustomers);
   const [searchTerm, setSearchTerm] = useState("");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -65,7 +65,7 @@ export default function Customers() {
     if (!response.ok || payload?.ok === false) {
       throw new Error(payload?.error?.message || "Customer request failed.");
     }
-    await loadCurrentUserRecords();
+    await refreshCustomers();
     return payload?.data;
   };
 

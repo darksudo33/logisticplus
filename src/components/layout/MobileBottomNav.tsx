@@ -12,7 +12,7 @@ import { motion } from "motion/react";
 const navItems = [
   { icon: LayoutDashboard, label: "داشبورد", path: "/dashboard" },
   { icon: Ship, label: "بارها", path: "/shipments" },
-  { icon: Calculator, label: "مدیریت کوتاژ", path: "/quotage" },
+  { icon: Calculator, label: "مدیریت کوتاژ", path: "/quotations" },
   { icon: CheckSquare, label: "وظایف", path: "/tasks" },
   { icon: CreditCard, label: "چک‌ها", path: "/cheques" },
   { icon: Archive, label: "آرشیو", path: "/archive" },

@@ -175,7 +175,19 @@ async function consumePostgresRateLimit(key, { limit, windowMs }) {
   }
 }
 
-export async function consumeRateLimit(req, res, scope, { limit, windowMs, discriminator = "" }) {
+export async function consumeRateLimit(
+  req,
+  res,
+  scope,
+  {
+    limit,
+    windowMs,
+    discriminator = "",
+    code = "RATE_LIMITED",
+    message = "Too many requests. Please try again later.",
+    field,
+  }
+) {
   const key = rateLimitKey(req, scope, discriminator);
   const result = currentStore() === "memory"
     ? await consumeMemoryRateLimit(key, { limit, windowMs })
@@ -183,7 +195,7 @@ export async function consumeRateLimit(req, res, scope, { limit, windowMs, discr
 
   if (result.limited) {
     res.setHeader("Retry-After", String(result.retryAfter));
-    createApiError(res, 429, "RATE_LIMITED", "Too many requests. Please try again later.");
+    createApiError(res, 429, code, message, field);
     return false;
   }
   return true;

@@ -29,7 +29,6 @@ import {
 } from "lucide-react";
 import { 
   format, 
-  parse, 
   differenceInSeconds, 
   isSameDay,
   startOfMonth,
@@ -55,6 +54,7 @@ import {
   DialogFooter
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { parseShamsiDateTimeValue, ShamsiDateTimeField, splitShamsiDateTime } from "@/src/components/ShamsiDateTimeField";
 import { 
   Select, 
   SelectContent, 
@@ -67,6 +67,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { EmptyState, resetFiltersAction } from "@/src/components/EmptyState";
+import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
 
 // --- Components ---
 
@@ -80,7 +81,11 @@ const AppointmentTimer = ({ targetDate }: { targetDate?: string }) => {
     }
     const timer = setInterval(() => {
       try {
-        const target = parse(targetDate, "yyyy/MM/dd HH:mm", new Date());
+        const target = parseShamsiDateTimeValue(targetDate);
+        if (!target) {
+          setTimeLeft(0);
+          return;
+        }
         const now = new Date();
         const diff = differenceInSeconds(target, now);
         
@@ -125,9 +130,12 @@ export default function Compliance() {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
+  const [appointmentToArchive, setAppointmentToArchive] = useState<Appointment | null>(null);
+
+  const activeAppointments = appointments.filter(a => !a.isArchived);
 
   // Deriving selected appointment from store to keep it reactive
-  const selectedAppointment = appointments.find(a => a.id === selectedAppointmentId) || null;
+  const selectedAppointment = activeAppointments.find(a => a.id === selectedAppointmentId) || null;
 
   // View state
   const [viewDate, setViewDate] = useState<Date>(new Date());
@@ -149,18 +157,18 @@ export default function Compliance() {
     { id: "d3", name: "گواهی مبدا", required: false, completed: false },
   ]);
 
-  const filteredAppointments = appointments.filter(a => 
+  const filteredAppointments = activeAppointments.filter(a =>
     (a.departmentName?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
     (a.purpose?.toLowerCase() || "").includes(searchTerm.toLowerCase())
   );
   const resetComplianceFilters = () => setSearchTerm("");
 
   const complianceStats = React.useMemo(() => {
-    const total = appointments.length;
-    const scheduled = appointments.filter(a => a.status === "SCHEDULED").length;
-    const inProgress = appointments.filter(a => a.status === "IN_PROGRESS").length;
-    const completed = appointments.filter(a => a.status === "COMPLETED").length;
-    const allDocuments = appointments.flatMap(a => a.requiredDocuments);
+    const total = activeAppointments.length;
+    const scheduled = activeAppointments.filter(a => a.status === "SCHEDULED").length;
+    const inProgress = activeAppointments.filter(a => a.status === "IN_PROGRESS").length;
+    const completed = activeAppointments.filter(a => a.status === "COMPLETED").length;
+    const allDocuments = activeAppointments.flatMap(a => a.requiredDocuments);
     const requiredDocuments = allDocuments.filter(d => d.required);
     const completedRequiredDocuments = requiredDocuments.filter(d => d.completed).length;
     const documentRate = requiredDocuments.length
@@ -173,7 +181,7 @@ export default function Compliance() {
       { label: "تکمیل شده", value: completed, helper: "بسته و ممیزی شده", icon: CheckCircle2, tone: "emerald" },
       { label: "تکمیل مدارک", value: `${documentRate}%`, helper: `${completedRequiredDocuments}/${requiredDocuments.length || 0} مدرک الزامی`, icon: FileCheck, tone: "indigo" },
     ];
-  }, [appointments]);
+  }, [activeAppointments]);
 
   const handleOpenAdd = () => {
     setEditingAppointment(null);
@@ -183,7 +191,7 @@ export default function Compliance() {
 
   const handleOpenEdit = (app: Appointment) => {
     setEditingAppointment(app);
-    const [datePart, timePart] = app.dateTime.split(" ");
+    const { date: datePart, time: timePart } = splitShamsiDateTime(app.dateTime);
     const [hour, minute] = timePart.split(":");
     
     setFormData({
@@ -247,16 +255,16 @@ export default function Compliance() {
           method: "PATCH",
           body: JSON.stringify(appData),
         });
-        toast.success("???? ?? ?????? ????????? ??.");
+        toast.success("نوبت با موفقیت بروزرسانی شد.");
       } else {
         await saveMeeting("/api/compliance-meetings", {
           method: "POST",
           body: JSON.stringify(appData),
         });
-        toast.success("???? ?? ?????? ??? ?? ? ????? ?????? ????? ?????.");
+        toast.success("نوبت جدید ثبت شد و برای پیگیری آماده است.");
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "??? ?? ????? ????.");
+      toast.error(error instanceof Error ? error.message : "ثبت نوبت ناموفق بود.");
       return;
     }
 
@@ -323,6 +331,14 @@ export default function Compliance() {
     });
   };
 
+  const archiveAppointment = async () => {
+    if (!appointmentToArchive) return;
+    await saveMeeting(`/api/compliance-meetings/${appointmentToArchive.id}/archive`, { method: "POST" });
+    toast.success("نوبت به بایگانی منتقل شد.");
+    if (selectedAppointmentId === appointmentToArchive.id) setSelectedAppointmentId(null);
+    setAppointmentToArchive(null);
+  };
+
   const departments = [
     { value: "لجستیک و حمل و نقل", label: "دپارتمان لجستیک" },
     { value: "گمرک و ترخیص", label: "دپارتمان گمرک" },
@@ -369,7 +385,7 @@ export default function Compliance() {
             currentDate.setDate(monthStart.getDate() + i);
             const dateStr = format(currentDate, "yyyy/MM/dd");
             const isTodayString = format(new Date(), "yyyy/MM/dd") === dateStr;
-            const hasApp = appointments.some(a => a.dateTime.startsWith(dateStr));
+            const hasApp = activeAppointments.some(a => a.dateTime.startsWith(dateStr));
             
             return (
               <div 
@@ -406,7 +422,7 @@ export default function Compliance() {
         <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
           <DialogTrigger
             render={
-              <Button onClick={handleOpenAdd} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold rounded-xl gap-2 h-11 px-6 shadow-lg shadow-primary/20 transition-all active:scale-95">
+              <Button data-testid="open-compliance-dialog" onClick={handleOpenAdd} className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold rounded-xl gap-2 h-11 px-6 shadow-lg shadow-primary/20 transition-all active:scale-95">
                 <Plus className="w-5 h-5" />
                 ثبت نوبت جدید
               </Button>
@@ -426,44 +442,18 @@ export default function Compliance() {
             </DialogHeader>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-6 py-2 sm:py-6 text-right">
-              <div className="space-y-1.5 sm:space-y-2">
-                <Label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest mr-1">تاریخ (روز/ماه/سال)</Label>
-                <div className="flex gap-2 items-center bg-muted border border-border focus-within:border-primary/50 transition-all rounded-xl sm:rounded-2xl px-3 h-11 sm:h-12 shadow-inner">
-                   <Calendar className="w-3.5 h-3.5 text-primary shrink-0" />
-                   <Input 
-                    value={formData.date}
-                    onChange={(e) => setFormData({...formData, date: e.target.value})}
-                    className="bg-transparent border-none p-0 h-full text-center font-mono text-xs sm:text-sm shadow-none focus-visible:ring-0" 
-                    placeholder="۱۴۰۳/۰۲/۱۵"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1.5 sm:space-y-2">
-                <Label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest mr-1">ساعت جلسه</Label>
-                <div className="grid grid-cols-[auto,1fr,auto,1fr] items-center gap-2">
-                   <Clock className="w-3.5 h-3.5 text-primary" />
-                   <Select value={formData.hour} onValueChange={(v) => setFormData({...formData, hour: v})}>
-                    <SelectTrigger className="bg-muted border-border h-11 sm:h-12 rounded-xl sm:rounded-2xl shadow-inner font-mono text-xs sm:text-sm">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="bg-popover border-border text-foreground max-h-[180px]">
-                      {Array.from({ length: 24 }).map((_, i) => (
-                        <SelectItem key={i} value={i < 10 ? `0${i}` : `${i}`}>{i < 10 ? `0${i}` : `${i}`}</SelectItem>
-                      ))}
-                    </SelectContent>
-                   </Select>
-                   <span className="flex items-center text-muted-foreground font-bold">:</span>
-                   <Select value={formData.minute} onValueChange={(v) => setFormData({...formData, minute: v})}>
-                    <SelectTrigger className="bg-muted border-border h-11 sm:h-12 rounded-xl sm:rounded-2xl shadow-inner font-mono text-xs sm:text-sm">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="bg-popover border-border text-foreground">
-                      {["00", "15", "30", "45"].map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                    </SelectContent>
-                   </Select>
-                </div>
-              </div>
+              <ShamsiDateTimeField
+                label="تاریخ و ساعت جلسه"
+                date={formData.date}
+                time={`${formData.hour}:${formData.minute}`}
+                onDateChange={(date) => setFormData((current) => ({ ...current, date }))}
+                onTimeChange={(time) => {
+                  const [hour, minute] = time.split(":");
+                  setFormData((current) => ({ ...current, hour, minute }));
+                }}
+                triggerClassName="bg-muted h-11 sm:h-12 rounded-xl sm:rounded-2xl text-xs sm:text-sm"
+                className="md:col-span-2"
+              />
               
               <div className="space-y-1.5 sm:space-y-2">
                 <Label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest mr-1">دپارتمان مسئول</Label>
@@ -643,14 +633,14 @@ export default function Compliance() {
                     <div className="p-4 md:p-6">
                       <EmptyState
                         icon={Calendar}
-                        title={appointments.length === 0 ? "هنوز نوبت اداری ثبت نشده" : "نوبتی با این جستجو پیدا نشد"}
+                        title={activeAppointments.length === 0 ? "هنوز نوبت اداری ثبت نشده" : "نوبتی با این جستجو پیدا نشد"}
                         description={
-                          appointments.length === 0
+                          activeAppointments.length === 0
                             ? "برای شروع پیگیری‌های اداری، اولین نوبت را با تاریخ، دپارتمان، مسئول و مدارک لازم ثبت کنید."
                             : "نوبت‌های موجود ممکن است پشت جستجوی فعلی پنهان شده باشند. فیلترها را پاک کنید و دوباره لیست را ببینید."
                         }
                         primaryAction={
-                          appointments.length === 0
+                          activeAppointments.length === 0
                             ? { label: "ثبت نوبت اول", onClick: handleOpenAdd, icon: Plus }
                             : resetFiltersAction(resetComplianceFilters)
                         }
@@ -716,7 +706,7 @@ export default function Compliance() {
                               <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl hover:bg-primary/10 hover:text-primary" onClick={(e) => { e.stopPropagation(); handleOpenEdit(app); }}>
                                  <Edit3 className="w-4 h-4" />
                               </Button>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl hover:bg-destructive/10 hover:text-destructive" onClick={async (e) => { e.stopPropagation(); await saveMeeting(`/api/compliance-meetings/${app.id}/cancel`, { method: "POST" }); toast.error("نوبت لغو شد."); }}>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl hover:bg-destructive/10 hover:text-destructive" onClick={(e) => { e.stopPropagation(); setAppointmentToArchive(app); }} aria-label={`Archive compliance meeting ${app.id}`} title="حذف / بایگانی نوبت">
                                  <Trash2 className="w-4 h-4" />
                               </Button>
                            </div>
@@ -880,6 +870,16 @@ export default function Compliance() {
           </AnimatePresence>
         </div>
       </div>
+      <DeleteConfirmDialog
+        isOpen={Boolean(appointmentToArchive)}
+        onClose={() => setAppointmentToArchive(null)}
+        onConfirm={archiveAppointment}
+        title="بایگانی نوبت"
+        description="این نوبت از فهرست فعال خارج می‌شود و در بایگانی قابل پیگیری خواهد بود."
+        itemName={appointmentToArchive?.purpose}
+        confirmLabel="انتقال به بایگانی"
+        pendingLabel="در حال بایگانی..."
+      />
     </div>
   );
 }

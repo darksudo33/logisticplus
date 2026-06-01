@@ -94,13 +94,15 @@ export function ProtectedShellSkeleton() {
             <Skeleton className="h-2.5 w-16" />
           </div>
         </div>
-        <div className="space-y-2">
-          {Array.from({ length: 10 }).map((_, index) => (
-            <div key={index} className="flex items-center gap-3 rounded-xl px-2 py-2">
-              <Skeleton className="h-8 w-8 rounded-lg" />
-              <Skeleton className="h-3 w-24" />
-            </div>
-          ))}
+        <div data-slot="scroll-area-viewport" className="min-h-0 flex-1 overflow-auto">
+          <div className="space-y-2 pb-6">
+            {Array.from({ length: 10 }).map((_, index) => (
+              <div key={index} className="flex items-center gap-3 rounded-xl px-2 py-2">
+                <Skeleton className="h-8 w-8 rounded-lg" />
+                <Skeleton className="h-3 w-24" />
+              </div>
+            ))}
+          </div>
         </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">

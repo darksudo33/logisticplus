@@ -55,7 +55,10 @@ export function validateProductionConfig() {
   }
 
   try {
-    resolveRateLimitStore();
+    const rateLimitStore = resolveRateLimitStore();
+    if (rateLimitStore !== "postgres") {
+      errors.push("RATE_LIMIT_STORE must be set to postgres in production.");
+    }
   } catch (error) {
     errors.push(error.message);
   }

@@ -19,7 +19,7 @@ import {
   DollarSign,
   Briefcase
 } from "lucide-react";
-import { format, parse } from "date-fns-jalali";
+import { format } from "date-fns-jalali";
 import { useMockStore } from "@/src/store/useMockStore";
 import { Cheque, ChequeStatus } from "../types";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { EmptyState, resetFiltersAction } from "@/src/components/EmptyState";
+import { combineShamsiDateTime, parseShamsiDateTimeValue, ShamsiDateTimeField } from "@/src/components/ShamsiDateTimeField";
+import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
 
 const statusMeta: Record<ChequeStatus, { label: string; color: string; bar: string }> = {
   ACTIVE: { label: "در جریان", color: "text-blue-600 border-blue-200 bg-blue-50", bar: "bg-blue-600" },
@@ -47,7 +49,7 @@ const ChequeTimer = ({ targetDate }: { targetDate: string }) => {
   useEffect(() => {
     const calculate = () => {
       try {
-        const targetTime = parse(targetDate, "yyyy/MM/dd", new Date()).getTime(); 
+        const targetTime = parseShamsiDateTimeValue(targetDate)?.getTime() || 0;
         const nowTime = new Date().getTime();
         setTimeLeft(Math.max(0, Math.floor((targetTime - nowTime) / 1000)));
       } catch (e) {
@@ -79,12 +81,13 @@ export default function ChequeManagement() {
   const [filterStatus, setFilterStatus] = useState<ChequeStatus | "ALL">("ALL");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingCheque, setEditingCheque] = useState<Cheque | null>(null);
+  const [chequeToArchive, setChequeToArchive] = useState<Cheque | null>(null);
 
   const [formData, setFormData] = useState({
     bankName: "",
     chequeNumber: "",
     amount: "",
-    dueDate: format(new Date(), "yyyy/MM/dd"),
+    dueDate: combineShamsiDateTime(format(new Date(), "yyyy/MM/dd")),
     location: "",
     receiver: "",
     status: "ACTIVE" as ChequeStatus,
@@ -128,7 +131,7 @@ export default function ChequeManagement() {
       bankName: "",
       chequeNumber: "",
       amount: "",
-      dueDate: format(new Date(), "yyyy/MM/dd"),
+      dueDate: combineShamsiDateTime(format(new Date(), "yyyy/MM/dd")),
       location: "",
       receiver: "",
       status: "ACTIVE",
@@ -196,6 +199,13 @@ export default function ChequeManagement() {
     setIsDialogOpen(false);
   };
 
+  const handleArchiveCheque = async () => {
+    if (!chequeToArchive) return;
+    await saveCheque(`/api/cheques/${chequeToArchive.id}/archive`, { method: "POST" });
+    toast.success("چک به بایگانی منتقل شد.");
+    setChequeToArchive(null);
+  };
+
   return (
     <div className="app-page space-y-5 min-h-full text-foreground font-sans pb-20" dir="rtl">
       {/* Header Section */}
@@ -214,6 +224,7 @@ export default function ChequeManagement() {
 
         <div className="flex items-center gap-3">
           <Button 
+            data-testid="open-cheque-dialog"
             onClick={handleOpenAdd}
             className="bg-primary hover:bg-primary/90 text-primary-foreground font-black rounded-xl h-11 px-5 shadow-sm shadow-primary/20 transition-all active:scale-95"
           >
@@ -419,7 +430,8 @@ export default function ChequeManagement() {
                           variant="ghost" 
                           size="icon" 
                           className="h-8 w-8 md:h-10 md:w-10 rounded-lg md:rounded-2xl hover:bg-amber-500/10 hover:text-amber-500" 
-                          onClick={async () => { await saveCheque(`/api/cheques/${chq.id}/archive`, { method: "POST" }); toast.success("چک به بایگانی منتقل شد."); }}
+                          onClick={() => setChequeToArchive(chq)}
+                          aria-label={`Archive cheque ${chq.id}`}
                           title="انتقال به بایگانی"
                         >
                           <Archive className="w-4 h-4 md:w-5 md:h-5" />
@@ -428,7 +440,7 @@ export default function ChequeManagement() {
                       <Button variant="ghost" size="icon" className="h-8 w-8 md:h-10 md:w-10 rounded-lg md:rounded-2xl hover:bg-primary/10 hover:text-primary" onClick={() => handleOpenEdit(chq)}>
                          <Edit3 className="w-4 h-4 md:w-5 md:h-5" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 md:h-10 md:w-10 rounded-lg md:rounded-2xl hover:bg-rose-500/10 hover:text-rose-500" onClick={async () => { await saveCheque(`/api/cheques/${chq.id}/archive`, { method: "POST" }); toast.error("چک با موفقیت حذف شد."); }}>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 md:h-10 md:w-10 rounded-lg md:rounded-2xl hover:bg-rose-500/10 hover:text-rose-500" onClick={() => setChequeToArchive(chq)} aria-label={`Delete cheque ${chq.id}`} title="حذف / بایگانی چک">
                          <Trash2 className="w-4 h-4 md:w-5 md:h-5" />
                       </Button>
                     </div>
@@ -491,16 +503,12 @@ export default function ChequeManagement() {
               </div>
 
               <div className="space-y-2">
-                <Label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest mr-1">تاریخ سررسید</Label>
-                <div className="relative">
-                  <Input 
-                    className="bg-muted border-border h-11 text-sm focus:ring-1 focus:ring-primary/50 rounded-xl shadow-none font-mono text-center" 
-                    value={formData.dueDate}
-                    onChange={e => setFormData({...formData, dueDate: e.target.value})}
-                    placeholder="۱۴۰۳/۰۳/۱۵"
-                  />
-                  <CalendarIcon className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-primary" />
-                </div>
+                <ShamsiDateTimeField
+                  label="تاریخ و ساعت سررسید"
+                  value={formData.dueDate}
+                  onChange={(dueDate) => setFormData({ ...formData, dueDate })}
+                  triggerClassName="bg-muted border-border h-11 text-sm"
+                />
               </div>
 
               <div className="space-y-2">
@@ -557,6 +565,16 @@ export default function ChequeManagement() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <DeleteConfirmDialog
+        isOpen={Boolean(chequeToArchive)}
+        onClose={() => setChequeToArchive(null)}
+        onConfirm={handleArchiveCheque}
+        title="بایگانی چک"
+        description="این چک از لیست فعال خارج می‌شود و در بخش بایگانی قابل بازیابی خواهد بود."
+        itemName={chequeToArchive ? `${chequeToArchive.bankName} - ${chequeToArchive.chequeNumber}` : undefined}
+        confirmLabel="انتقال به بایگانی"
+        pendingLabel="در حال بایگانی..."
+      />
     </div>
   );
 }

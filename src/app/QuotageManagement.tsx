@@ -38,6 +38,24 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Quote, QuoteStatus, CargoType } from "@/src/types";
 import { format } from "date-fns-jalali";
 import { EmptyState, resetFiltersAction } from "@/src/components/EmptyState";
+import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
+import { toast } from "sonner";
+
+const parseQuoteDate = (value?: string | Date | null) => {
+  if (!value) return null;
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const formatQuoteDate = (value?: string | Date | null) => {
+  const parsed = parseQuoteDate(value);
+  return parsed ? format(parsed, "yyyy/MM/dd") : "-";
+};
+
+const isPastQuoteDate = (value?: string | Date | null) => {
+  const parsed = parseQuoteDate(value);
+  return Boolean(parsed && parsed < new Date());
+};
 
 const CargoTypeBadge = ({ type }: { type: CargoType }) => {
   const styles: Record<CargoType, string> = {
@@ -94,6 +112,7 @@ export default function QuotageManagement() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
   const [printingQuoteId, setPrintingQuoteId] = useState<string | null>(null);
+  const [quoteToArchive, setQuoteToArchive] = useState<Quote | null>(null);
 
   // Form State
   const initialQuoteState: Partial<Quote> = {
@@ -116,8 +135,13 @@ export default function QuotageManagement() {
 
   const [newQuote, setNewQuote] = useState<Partial<Quote>>(initialQuoteState);
 
+  const activeQuotes = useMemo(
+    () => quotes.filter(q => !q.isArchived && q.status !== ("ARCHIVED" as QuoteStatus)),
+    [quotes]
+  );
+
   const filteredQuotes = useMemo(() => {
-    return quotes.filter(q => {
+    return activeQuotes.filter(q => {
       const matchesSearch = 
         q.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         q.originCity.includes(searchTerm) ||
@@ -125,18 +149,18 @@ export default function QuotageManagement() {
       const matchesStatus = activeTab === "ALL" || q.status === activeTab;
       return matchesSearch && matchesStatus;
     });
-  }, [quotes, searchTerm, activeTab]);
+  }, [activeQuotes, searchTerm, activeTab]);
   const resetQuoteFilters = () => {
     setSearchTerm("");
     setActiveTab("ALL");
   };
 
   const stats = useMemo(() => {
-    const total = quotes.length;
-    const accepted = quotes.filter(q => q.status === "ACCEPTED").length;
-    const pending = quotes.filter(q => q.status === "PENDING").length;
+    const total = activeQuotes.length;
+    const accepted = activeQuotes.filter(q => q.status === "ACCEPTED").length;
+    const pending = activeQuotes.filter(q => q.status === "PENDING").length;
     const winRate = total > 0 ? (accepted / total) * 100 : 0;
-    const avgValue = total > 0 ? quotes.reduce((acc, q) => acc + q.totalPrice, 0) / total : 0;
+    const avgValue = total > 0 ? activeQuotes.reduce((acc, q) => acc + q.totalPrice, 0) / total : 0;
 
     return [
       { title: "کل استعلام‌ها", value: total, icon: FileText, color: "text-blue-500" },
@@ -144,7 +168,7 @@ export default function QuotageManagement() {
       { title: "در انتظار پاسخ", value: pending, icon: Clock, color: "text-amber-500" },
       { title: "متوسط ارزش (میلیون)", value: `${(avgValue / 1000000).toFixed(1)}`, icon: Calculator, color: "text-purple-500" },
     ];
-  }, [quotes]);
+  }, [activeQuotes]);
 
   const calculateTotal = (q: Partial<Quote>) => {
     const base = Number(q.baseRate) || 0;
@@ -270,6 +294,13 @@ export default function QuotageManagement() {
     }
   };
 
+  const handleArchiveQuote = async () => {
+    if (!quoteToArchive) return;
+    await saveQuote(`/api/quotations/${quoteToArchive.id}/archive`, { method: "POST" });
+    toast.success("استعلام قیمت به بایگانی منتقل شد.");
+    setQuoteToArchive(null);
+  };
+
   return (
     <div className="app-page space-y-5 font-sans rtl text-foreground min-h-full">
       {/* Header & Stats */}
@@ -284,6 +315,7 @@ export default function QuotageManagement() {
           <p className="text-muted-foreground text-xs font-bold mt-1">مدیریت، محاسبه و پیگیری نرخ‌های اعلامی به مشتریان</p>
         </div>
         <Button 
+          data-testid="open-quotation-dialog"
           onClick={() => setShowAddForm(true)}
           className="bg-emerald-600 hover:bg-emerald-500 text-white font-black h-11 px-5 rounded-xl shadow-sm shadow-emerald-500/20"
         >
@@ -351,9 +383,9 @@ export default function QuotageManagement() {
                       <td colSpan={6} className="px-6 py-6">
                         <EmptyState
                           icon={Calculator}
-                          title={quotes.length === 0 ? "هنوز استعلام قیمتی ثبت نشده" : "استعلامی با این فیلترها پیدا نشد"}
-                          description={quotes.length === 0 ? "اولین پیش‌فاکتور یا استعلام قیمت را بسازید تا نرخ‌ها، حاشیه سود و وضعیت پاسخ پیگیری شوند." : "عبارت جستجو یا وضعیت انتخاب‌شده را تغییر دهید."}
-                          primaryAction={quotes.length === 0 ? { label: "ثبت استعلام جدید", onClick: () => setShowAddForm(true), icon: Plus } : resetFiltersAction(resetQuoteFilters)}
+                          title={activeQuotes.length === 0 ? "هنوز استعلام قیمتی ثبت نشده" : "استعلامی با این فیلترها پیدا نشد"}
+                          description={activeQuotes.length === 0 ? "اولین پیش‌فاکتور یا استعلام قیمت را بسازید تا نرخ‌ها، حاشیه سود و وضعیت پاسخ پیگیری شوند." : "عبارت جستجو یا وضعیت انتخاب‌شده را تغییر دهید."}
+                          primaryAction={activeQuotes.length === 0 ? { label: "ثبت استعلام جدید", onClick: () => setShowAddForm(true), icon: Plus } : resetFiltersAction(resetQuoteFilters)}
                           compact
                         />
                       </td>
@@ -387,10 +419,10 @@ export default function QuotageManagement() {
                         <td className="px-6 py-4">
                           <div className="flex flex-col gap-1">
                             <span className={cn("text-[10px] font-black px-2 py-0.5 rounded bg-muted w-fit", 
-                              new Date(quote.validUntil) < new Date() ? "text-red-500" : "text-blue-500")}>
-                              اعتبار تا: {format(new Date(quote.validUntil), "yyyy/MM/dd")}
+                              isPastQuoteDate(quote.validUntil) ? "text-red-500" : "text-blue-500")}>
+                              اعتبار تا: {formatQuoteDate(quote.validUntil)}
                             </span>
-                            <span className="text-[9px] text-muted-foreground/60 font-bold">ثبت: {format(new Date(quote.createdAt), "yyyy/MM/dd")}</span>
+                            <span className="text-[9px] text-muted-foreground/60 font-bold">ثبت: {formatQuoteDate(quote.createdAt)}</span>
                           </div>
                         </td>
                         <td className="px-6 py-4">
@@ -420,7 +452,9 @@ export default function QuotageManagement() {
                               variant="ghost" 
                               size="icon" 
                               className="w-8 h-8 rounded-lg hover:bg-red-500/10 text-muted-foreground hover:text-red-500"
-                              onClick={() => saveQuote(`/api/quotations/${quote.id}/archive`, { method: "POST" })}
+                              onClick={() => setQuoteToArchive(quote)}
+                              aria-label={`Archive quotation ${quote.id}`}
+                              title="Archive quotation"
                             >
                               <Trash2 className="w-4 h-4" />
                             </Button>
@@ -439,9 +473,9 @@ export default function QuotageManagement() {
                 <div className="p-4">
                   <EmptyState
                     icon={Calculator}
-                    title={quotes.length === 0 ? "هنوز استعلام قیمتی ثبت نشده" : "استعلامی با این فیلترها پیدا نشد"}
-                    description={quotes.length === 0 ? "اولین پیش‌فاکتور یا استعلام قیمت را بسازید تا نرخ‌ها، حاشیه سود و وضعیت پاسخ پیگیری شوند." : "عبارت جستجو یا وضعیت انتخاب‌شده را تغییر دهید."}
-                    primaryAction={quotes.length === 0 ? { label: "ثبت استعلام جدید", onClick: () => setShowAddForm(true), icon: Plus } : resetFiltersAction(resetQuoteFilters)}
+                    title={activeQuotes.length === 0 ? "هنوز استعلام قیمتی ثبت نشده" : "استعلامی با این فیلترها پیدا نشد"}
+                    description={activeQuotes.length === 0 ? "اولین پیش‌فاکتور یا استعلام قیمت را بسازید تا نرخ‌ها، حاشیه سود و وضعیت پاسخ پیگیری شوند." : "عبارت جستجو یا وضعیت انتخاب‌شده را تغییر دهید."}
+                    primaryAction={activeQuotes.length === 0 ? { label: "ثبت استعلام جدید", onClick: () => setShowAddForm(true), icon: Plus } : resetFiltersAction(resetQuoteFilters)}
                     compact
                   />
                 </div>
@@ -487,12 +521,12 @@ export default function QuotageManagement() {
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-1.5 text-[9px] text-muted-foreground font-bold">
                           <Calendar className="w-3 h-3" />
-                          ثبت: {format(new Date(quote.createdAt), "yyyy/MM/dd")}
+                          ثبت: {formatQuoteDate(quote.createdAt)}
                         </div>
                         <div className={cn("flex items-center gap-1.5 text-[9px] font-black", 
-                          new Date(quote.validUntil) < new Date() ? "text-red-500" : "text-blue-500")}>
+                          isPastQuoteDate(quote.validUntil) ? "text-red-500" : "text-blue-500")}>
                           <Clock className="w-3 h-3" />
-                          اعتبار: {format(new Date(quote.validUntil), "yyyy/MM/dd")}
+                          اعتبار: {formatQuoteDate(quote.validUntil)}
                         </div>
                       </div>
                       
@@ -519,7 +553,9 @@ export default function QuotageManagement() {
                           variant="ghost" 
                           size="icon" 
                           className="w-8 h-8 rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500/20"
-                          onClick={() => saveQuote(`/api/quotations/${quote.id}/archive`, { method: "POST" })}
+                          onClick={() => setQuoteToArchive(quote)}
+                          aria-label={`Archive quotation ${quote.id}`}
+                          title="Archive quotation"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </Button>
@@ -793,6 +829,17 @@ export default function QuotageManagement() {
         )}
       </AnimatePresence>
 
+      <DeleteConfirmDialog
+        isOpen={Boolean(quoteToArchive)}
+        onClose={() => setQuoteToArchive(null)}
+        onConfirm={handleArchiveQuote}
+        title="بایگانی استعلام قیمت"
+        description="این استعلام از فهرست فعال خارج می‌شود و در بایگانی قابل بازیابی خواهد بود."
+        itemName={quoteToArchive?.customerName}
+        confirmLabel="انتقال به بایگانی"
+        pendingLabel="در حال بایگانی..."
+      />
+
       {/* Hidden Printable Areas for Quotes */}
       <div className="print-root pointer-events-none fixed left-0 top-0 h-0 w-0 overflow-hidden opacity-0" aria-hidden="true">
         {quotes.map(quote => (
@@ -858,11 +905,11 @@ export default function QuotageManagement() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <div className="text-[10px] text-slate-400 font-bold">تاریخ صدور:</div>
-                    <div className="text-sm font-black">{format(new Date(quote.createdAt), "yyyy/MM/dd")}</div>
+                    <div className="text-sm font-black">{formatQuoteDate(quote.createdAt)}</div>
                   </div>
                   <div>
                     <div className="text-[10px] text-red-500 font-bold">اعتبار تا:</div>
-                    <div className="text-sm font-black text-red-600">{format(new Date(quote.validUntil), "yyyy/MM/dd")}</div>
+                    <div className="text-sm font-black text-red-600">{formatQuoteDate(quote.validUntil)}</div>
                   </div>
                 </div>
               </div>

@@ -205,20 +205,20 @@ test.describe.serial("SMS alert entitlements and worker", () => {
     await disposeContexts(owner, tenant);
   });
 
-  test("lower plans stay off until admin enables SMS add-on and can issue a manual invoice", async () => {
+  test("ECO stays off until admin enables SMS add-on while PRO includes SMS", async () => {
     const owner = await loginApi();
     const starterInfo = await createTenantOwner(owner, "starter");
-    const businessInfo = await createTenantOwner(owner, "business");
+    const proInfo = await createTenantOwner(owner, "business");
     const starter = await loginApi(starterInfo.tenantEmail, USER_PASSWORD);
-    const business = await loginApi(businessInfo.tenantEmail, USER_PASSWORD);
+    const pro = await loginApi(proInfo.tenantEmail, USER_PASSWORD);
 
     await setUserPhone(starter, starterInfo.ownerUserId, "09120000002");
-    await setUserPhone(business, businessInfo.ownerUserId, "09120000003");
+    await setUserPhone(pro, proInfo.ownerUserId, "09120000003");
 
     const starterBlockedTask = await createUrgentTask(starter, `SMS starter blocked ${Date.now()}`, starterInfo.ownerUserId);
-    const businessBlockedTask = await createUrgentTask(business, `SMS business blocked ${Date.now()}`, businessInfo.ownerUserId);
+    const proIncludedTask = await createUrgentTask(pro, `SMS pro included ${Date.now()}`, proInfo.ownerUserId);
     expect((await listSmsDeliveries(owner, starterInfo.organizationId)).some((delivery) => delivery.sourceId === starterBlockedTask.id)).toBe(false);
-    expect((await listSmsDeliveries(owner, businessInfo.organizationId)).some((delivery) => delivery.sourceId === businessBlockedTask.id)).toBe(false);
+    expect((await listSmsDeliveries(owner, proInfo.organizationId)).find((delivery) => delivery.sourceId === proIncludedTask.id)?.status).toBe("queued");
 
     await readOk(
       await owner.patch(`/api/admin/organizations/${encodeURIComponent(starterInfo.organizationId)}/subscription`, {
@@ -245,7 +245,7 @@ test.describe.serial("SMS alert entitlements and worker", () => {
     deliveries = await listSmsDeliveries(owner, starterInfo.organizationId);
     expect(deliveries.find((delivery) => delivery.sourceId === enabledTask.id)?.status).toBe("sent");
 
-    await disposeContexts(owner, starter, business);
+    await disposeContexts(owner, starter, pro);
   });
 
   test("demurrage alerts go to CEO only even when a manager is assigned", async () => {

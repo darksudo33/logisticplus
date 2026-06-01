@@ -1,6 +1,34 @@
 import crypto from "node:crypto";
 import pg from "pg";
+import {
+  getPublicDocument as getPublicDocumentFromRepository,
+  getPublicDocumentByTrackingToken as getPublicDocumentByTrackingTokenFromRepository,
+  getPublicTrackingByToken as getPublicTrackingByTokenFromRepository,
+  searchPublicTracking as searchPublicTrackingFromRepository,
+} from "./public-tracking.js";
+import {
+  markPaymentVerifiedByAuthority as markPaymentVerifiedByAuthorityInRepository,
+} from "./repositories/billing.js";
+import {
+  getDocumentDetail as getDocumentDetailFromRepository,
+  getDocumentForDownload as getDocumentForDownloadFromRepository,
+  listDocuments as listDocumentsFromRepository,
+  listDocumentStorageKeysForCleanup as listDocumentStorageKeysForCleanupFromRepository,
+} from "./repositories/documents.js";
+import {
+  getCustomerRecord as getCustomerRecordFromRepository,
+  listCustomersDetailed as listCustomersDetailedFromRepository,
+} from "./repositories/customers.js";
+import {
+  getShipmentRecord as getShipmentRecordFromRepository,
+  listShipmentRecords as listShipmentRecordsFromRepository,
+} from "./repositories/shipments.js";
+import {
+  previewUserDeletion as previewUserDeletionFromRepository,
+} from "./repositories/users.js";
 import { DEFAULT_SMS_TEMPLATE_MAP, renderSmsTemplateBody } from "./sms-templates.js";
+import { organizationScopeClause, requireOrganizationScope } from "./tenant-scope.js";
+import { withTransaction } from "./transaction.js";
 
 const { Pool } = pg;
 
@@ -64,6 +92,522 @@ function phoneDigitsSql(columnExpression) {
   return `regexp_replace(translate(COALESCE(${columnExpression}, ''), '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789'), '\\D', '', 'g')`;
 }
 
+const SEARCH_REQUEST_TYPES = new Set([
+  "all",
+  "shipments",
+  "customers",
+  "documents",
+  "tasks",
+  "archive",
+  "tracking",
+  "users",
+]);
+const SEARCH_TYPES_FOR_ALL = ["shipments", "customers", "documents", "tasks", "tracking", "users"];
+const MAX_SEARCH_LIMIT = 50;
+const MAX_SEARCH_OFFSET = 500;
+
+export function normalizeOperationalSearchQuery(value) {
+  return normalizeDigits(value)
+    .replace(/\u064a/g, "\u06cc")
+    .replace(/\u0649/g, "\u06cc")
+    .replace(/\u0643/g, "\u06a9")
+    .replace(/[\u200c\u200d\u200e\u200f\u00a0]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizedSearchSql(expression) {
+  let sql = `translate(COALESCE(${expression}, ''), '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789')`;
+  sql = `replace(${sql}, 'ي', 'ی')`;
+  sql = `replace(${sql}, 'ى', 'ی')`;
+  sql = `replace(${sql}, 'ك', 'ک')`;
+  for (const codePoint of [8204, 8205, 8206, 8207, 160]) {
+    sql = `replace(${sql}, chr(${codePoint}), ' ')`;
+  }
+  sql = `replace(${sql}, chr(65279), '')`;
+  return `lower(regexp_replace(${sql}, '\\s+', ' ', 'g'))`;
+}
+
+function appendSearchMatcher(values, normalizedQuery, fieldExpressions) {
+  const exactParam = `$${values.push(normalizedQuery)}`;
+  const prefixParam = `$${values.push(`${normalizedQuery}%`)}`;
+  const containsParam = `$${values.push(`%${normalizedQuery}%`)}`;
+  const containsChecks = fieldExpressions.map((expression) => `${expression} LIKE ${containsParam}`);
+  const exactChecks = fieldExpressions.map((expression) => `${expression} = ${exactParam}`);
+  const prefixChecks = fieldExpressions.map((expression) => `${expression} LIKE ${prefixParam}`);
+  return {
+    condition: `(${containsChecks.join(" OR ")})`,
+    score: `(CASE WHEN ${exactChecks.join(" OR ")} THEN 300 WHEN ${prefixChecks.join(" OR ")} THEN 200 ELSE 100 END)`,
+  };
+}
+
+function collectMatchedFields(fieldValues, normalizedQuery) {
+  return Object.entries(fieldValues || {})
+    .filter(([, value]) => normalizeOperationalSearchQuery(value).includes(normalizedQuery))
+    .map(([key]) => key);
+}
+
+function toSearchResult(row, normalizedQuery) {
+  return {
+    id: row.id,
+    type: row.result_type,
+    title: row.title || row.id,
+    subtitle: row.subtitle || "",
+    description: row.description || "",
+    url: row.url || "/dashboard",
+    matchedFields: collectMatchedFields(row.field_values, normalizedQuery),
+    updatedAt: new Date(row.updated_at || Date.now()).toISOString(),
+  };
+}
+
+async function runOperationalSearchQuery(sql, values, normalizedQuery) {
+  const result = await pool.query(sql, values);
+  return {
+    total: Number(result.rows[0]?.total_count || 0),
+    rows: result.rows.map((row) => ({
+      result: toSearchResult(row, normalizedQuery),
+      score: Number(row.search_score || 0),
+      updatedAt: new Date(row.updated_at || 0).getTime(),
+    })),
+  };
+}
+
+function createForbiddenSearchError(type) {
+  const error = new Error(`Search access denied for ${type}.`);
+  error.statusCode = 403;
+  error.code = "FORBIDDEN";
+  return error;
+}
+
+function hasSearchPermission(permissions, permissionKey) {
+  return permissions.includes(permissionKey) || permissions.includes("platform.admin");
+}
+
+function getSearchAccess(permissions) {
+  const canViewAllTasks = hasSearchPermission(permissions, "tasks.view_all");
+  const canViewOwnTasks = hasSearchPermission(permissions, "tasks.view_own");
+  return {
+    shipments: hasSearchPermission(permissions, "shipments.view_all"),
+    customers: hasSearchPermission(permissions, "customers.view"),
+    documents: hasSearchPermission(permissions, "documents.view_all"),
+    tasks: canViewAllTasks || canViewOwnTasks,
+    tasksOwnOnly: !canViewAllTasks && canViewOwnTasks,
+    archive: hasSearchPermission(permissions, "archive.view"),
+    tracking: hasSearchPermission(permissions, "shipments.view_all"),
+    users: hasSearchPermission(permissions, "users.manage"),
+  };
+}
+
+function clampSearchLimit(limit) {
+  const parsed = Number.parseInt(String(limit || ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 20;
+  return Math.min(parsed, MAX_SEARCH_LIMIT);
+}
+
+function clampSearchOffset(offset) {
+  const parsed = Number.parseInt(String(offset || ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.min(parsed, MAX_SEARCH_OFFSET);
+}
+
+async function searchShipments({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const ownerParam = `$${values.push(user.id)}`;
+  const fields = {
+    shipmentNumber: normalizedSearchSql("s.shipment_code"),
+    trackingNumber: normalizedSearchSql("s.legacy_data->>'trackingNumber'"),
+    referenceNumber: normalizedSearchSql("CONCAT_WS(' ', s.legacy_data->>'referenceNumber', s.legacy_data->>'containerNumber')"),
+    customerName: normalizedSearchSql("CONCAT_WS(' ', s.customer_name, c.company_name, c.contact_name)"),
+    origin: normalizedSearchSql("s.origin"),
+    destination: normalizedSearchSql("s.destination"),
+    status: normalizedSearchSql("s.status"),
+    recipientSender: normalizedSearchSql("CONCAT_WS(' ', s.legacy_data->>'recipient', s.legacy_data->>'sender')"),
+    notes: normalizedSearchSql("s.legacy_data->>'notes'"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       s.id,
+       'shipment' AS result_type,
+       COALESCE(NULLIF(s.shipment_code, ''), s.id) AS title,
+       CONCAT_WS(' · ', NULLIF(COALESCE(s.customer_name, c.company_name, c.contact_name), ''), NULLIF(CONCAT_WS(' → ', s.origin, s.destination), '')) AS subtitle,
+       CONCAT('وضعیت فعلی: ', COALESCE(NULLIF(s.status, ''), 'ثبت نشده')) AS description,
+       CONCAT('/shipments/', s.id) AS url,
+       COALESCE(s.updated_at, s.created_at) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'shipmentNumber', s.shipment_code,
+         'trackingNumber', s.legacy_data->>'trackingNumber',
+         'referenceNumber', CONCAT_WS(' ', s.legacy_data->>'referenceNumber', s.legacy_data->>'containerNumber'),
+         'customerName', CONCAT_WS(' ', s.customer_name, c.company_name, c.contact_name),
+         'origin', s.origin,
+         'destination', s.destination,
+         'status', s.status,
+         'recipientSender', CONCAT_WS(' ', s.legacy_data->>'recipient', s.legacy_data->>'sender'),
+         'notes', s.legacy_data->>'notes'
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM shipments s
+     LEFT JOIN customers c ON c.id = s.customer_id
+     WHERE (s.organization_id = ${organizationParam} OR (s.organization_id IS NULL AND s.owner_user_id = ${ownerParam}))
+       AND s.archived_at IS NULL
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(s.updated_at, s.created_at) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchCustomers({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const fields = {
+    customerName: normalizedSearchSql("CONCAT_WS(' ', c.company_name, c.contact_name)"),
+    phone: normalizedSearchSql("c.phone"),
+    email: normalizedSearchSql("c.email"),
+    address: normalizedSearchSql("c.address"),
+    nationalId: normalizedSearchSql("CONCAT_WS(' ', c.legacy_data->>'nationalId', c.legacy_data->>'taxId', c.legacy_data->>'nationalCode')"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       c.id,
+       'customer' AS result_type,
+       COALESCE(NULLIF(c.company_name, ''), NULLIF(c.contact_name, ''), c.id) AS title,
+       CONCAT_WS(' · ', NULLIF(c.contact_name, ''), NULLIF(c.phone, ''), NULLIF(c.email, '')) AS subtitle,
+       COALESCE(NULLIF(c.address, ''), 'پرونده مشتری') AS description,
+       CONCAT('/customers/', c.id) AS url,
+       COALESCE(c.updated_at, c.created_at) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'customerName', CONCAT_WS(' ', c.company_name, c.contact_name),
+         'phone', c.phone,
+         'email', c.email,
+         'address', c.address,
+         'nationalId', CONCAT_WS(' ', c.legacy_data->>'nationalId', c.legacy_data->>'taxId', c.legacy_data->>'nationalCode')
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM customers c
+     WHERE c.organization_id = ${organizationParam}
+       AND c.archived_at IS NULL
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(c.updated_at, c.created_at) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchDocuments({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const fields = {
+    title: normalizedSearchSql("d.title"),
+    fileName: normalizedSearchSql("d.file_name"),
+    documentType: normalizedSearchSql("d.legacy_data->>'type'"),
+    relatedShipment: normalizedSearchSql("s.shipment_code"),
+    relatedCustomer: normalizedSearchSql("CONCAT_WS(' ', c.company_name, c.contact_name)"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       d.id,
+       'document' AS result_type,
+       COALESCE(NULLIF(d.title, ''), NULLIF(d.file_name, ''), d.id) AS title,
+       CONCAT_WS(' · ', NULLIF(d.file_name, ''), NULLIF(s.shipment_code, ''), NULLIF(c.company_name, '')) AS subtitle,
+       CONCAT('نوع سند: ', COALESCE(NULLIF(d.legacy_data->>'type', ''), 'OTHER')) AS description,
+       '/documents' AS url,
+       COALESCE(d.updated_at, d.created_at) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'title', d.title,
+         'fileName', d.file_name,
+         'documentType', d.legacy_data->>'type',
+         'relatedShipment', s.shipment_code,
+         'relatedCustomer', CONCAT_WS(' ', c.company_name, c.contact_name)
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM documents d
+     LEFT JOIN shipments s ON s.id = d.shipment_id
+     LEFT JOIN customers c ON c.id = d.customer_id
+     WHERE d.organization_id = ${organizationParam}
+       AND d.archived_at IS NULL
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(d.updated_at, d.created_at) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchDocumentVersions({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const fields = {
+    title: normalizedSearchSql("d.title"),
+    fileName: normalizedSearchSql("dv.file_name"),
+    versionNumber: normalizedSearchSql("dv.version::text"),
+    relatedShipment: normalizedSearchSql("s.shipment_code"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       CONCAT(d.id, ':v', dv.version::text) AS id,
+       'document' AS result_type,
+       CONCAT(COALESCE(NULLIF(d.title, ''), NULLIF(dv.file_name, ''), d.id), ' v', dv.version::text) AS title,
+       CONCAT_WS(' · ', NULLIF(dv.file_name, ''), NULLIF(s.shipment_code, '')) AS subtitle,
+       'نسخه سند' AS description,
+       '/documents' AS url,
+       COALESCE(dv.created_at, d.updated_at, d.created_at) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'title', d.title,
+         'fileName', dv.file_name,
+         'versionNumber', dv.version::text,
+         'relatedShipment', s.shipment_code
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM document_versions dv
+     JOIN documents d ON d.id = dv.document_id
+     LEFT JOIN shipments s ON s.id = d.shipment_id
+     WHERE d.organization_id = ${organizationParam}
+       AND d.archived_at IS NULL
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(dv.created_at, d.updated_at, d.created_at) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchTasks({ user, normalizedQuery, fetchLimit, ownOnly }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const fields = {
+    title: normalizedSearchSql("t.title"),
+    description: normalizedSearchSql("t.description"),
+    status: normalizedSearchSql("t.status"),
+    assignedUser: normalizedSearchSql("t.assigned_to_name"),
+    dueDate: normalizedSearchSql("t.due_at"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const assignedFilter = ownOnly ? `AND t.assigned_to_id = $${values.push(user.id)}` : "";
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       t.id,
+       'task' AS result_type,
+       t.title AS title,
+       CONCAT_WS(' · ', NULLIF(t.assigned_to_name, ''), NULLIF(t.status, ''), NULLIF(t.due_at, '')) AS subtitle,
+       COALESCE(NULLIF(t.description, ''), 'وظیفه عملیاتی') AS description,
+       '/tasks' AS url,
+       COALESCE(t.updated_at, t.created_at) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'title', t.title,
+         'description', t.description,
+         'status', t.status,
+         'assignedUser', t.assigned_to_name,
+         'dueDate', t.due_at
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM tasks t
+     WHERE t.organization_id = ${organizationParam}
+       ${assignedFilter}
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(t.updated_at, t.created_at) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchTracking({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const ownerParam = `$${values.push(user.id)}`;
+  const fields = {
+    trackingCode: normalizedSearchSql("s.shipment_code"),
+    shipmentNumber: normalizedSearchSql("s.shipment_code"),
+    publicStatus: normalizedSearchSql("CONCAT_WS(' ', s.legacy_data->>'publicStatusLabel', s.legacy_data->>'publicStatusDescription', events.event_text)"),
+    publicRoute: normalizedSearchSql("CONCAT_WS(' ', s.origin, s.destination)"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       s.id,
+       'tracking' AS result_type,
+       COALESCE(NULLIF(s.shipment_code, ''), s.id) AS title,
+       CONCAT_WS(' · ', NULLIF(s.origin, ''), NULLIF(s.destination, '')) AS subtitle,
+       COALESCE(NULLIF(s.legacy_data->>'publicStatusLabel', ''), NULLIF(events.latest_label, ''), 'رهگیری مشتری') AS description,
+       CONCAT('/shipments/', s.id) AS url,
+       GREATEST(COALESCE(s.updated_at, s.created_at), COALESCE(events.last_event_at, s.created_at)) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'trackingCode', s.shipment_code,
+         'shipmentNumber', s.shipment_code,
+         'publicStatus', CONCAT_WS(' ', s.legacy_data->>'publicStatusLabel', s.legacy_data->>'publicStatusDescription', events.event_text),
+         'publicRoute', CONCAT_WS(' ', s.origin, s.destination)
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM shipments s
+     LEFT JOIN LATERAL (
+       SELECT
+         STRING_AGG(CONCAT_WS(' ', e.public_label, e.public_description), ' ') AS event_text,
+         (ARRAY_AGG(e.public_label ORDER BY e.created_at DESC))[1] AS latest_label,
+         MAX(e.created_at) AS last_event_at
+       FROM shipment_status_events e
+       WHERE e.shipment_id = s.id
+         AND e.organization_id = ${organizationParam}
+         AND e.is_customer_visible = TRUE
+     ) events ON TRUE
+     WHERE (s.organization_id = ${organizationParam} OR (s.organization_id IS NULL AND s.owner_user_id = ${ownerParam}))
+       AND s.archived_at IS NULL
+       AND s.customer_access_enabled = TRUE
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, GREATEST(COALESCE(s.updated_at, s.created_at), COALESCE(events.last_event_at, s.created_at)) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchArchive({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const fields = {
+    title: normalizedSearchSql("ar.title"),
+    summary: normalizedSearchSql("ar.summary"),
+    customerName: normalizedSearchSql("ar.customer_name"),
+    entityType: normalizedSearchSql("ar.entity_type"),
+    entityId: normalizedSearchSql("ar.entity_id"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       ar.id,
+       'archive' AS result_type,
+       COALESCE(NULLIF(ar.title, ''), ar.entity_id, ar.id) AS title,
+       CONCAT_WS(' · ', NULLIF(ar.customer_name, ''), NULLIF(ar.entity_type, '')) AS subtitle,
+       COALESCE(NULLIF(ar.summary, ''), 'رکورد بایگانی شده') AS description,
+       '/archive' AS url,
+       COALESCE(ar.archived_at, NOW()) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'title', ar.title,
+         'summary', ar.summary,
+         'customerName', ar.customer_name,
+         'entityType', ar.entity_type,
+         'entityId', ar.entity_id
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM archive_records ar
+     WHERE ar.organization_id = ${organizationParam}
+       AND ar.restored_at IS NULL
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(ar.archived_at, NOW()) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchUsers({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const fields = {
+    name: normalizedSearchSql("u.name"),
+    email: normalizedSearchSql("u.email"),
+    role: normalizedSearchSql("u.role"),
+    department: normalizedSearchSql("u.department"),
+    phone: normalizedSearchSql("u.phone"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       u.id,
+       'user' AS result_type,
+       COALESCE(NULLIF(u.name, ''), u.email, u.id) AS title,
+       CONCAT_WS(' · ', NULLIF(u.role, ''), NULLIF(u.department, ''), NULLIF(u.email, '')) AS subtitle,
+       COALESCE(NULLIF(u.phone, ''), 'کاربر شرکت') AS description,
+       '/management' AS url,
+       COALESCE(u.updated_at, u.created_at) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'name', u.name,
+         'email', u.email,
+         'role', u.role,
+         'department', u.department,
+         'phone', u.phone
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM app_users u
+     WHERE u.organization_id = ${organizationParam}
+       AND COALESCE(u.status, 'active') <> 'deleted'
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(u.updated_at, u.created_at) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+export async function searchOperationalRecords({ user, q, type = "all", limit = 20, offset = 0 } = {}) {
+  if (!user?.organizationId) {
+    throw createForbiddenSearchError("organization");
+  }
+
+  const requestedType = SEARCH_REQUEST_TYPES.has(String(type)) ? String(type) : "all";
+  const normalizedQuery = normalizeOperationalSearchQuery(q);
+  const safeLimit = clampSearchLimit(limit);
+  const safeOffset = clampSearchOffset(offset);
+  const fetchLimit = Math.min(MAX_SEARCH_OFFSET + MAX_SEARCH_LIMIT, safeOffset + safeLimit);
+  const permissions = await getUserPermissions(user.id);
+  const access = getSearchAccess(permissions);
+  const selectedTypes = requestedType === "all" ? SEARCH_TYPES_FOR_ALL : [requestedType];
+
+  if (requestedType !== "all" && !access[requestedType]) {
+    throw createForbiddenSearchError(requestedType);
+  }
+
+  const searches = [];
+  for (const selectedType of selectedTypes) {
+    if (!access[selectedType]) continue;
+    if (selectedType === "shipments") searches.push(searchShipments({ user, normalizedQuery, fetchLimit }));
+    if (selectedType === "customers") searches.push(searchCustomers({ user, normalizedQuery, fetchLimit }));
+    if (selectedType === "documents") {
+      searches.push(searchDocuments({ user, normalizedQuery, fetchLimit }));
+      searches.push(searchDocumentVersions({ user, normalizedQuery, fetchLimit }));
+    }
+    if (selectedType === "tasks") searches.push(searchTasks({ user, normalizedQuery, fetchLimit, ownOnly: access.tasksOwnOnly }));
+    if (selectedType === "archive") searches.push(searchArchive({ user, normalizedQuery, fetchLimit }));
+    if (selectedType === "tracking") searches.push(searchTracking({ user, normalizedQuery, fetchLimit }));
+    if (selectedType === "users") searches.push(searchUsers({ user, normalizedQuery, fetchLimit }));
+  }
+
+  const settled = await Promise.all(searches);
+  const combined = settled.flatMap((item) => item.rows);
+  combined.sort((a, b) => b.score - a.score || b.updatedAt - a.updatedAt);
+
+  return {
+    query: normalizedQuery,
+    total: settled.reduce((sum, item) => sum + item.total, 0),
+    limit: safeLimit,
+    offset: safeOffset,
+    results: combined.slice(safeOffset, safeOffset + safeLimit).map((item) => item.result),
+  };
+}
+
 export function normalizeSmsPhone(phone) {
   const digits = normalizeDigits(phone).replace(/\D/g, "");
   if (!digits) return "";
@@ -118,7 +662,69 @@ export async function getUserById(userId) {
   return result.rows[0] || null;
 }
 
+function recordsFromRows(rows) {
+  return rows.reduce((acc, row) => {
+    if (!acc[row.collection]) acc[row.collection] = [];
+    acc[row.collection].push(row.data);
+    return acc;
+  }, {});
+}
+
+async function listOrganizationUserRecords(organizationId, collection) {
+  if (!organizationId) return [];
+  const result = await pool.query(
+    `SELECT DISTINCT ON (item_id) data
+     FROM user_records
+     WHERE organization_id = $1
+       AND collection = $2
+     ORDER BY item_id, updated_at DESC`,
+    [organizationId, collection]
+  );
+  return result.rows.map((row) => row.data);
+}
+
+async function listOrganizationUsersForBootstrap(organizationId) {
+  const result = await pool.query(
+    `SELECT u.id, u.name, u.email, u.role, u.avatar, u.is_online, u.department, u.status, u.last_seen_at,
+            u.phone, u.location, u.bio, u.two_factor_enabled, u.notification_preferences, u.organization_id,
+            o.status AS organization_status,
+            o.name AS organization_name,
+            o.plan_id AS organization_plan_id,
+            os.status AS subscription_status
+     FROM app_users u
+     LEFT JOIN organizations o ON o.id = u.organization_id
+     LEFT JOIN organization_subscriptions os ON os.organization_id = o.id
+     WHERE u.organization_id = $1
+     ORDER BY u.name ASC`,
+    [organizationId]
+  );
+  return result.rows.map(toUiUser);
+}
+
+async function listBootstrapShipments(ownerUserId, organizationId) {
+  if (!organizationId) {
+    const result = await pool.query(
+      `SELECT *
+       FROM shipments
+       WHERE owner_user_id = $1
+       ORDER BY updated_at DESC, created_at DESC`,
+      [ownerUserId]
+    );
+    return result.rows.map(toUiShipment);
+  }
+  const result = await pool.query(
+    `SELECT *
+     FROM shipments
+     WHERE organization_id = $1
+        OR (owner_user_id = $2 AND organization_id IS NULL)
+     ORDER BY updated_at DESC, created_at DESC`,
+    [organizationId, ownerUserId]
+  );
+  return result.rows.map(toUiShipment);
+}
+
 export async function getRecordsForUser(ownerUserId) {
+  const user = await getUserById(ownerUserId);
   const result = await pool.query(
     `SELECT collection, item_id, data
      FROM user_records
@@ -127,11 +733,46 @@ export async function getRecordsForUser(ownerUserId) {
     [ownerUserId]
   );
 
-  return result.rows.reduce((acc, row) => {
-    if (!acc[row.collection]) acc[row.collection] = [];
-    acc[row.collection].push(row.data);
-    return acc;
-  }, {});
+  const records = recordsFromRows(result.rows);
+  const organizationId = user?.organization_id || null;
+  if (!organizationId || String(user?.role || "").toUpperCase() === "CUSTOMER_VIEWER") {
+    return records;
+  }
+
+  const [
+    users,
+    customers,
+    shipments,
+    tasks,
+    documents,
+    appointments,
+    quotes,
+    shipmentSteps,
+    commercialCards,
+  ] = await Promise.all([
+    listOrganizationUsersForBootstrap(organizationId),
+    listCustomersDetailed({ organizationId, includeArchived: true }),
+    listBootstrapShipments(ownerUserId, organizationId),
+    listTasks({ organizationId, includeAll: true }),
+    listDocuments({ organizationId, includeArchived: true }),
+    listComplianceMeetings({ organizationId, includeArchived: true }),
+    listQuotations({ organizationId, includeArchived: true }),
+    listOrganizationUserRecords(organizationId, "shipmentSteps"),
+    listOrganizationUserRecords(organizationId, "commercialCards"),
+  ]);
+
+  return {
+    ...records,
+    users,
+    customers,
+    shipments,
+    tasks,
+    documents,
+    appointments,
+    quotes,
+    shipmentSteps,
+    commercialCards,
+  };
 }
 
 export async function replaceRecordsForUser(ownerUserId, recordsByCollection) {
@@ -149,6 +790,11 @@ export async function replaceRecordsForUser(ownerUserId, recordsByCollection) {
 
     let total = 0;
     for (const [collection, records] of entries) {
+      if (collection === "notifications") {
+        // Notifications are canonical in the notifications table; the compatibility
+        // bridge must not overwrite real read state or resurrect seed/demo rows.
+        continue;
+      }
       const uniqueRecords = Array.from(
         records
           .reduce((items, record, index) => {
@@ -340,15 +986,20 @@ export async function getSessionByToken(token) {
        u.bio,
        u.two_factor_enabled,
        u.notification_preferences,
-       u.organization_id,
-       o.status AS organization_status,
-       o.name AS organization_name,
-       o.plan_id AS organization_plan_id,
-       os.status AS subscription_status
-     FROM app_sessions s
-     JOIN app_users u ON u.id = s.user_id
-     LEFT JOIN organizations o ON o.id = u.organization_id
-     LEFT JOIN organization_subscriptions os ON os.organization_id = o.id
+        u.organization_id,
+        om.role AS membership_role,
+        om.status AS membership_status,
+        o.status AS organization_status,
+        o.name AS organization_name,
+        o.plan_id AS organization_plan_id,
+        os.status AS subscription_status
+      FROM app_sessions s
+      JOIN app_users u ON u.id = s.user_id
+      LEFT JOIN organization_members om
+        ON om.organization_id = u.organization_id
+       AND om.user_id = u.id
+      LEFT JOIN organizations o ON o.id = u.organization_id
+      LEFT JOIN organization_subscriptions os ON os.organization_id = o.id
      WHERE s.token_hash = $1 AND s.expires_at > NOW()
      LIMIT 1`,
     [tokenHash]
@@ -357,10 +1008,14 @@ export async function getSessionByToken(token) {
   const row = result.rows[0];
   if (!row) return null;
 
-  await pool.query(
-    "UPDATE app_sessions SET last_seen_at = NOW() WHERE id = $1",
-    [row.session_id]
-  );
+  const lastSeenAt = row.last_seen_at ? new Date(row.last_seen_at).getTime() : 0;
+  if (!lastSeenAt || Date.now() - lastSeenAt > 60_000) {
+    pool
+      .query("UPDATE app_sessions SET last_seen_at = NOW() WHERE id = $1", [row.session_id])
+      .catch((error) => {
+        console.error("Session last_seen update failed:", error);
+      });
+  }
 
   return {
     sessionId: row.session_id,
@@ -381,6 +1036,9 @@ export async function getSessionByToken(token) {
       notification_preferences: row.notification_preferences,
       organization_id: row.organization_id,
       organizationId: row.organization_id,
+      membershipId: row.organization_id ? `${row.organization_id}:${row.id}` : null,
+      membershipRole: row.membership_role,
+      membershipStatus: row.membership_status,
       organizationStatus: row.organization_status,
       organizationName: row.organization_name,
       organizationPlanId: row.organization_plan_id,
@@ -421,11 +1079,17 @@ export async function updateUserProfile(userId, updates) {
   return result.rows[0] || null;
 }
 
-export async function updateUserPassword(userId, passwordHash) {
-  await pool.query(
-    "UPDATE app_users SET password_hash = $2, updated_at = NOW() WHERE id = $1",
-    [userId, passwordHash]
+export async function updateUserPassword(userId, passwordHash, { organizationId } = {}) {
+  const values = [userId, passwordHash];
+  const organizationFilter = organizationId ? ` AND organization_id = $${values.push(organizationId)}` : "";
+  const result = await pool.query(
+    `UPDATE app_users
+     SET password_hash = $2, updated_at = NOW()
+     WHERE id = $1 ${organizationFilter}
+     RETURNING id`,
+    values
   );
+  return result.rows[0] || null;
 }
 
 export async function updateUserSecurity(userId, updates) {
@@ -526,10 +1190,14 @@ export async function listFeatureRecords(feature, { organizationId } = {}) {
     error.code = "NOT_FOUND";
     throw error;
   }
+  if (feature === "shipments") {
+    return listShipmentRecordsFromRepository(pool, { organizationId });
+  }
 
+  const scopedOrganizationId = requireOrganizationScope(organizationId, `listFeatureRecords:${feature}`);
   const values = [];
-  const where = organizationId ? "WHERE organization_id = $1" : "";
-  if (organizationId) values.push(organizationId);
+  const where = "WHERE organization_id = $1";
+  values.push(scopedOrganizationId);
   const result = await pool.query(
     `SELECT * FROM ${config.table} ${where} ORDER BY ${config.orderBy}`,
     values
@@ -538,13 +1206,35 @@ export async function listFeatureRecords(feature, { organizationId } = {}) {
 }
 
 export async function getShipmentRecord(shipmentId, { organizationId } = {}) {
-  const values = [shipmentId];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `SELECT * FROM shipments WHERE id = $1 ${organizationFilter} LIMIT 1`,
-    values
-  );
-  return result.rows[0] || null;
+  return getShipmentRecordFromRepository(pool, shipmentId, { organizationId });
+}
+
+function toUiShipment(row) {
+  if (!row) return null;
+  const legacy = row.legacy_data || {};
+  const freeTimeDays = Number(legacy.freeTimeDays || row.free_time_days || 0);
+  return {
+    id: row.id,
+    trackingNumber: row.shipment_code || legacy.trackingNumber || row.id,
+    containerNumber: legacy.containerNumber || "",
+    customerId: row.customer_id || legacy.customerId || "",
+    customerName: row.customer_name || legacy.customerName || "",
+    origin: row.origin || legacy.origin || "",
+    destination: row.destination || legacy.destination || "",
+    status: row.status || legacy.status || "PENDING",
+    createdAt: row.created_at || legacy.createdAt || new Date().toISOString(),
+    estimatedDelivery: row.estimated_delivery_at || legacy.estimatedDelivery || "",
+    actualDelivery: row.actual_delivery_at || legacy.actualDelivery || undefined,
+    freeTimeDays: Number.isFinite(freeTimeDays) ? freeTimeDays : 0,
+    isArchived: Boolean(row.archived_at || legacy.isArchived),
+    customerAccessEnabled: Boolean(row.customer_access_enabled || legacy.customerAccessEnabled),
+    hasCustomerAccess: Boolean(
+      row.customer_access_enabled ||
+        legacy.customerAccessEnabled ||
+        legacy.publicTrackingToken ||
+        legacy.customerAccessToken
+    ),
+  };
 }
 
 function toUiDocument(row) {
@@ -571,19 +1261,30 @@ function toUiTask(row) {
   const legacy = row.legacy_data || {};
   return {
     id: row.id,
+    organizationId: row.organization_id || legacy.organizationId || undefined,
+    ownerUserId: row.owner_user_id || legacy.ownerUserId || undefined,
     title: row.title,
     description: row.description || "",
     assignedToUserId: row.assigned_to_id || legacy.assignedToUserId || "",
     assignedToName: row.assigned_to_name || legacy.assignedToName || "",
+    assignedByUserId: row.assigned_by_id || legacy.assignedByUserId || "",
     assignedByName: row.assigned_by_name || legacy.assignedByName || "",
+    assignedAt: row.assigned_at || legacy.assignedAt || "",
+    assignmentNote: row.assignment_note || legacy.assignmentNote || "",
     status: row.status || legacy.status || "TODO",
     priority: row.priority || legacy.priority || "MEDIUM",
     dueDate: row.due_at || legacy.dueDate || "",
     deadline: legacy.deadline || "",
     shipmentId: row.shipment_id || legacy.shipmentId || undefined,
     createdAt: row.created_at || legacy.createdAt || new Date().toISOString(),
+    completedAt: row.completed_at || legacy.completedAt || undefined,
+    completedByUserId: row.completed_by_user_id || legacy.completedByUserId || undefined,
     sourceType: row.source_type || legacy.sourceType || "MANUAL",
     sourceId: row.source_id || legacy.sourceId || undefined,
+    workflowInstanceId: row.workflow_instance_id || legacy.workflowInstanceId || undefined,
+    workflowStepCode: row.workflow_step_code || legacy.workflowStepCode || undefined,
+    workflowBlockerId: row.workflow_blocker_id || legacy.workflowBlockerId || undefined,
+    blockerCode: row.blocker_code || legacy.blockerCode || undefined,
   };
 }
 
@@ -695,6 +1396,7 @@ function toUiAppointment(row, documents = []) {
     nextActionItems: row.next_action_items || legacy.nextActionItems || "",
     reminderSent: Boolean(row.reminder_sent ?? legacy.reminderSent),
     createdAt: row.created_at || legacy.createdAt || new Date().toISOString(),
+    isArchived: Boolean(row.archived_at),
   };
 }
 
@@ -825,6 +1527,10 @@ async function syncUsersCollection(client, ownerUserId) {
   if (!ownerUserId) return;
   const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
   const organizationId = owner.rows[0]?.organization_id || null;
+  await syncUsersCollectionForOrganization(client, organizationId, ownerUserId);
+}
+
+async function syncUsersCollectionForOrganization(client, organizationId, fallbackOwnerUserId = null) {
   const result = await client.query(
     `SELECT id, name, email, role, avatar, is_online, department, status, last_seen_at,
             phone, location, bio, two_factor_enabled, notification_preferences, organization_id
@@ -834,7 +1540,7 @@ async function syncUsersCollection(client, ownerUserId) {
     ,
     organizationId ? [organizationId] : []
   );
-  const ownerIds = organizationId ? result.rows.map((row) => row.id) : [ownerUserId];
+  const ownerIds = organizationId ? result.rows.map((row) => row.id) : [fallbackOwnerUserId].filter(Boolean);
   for (const targetOwnerId of ownerIds) {
     for (const row of result.rows) {
       await client.query(
@@ -862,15 +1568,33 @@ function taskSelect() {
 }
 
 function normalizeTaskStatus(status) {
-  const value = String(status || "TODO").toUpperCase();
-  return ["TODO", "IN_PROGRESS", "DONE", "BLOCKED", "CANCELLED"].includes(value)
-    ? value
-    : "TODO";
+  const value = String(status || "TODO").trim().toUpperCase();
+  const aliases = {
+    OPEN: "TODO",
+    ASSIGNED: "ASSIGNED",
+    WAITING: "WAITING",
+    INPROGRESS: "IN_PROGRESS",
+    IN_PROGRESS: "IN_PROGRESS",
+    BLOCKED: "BLOCKED",
+    DONE: "DONE",
+    COMPLETED: "DONE",
+    CANCELLED: "CANCELLED",
+    CANCELED: "CANCELLED",
+    TODO: "TODO",
+  };
+  return aliases[value] || "TODO";
 }
 
 function normalizeTaskPriority(priority) {
-  const value = String(priority || "MEDIUM").toUpperCase();
-  return ["LOW", "MEDIUM", "HIGH", "URGENT"].includes(value) ? value : "MEDIUM";
+  const value = String(priority || "MEDIUM").trim().toUpperCase();
+  const aliases = {
+    LOW: "LOW",
+    NORMAL: "MEDIUM",
+    MEDIUM: "MEDIUM",
+    HIGH: "HIGH",
+    URGENT: "URGENT",
+  };
+  return aliases[value] || "MEDIUM";
 }
 
 async function createTaskNotification(client, { userId, task, title, body }) {
@@ -897,37 +1621,7 @@ async function createTaskNotification(client, { userId, task, title, body }) {
 }
 
 export async function listDocuments({ ownerUserId, shipmentId, customerId, organizationId, includeArchived = false } = {}) {
-  const conditions = [];
-  const values = [];
-
-  if (ownerUserId) {
-    values.push(ownerUserId);
-    conditions.push(`d.owner_user_id = $${values.length}`);
-  }
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`d.organization_id = $${values.length}`);
-  }
-  if (shipmentId) {
-    values.push(shipmentId);
-    conditions.push(`d.shipment_id = $${values.length}`);
-  }
-  if (customerId) {
-    values.push(customerId);
-    conditions.push(`d.customer_id = $${values.length}`);
-  }
-  if (!includeArchived) {
-    conditions.push("d.archived_at IS NULL");
-  }
-
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  const result = await pool.query(
-    `${documentSelect()}
-     ${where}
-     ORDER BY d.updated_at DESC, d.created_at DESC`,
-    values
-  );
-  return result.rows.map(toUiDocument);
+  return listDocumentsFromRepository(pool, { ownerUserId, shipmentId, customerId, organizationId, includeArchived });
 }
 
 export async function createDocumentRecord({
@@ -998,68 +1692,15 @@ export async function createDocumentRecord({
 }
 
 export async function getDocumentDetail(documentId, { organizationId } = {}) {
-  const values = [documentId];
-  const organizationFilter = organizationId ? `AND d.organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `${documentSelect()}
-     WHERE d.id = $1 ${organizationFilter}
-     LIMIT 1`,
-    values
-  );
-  const document = result.rows[0];
-  if (!document) return null;
-
-  const versions = await pool.query(
-    `SELECT id, version, file_name, storage_key, created_at
-     FROM document_versions
-     WHERE document_id = $1
-     ORDER BY version DESC`,
-    [documentId]
-  );
-
-  return {
-    ...document,
-    ui: toUiDocument(document),
-    versions: versions.rows.map((row) => ({
-      id: row.id,
-      version: row.version,
-      fileName: row.file_name,
-      createdAt: row.created_at,
-    })),
-  };
+  return getDocumentDetailFromRepository(pool, documentId, { organizationId });
 }
 
 export async function getDocumentForDownload(documentId, { organizationId } = {}) {
-  const values = [documentId];
-  const organizationFilter = organizationId ? `AND d.organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `${documentSelect()}
-     WHERE d.id = $1 AND d.archived_at IS NULL ${organizationFilter}
-     LIMIT 1`,
-    values
-  );
-  return result.rows[0] || null;
+  return getDocumentForDownloadFromRepository(pool, documentId, { organizationId });
 }
 
 export async function listDocumentStorageKeysForCleanup(documentId, { organizationId } = {}) {
-  const values = [documentId];
-  const organizationFilter = organizationId ? `AND d.organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `SELECT DISTINCT storage_key
-     FROM (
-       SELECT d.storage_key
-       FROM documents d
-       WHERE d.id = $1 ${organizationFilter}
-       UNION ALL
-       SELECT v.storage_key
-       FROM document_versions v
-       JOIN documents d ON d.id = v.document_id
-       WHERE d.id = $1 ${organizationFilter}
-     ) keys
-     WHERE storage_key IS NOT NULL AND storage_key <> ''`,
-    values
-  );
-  return result.rows.map((row) => row.storage_key);
+  return listDocumentStorageKeysForCleanupFromRepository(pool, documentId, { organizationId });
 }
 
 export async function replaceDocumentFileRecord({
@@ -1072,19 +1713,15 @@ export async function replaceDocumentFileRecord({
   uploadedById,
   organizationId,
 }) {
-  const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "replaceDocumentFileRecord");
 
-  try {
-    await client.query("BEGIN");
-    const beforeValues = [documentId];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
+  return withTransaction(pool, async (client) => {
     const beforeResult = await client.query(
-      `SELECT * FROM documents WHERE id = $1 ${organizationFilter}`,
-      beforeValues
+      `SELECT * FROM documents WHERE id = $1 AND organization_id = $2`,
+      [documentId, scopedOrganizationId]
     );
     const before = beforeResult.rows[0] || null;
     if (!before) {
-      await client.query("ROLLBACK");
       return null;
     }
 
@@ -1098,41 +1735,34 @@ export async function replaceDocumentFileRecord({
            checksum = $6,
            version = $7,
            updated_at = NOW()
-       WHERE id = $1
+       WHERE id = $1 AND organization_id = $8
        RETURNING *`,
-      [documentId, fileName, mimeType, fileSize, storageKey, checksum, nextVersion]
+      [documentId, fileName, mimeType, fileSize, storageKey, checksum, nextVersion, scopedOrganizationId]
     );
 
     await client.query(
       `INSERT INTO document_versions (
-         id, document_id, version, storage_key, file_name, uploaded_by_id
+         id, organization_id, document_id, version, storage_key, file_name, uploaded_by_id
        )
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [crypto.randomUUID(), documentId, nextVersion, storageKey, fileName, uploadedById || null]
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [crypto.randomUUID(), scopedOrganizationId, documentId, nextVersion, storageKey, fileName, uploadedById || null]
     );
 
     await syncDocumentUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
-    await client.query("COMMIT");
     return { before, after: result.rows[0] };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
 export async function updateDocumentMetadata(documentId, updates = {}, { organizationId } = {}) {
   const safeVisibility = updates.visibility === "customer_visible" ? "customer_visible" : "internal";
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateDocumentMetadata");
 
   try {
     await client.query("BEGIN");
-    const beforeValues = [documentId];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
     const beforeResult = await client.query(
-      `SELECT * FROM documents WHERE id = $1 ${organizationFilter}`,
-      beforeValues
+      `SELECT * FROM documents WHERE id = $1 AND organization_id = $2`,
+      [documentId, scopedOrganizationId]
     );
     const before = beforeResult.rows[0] || null;
     if (!before) {
@@ -1154,7 +1784,7 @@ export async function updateDocumentMetadata(documentId, updates = {}, { organiz
            visibility = $5,
            legacy_data = $6::jsonb,
            updated_at = NOW()
-       WHERE id = $1
+       WHERE id = $1 AND organization_id = $7
        RETURNING *`,
       [
         documentId,
@@ -1163,6 +1793,7 @@ export async function updateDocumentMetadata(documentId, updates = {}, { organiz
         updates.customerId === undefined ? before.customer_id : updates.customerId || null,
         updates.visibility === undefined ? before.visibility : safeVisibility,
         JSON.stringify(legacy),
+        scopedOrganizationId,
       ]
     );
 
@@ -1177,16 +1808,15 @@ export async function updateDocumentMetadata(documentId, updates = {}, { organiz
   }
 }
 
-export async function archiveDocumentRecord(documentId, { organizationId } = {}) {
+export async function archiveDocumentRecord(documentId, { organizationId, actorUserId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "archiveDocumentRecord");
 
   try {
     await client.query("BEGIN");
-    const beforeValues = [documentId];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
     const beforeResult = await client.query(
-      `SELECT * FROM documents WHERE id = $1 ${organizationFilter}`,
-      beforeValues
+      `SELECT * FROM documents WHERE id = $1 AND organization_id = $2`,
+      [documentId, scopedOrganizationId]
     );
     const before = beforeResult.rows[0] || null;
     if (!before) {
@@ -1198,14 +1828,40 @@ export async function archiveDocumentRecord(documentId, { organizationId } = {})
       `UPDATE documents
        SET archived_at = COALESCE(archived_at, NOW()),
            updated_at = NOW()
-       WHERE id = $1
+       WHERE id = $1 AND organization_id = $2
        RETURNING *`,
-      [documentId]
+      [documentId, scopedOrganizationId]
+    );
+    const archived = result.rows[0];
+
+    await client.query(
+      `INSERT INTO archive_records (
+         id, organization_id, owner_user_id, entity_type, entity_id, title, summary,
+         customer_name, shipment_id, archived_by_id, archived_at, legacy_data
+       )
+       VALUES ($1, $2, $3, 'document', $4, $5, 'document archived', NULL, $6, $7, COALESCE($8, NOW()), $9::jsonb)
+       ON CONFLICT (entity_type, entity_id) DO UPDATE SET
+         organization_id = EXCLUDED.organization_id,
+         title = EXCLUDED.title,
+         archived_at = EXCLUDED.archived_at,
+         restored_at = NULL,
+         legacy_data = EXCLUDED.legacy_data`,
+      [
+        crypto.randomUUID(),
+        archived.organization_id || scopedOrganizationId,
+        archived.owner_user_id || actorUserId || null,
+        documentId,
+        archived.title || archived.file_name || "Document",
+        archived.shipment_id || null,
+        actorUserId || null,
+        archived.archived_at,
+        JSON.stringify(archived.legacy_data || {}),
+      ]
     );
 
-    await syncDocumentUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
+    await syncDocumentUserRecord(client, archived.owner_user_id, archived);
     await client.query("COMMIT");
-    return { before, after: result.rows[0] };
+    return { before, after: archived };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -1214,9 +1870,23 @@ export async function archiveDocumentRecord(documentId, { organizationId } = {})
   }
 }
 
-export async function listTasks({ ownerUserId, assignedToId, organizationId, includeAll = false } = {}) {
+export async function listTasks({
+  ownerUserId,
+  assignedToId,
+  assignedById,
+  participantUserId,
+  organizationId,
+  includeAll = false,
+  shipmentId,
+  status,
+  blocked = false,
+  overdue = false,
+} = {}) {
   const conditions = [];
   const values = [];
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listTasks");
+  values.push(scopedOrganizationId);
+  conditions.push(`t.organization_id = $${values.length}`);
 
   if (ownerUserId && !includeAll) {
     values.push(ownerUserId);
@@ -1226,9 +1896,28 @@ export async function listTasks({ ownerUserId, assignedToId, organizationId, inc
     values.push(assignedToId);
     conditions.push(`t.assigned_to_id = $${values.length}`);
   }
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`t.organization_id = $${values.length}`);
+  if (assignedById) {
+    values.push(assignedById);
+    conditions.push(`t.assigned_by_id = $${values.length}`);
+  }
+  if (participantUserId) {
+    values.push(participantUserId);
+    conditions.push(`(t.owner_user_id = $${values.length} OR t.assigned_to_id = $${values.length} OR t.assigned_by_id = $${values.length})`);
+  }
+  if (shipmentId) {
+    values.push(shipmentId);
+    conditions.push(`t.shipment_id = $${values.length}`);
+  }
+  if (status) {
+    values.push(normalizeTaskStatus(status));
+    conditions.push(`t.status = $${values.length}`);
+  }
+  if (blocked) {
+    conditions.push(`t.status = 'BLOCKED'`);
+  }
+  if (overdue) {
+    conditions.push(`t.due_at IS NOT NULL AND t.due_at <> '' AND t.status NOT IN ('DONE', 'CANCELLED')`);
+    conditions.push(`left(t.due_at, 10) < to_char(NOW(), 'YYYY/MM/DD')`);
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -1243,7 +1932,7 @@ export async function listTasks({ ownerUserId, assignedToId, organizationId, inc
 
 export async function getTaskRecord(taskId, { organizationId } = {}) {
   const values = [taskId];
-  const organizationFilter = organizationId ? `AND t.organization_id = $${values.push(organizationId)}` : "";
+  const organizationFilter = organizationScopeClause(values, organizationId, "t.organization_id", "getTaskRecord");
   const result = await pool.query(
     `${taskSelect()}
      WHERE t.id = $1 ${organizationFilter}
@@ -1269,6 +1958,11 @@ export async function createTaskRecord({
   customerId,
   sourceType = "MANUAL",
   sourceId,
+  assignmentNote,
+  workflowInstanceId,
+  workflowStepCode,
+  workflowBlockerId,
+  blockerCode,
 }) {
   const client = await pool.connect();
   const id = crypto.randomUUID();
@@ -1277,6 +1971,8 @@ export async function createTaskRecord({
 
   try {
     await client.query("BEGIN");
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    requireOrganizationScope(owner.rows[0]?.organization_id, "createTaskRecord");
     const legacy = {
       deadline: deadline || "",
       assignedToUserId: assignedToUserId || "",
@@ -1286,14 +1982,22 @@ export async function createTaskRecord({
       shipmentId: shipmentId || undefined,
       sourceType,
       sourceId: sourceId || undefined,
+      assignmentNote: assignmentNote || "",
+      workflowInstanceId: workflowInstanceId || undefined,
+      workflowStepCode: workflowStepCode || undefined,
+      workflowBlockerId: workflowBlockerId || undefined,
+      blockerCode: blockerCode || undefined,
     };
     const result = await client.query(
       `INSERT INTO tasks (
          id, organization_id, owner_user_id, title, description, status, priority, assigned_to_id,
-         assigned_to_name, assigned_by_id, assigned_by_name, due_at, source_type,
-         source_id, shipment_id, customer_id, legacy_data, completed_at
+         assigned_to_name, assigned_by_id, assigned_by_name, assigned_at, assignment_note, due_at, source_type,
+         source_id, shipment_id, customer_id, workflow_instance_id, workflow_step_code,
+         workflow_blocker_id, blocker_code, legacy_data, completed_at, completed_by_user_id
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17)
+       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10,
+               CASE WHEN $7::text IS NULL THEN NULL ELSE NOW() END, $11, $12, $13, $14, $15, $16, $17, $18,
+               $19, $20, $21::jsonb, $22, $23)
        RETURNING *`,
       [
         id,
@@ -1306,17 +2010,50 @@ export async function createTaskRecord({
         assignedToName || null,
         assignedByUserId || null,
         assignedByName || null,
+        assignmentNote || null,
         dueDate || null,
         sourceType,
         sourceId || null,
         shipmentId || null,
         customerId || null,
+        workflowInstanceId || null,
+        workflowStepCode || null,
+        workflowBlockerId || null,
+        blockerCode || null,
         JSON.stringify(legacy),
         safeStatus === "DONE" ? new Date() : null,
+        safeStatus === "DONE" ? assignedByUserId || ownerUserId || null : null,
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO task_events (
+         id, organization_id, task_id, shipment_id, workflow_instance_id, workflow_step_code,
+         workflow_blocker_id, blocker_code, actor_user_id, event_type, to_assignee_user_id,
+         to_status, note, metadata
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'task.created', $10, $11, $12, $13::jsonb)`,
+      [
+        crypto.randomUUID(),
+        result.rows[0].organization_id,
+        result.rows[0].id,
+        result.rows[0].shipment_id || null,
+        result.rows[0].workflow_instance_id || null,
+        result.rows[0].workflow_step_code || null,
+        result.rows[0].workflow_blocker_id || null,
+        result.rows[0].blocker_code || null,
+        assignedByUserId || ownerUserId || null,
+        assignedToUserId || null,
+        safeStatus,
+        assignmentNote || null,
+        JSON.stringify({ sourceType, sourceId: sourceId || null }),
       ]
     );
 
     await syncTaskUserRecord(client, ownerUserId, result.rows[0]);
+    if (assignedToUserId && assignedToUserId !== ownerUserId) {
+      await syncTaskUserRecord(client, assignedToUserId, result.rows[0]);
+    }
     await createTaskNotification(client, {
       userId: assignedToUserId,
       task: result.rows[0],
@@ -1336,12 +2073,14 @@ export async function createTaskRecord({
 
 export async function updateTaskRecord(taskId, updates = {}, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateTaskRecord");
 
   try {
     await client.query("BEGIN");
-    const beforeValues = [taskId];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
-    const beforeResult = await client.query(`SELECT * FROM tasks WHERE id = $1 ${organizationFilter}`, beforeValues);
+    const beforeResult = await client.query(
+      "SELECT * FROM tasks WHERE id = $1 AND organization_id = $2",
+      [taskId, scopedOrganizationId]
+    );
     const before = beforeResult.rows[0] || null;
     if (!before) {
       await client.query("ROLLBACK");
@@ -1360,6 +2099,11 @@ export async function updateTaskRecord(taskId, updates = {}, { organizationId } 
       ...(updates.assignedToName !== undefined ? { assignedToName: updates.assignedToName || "" } : {}),
       ...(updates.assignedByName !== undefined ? { assignedByName: updates.assignedByName || "" } : {}),
       ...(updates.shipmentId !== undefined ? { shipmentId: updates.shipmentId || undefined } : {}),
+      ...(updates.assignmentNote !== undefined ? { assignmentNote: updates.assignmentNote || "" } : {}),
+      ...(updates.workflowInstanceId !== undefined ? { workflowInstanceId: updates.workflowInstanceId || undefined } : {}),
+      ...(updates.workflowStepCode !== undefined ? { workflowStepCode: updates.workflowStepCode || undefined } : {}),
+      ...(updates.workflowBlockerId !== undefined ? { workflowBlockerId: updates.workflowBlockerId || undefined } : {}),
+      ...(updates.blockerCode !== undefined ? { blockerCode: updates.blockerCode || undefined } : {}),
     };
 
     const result = await client.query(
@@ -1371,14 +2115,21 @@ export async function updateTaskRecord(taskId, updates = {}, { organizationId } 
            assigned_to_id = $6,
            assigned_to_name = $7,
            assigned_by_name = COALESCE($8, assigned_by_name),
-           due_at = $9,
-           shipment_id = $10,
-           customer_id = $11,
-           legacy_data = $12::jsonb,
+           assigned_at = CASE WHEN $6::text IS DISTINCT FROM assigned_to_id THEN NOW() ELSE assigned_at END,
+           assignment_note = $9,
+           due_at = $10,
+           shipment_id = $11,
+           customer_id = $12,
+           workflow_instance_id = $13,
+           workflow_step_code = $14,
+           workflow_blocker_id = $15,
+           blocker_code = $16,
+           legacy_data = $17::jsonb,
            completed_at = CASE WHEN $4 = 'DONE' THEN COALESCE(completed_at, NOW()) ELSE NULL END,
+           completed_by_user_id = CASE WHEN $4 = 'DONE' THEN COALESCE(completed_by_user_id, $18) ELSE NULL END,
            updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
+        WHERE id = $1 AND organization_id = $19
+        RETURNING *`,
       [
         taskId,
         updates.title === undefined ? null : String(updates.title || "").trim(),
@@ -1388,14 +2139,53 @@ export async function updateTaskRecord(taskId, updates = {}, { organizationId } 
         nextAssignedToId,
         updates.assignedToName === undefined ? before.assigned_to_name : updates.assignedToName || null,
         updates.assignedByName || null,
+        updates.assignmentNote === undefined ? before.assignment_note : updates.assignmentNote || null,
         updates.dueDate === undefined ? before.due_at : updates.dueDate || null,
         updates.shipmentId === undefined ? before.shipment_id : updates.shipmentId || null,
         updates.customerId === undefined ? before.customer_id : updates.customerId || null,
+        updates.workflowInstanceId === undefined ? before.workflow_instance_id : updates.workflowInstanceId || null,
+        updates.workflowStepCode === undefined ? before.workflow_step_code : updates.workflowStepCode || null,
+        updates.workflowBlockerId === undefined ? before.workflow_blocker_id : updates.workflowBlockerId || null,
+        updates.blockerCode === undefined ? before.blocker_code : updates.blockerCode || null,
         JSON.stringify(legacy),
+        updates.completedByUserId || updates.actorUserId || null,
+        scopedOrganizationId,
       ]
     );
 
+    if (nextAssignedToId !== before.assigned_to_id || nextStatus !== before.status) {
+      await client.query(
+        `INSERT INTO task_events (
+           id, organization_id, task_id, shipment_id, workflow_instance_id, workflow_step_code,
+           workflow_blocker_id, blocker_code, actor_user_id, event_type, from_assignee_user_id,
+           to_assignee_user_id, from_status, to_status, note, metadata
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)`,
+        [
+          crypto.randomUUID(),
+          result.rows[0].organization_id,
+          taskId,
+          result.rows[0].shipment_id || null,
+          result.rows[0].workflow_instance_id || null,
+          result.rows[0].workflow_step_code || null,
+          result.rows[0].workflow_blocker_id || null,
+          result.rows[0].blocker_code || null,
+          updates.actorUserId || null,
+          nextAssignedToId !== before.assigned_to_id ? "task.reassigned" : "task.status_changed",
+          before.assigned_to_id || null,
+          nextAssignedToId || null,
+          before.status || null,
+          nextStatus,
+          updates.assignmentNote || updates.note || null,
+          JSON.stringify({ source: "updateTaskRecord" }),
+        ]
+      );
+    }
+
     await syncTaskUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
+    if (result.rows[0].assigned_to_id && result.rows[0].assigned_to_id !== result.rows[0].owner_user_id) {
+      await syncTaskUserRecord(client, result.rows[0].assigned_to_id, result.rows[0]);
+    }
     if (nextAssignedToId && nextAssignedToId !== before.assigned_to_id) {
       await createTaskNotification(client, {
         userId: nextAssignedToId,
@@ -1430,18 +2220,303 @@ export async function setTaskStatus(taskId, status, { organizationId } = {}) {
   return updateTaskRecord(taskId, { status }, { organizationId });
 }
 
+export async function assignTaskRecord(taskId, {
+  assignedToUserId,
+  actorUser,
+  dueAt,
+  dueDate,
+  priority,
+  assignmentNote,
+  status,
+  organizationId,
+} = {}) {
+  const scopedOrganizationId = requireOrganizationScope(
+    organizationId || actorUser?.organizationId || actorUser?.organization_id,
+    "assignTaskRecord"
+  );
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query(
+      `SELECT *
+       FROM tasks
+       WHERE id = $1 AND organization_id = $2
+       LIMIT 1`,
+      [taskId, scopedOrganizationId]
+    );
+    const before = beforeResult.rows[0] || null;
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const assigneeResult = await client.query(
+      `SELECT id, name
+       FROM app_users
+       WHERE id = $1
+         AND organization_id = $2
+         AND COALESCE(status, 'active') = 'active'
+       LIMIT 1`,
+      [assignedToUserId, scopedOrganizationId]
+    );
+    const assignee = assigneeResult.rows[0] || null;
+    if (!assignee) {
+      await client.query("ROLLBACK");
+      return { invalidAssignee: true };
+    }
+
+    const nextStatus = status === undefined ? before.status || "ASSIGNED" : normalizeTaskStatus(status);
+    const nextPriority = priority === undefined ? before.priority : normalizeTaskPriority(priority);
+    const nextDueAt = dueAt === undefined && dueDate === undefined ? before.due_at : dueAt || dueDate || null;
+    const legacy = {
+      ...(before.legacy_data || {}),
+      assignedToUserId: assignee.id,
+      assignedToName: assignee.name,
+      assignedByUserId: actorUser?.id || "",
+      assignedByName: actorUser?.name || "",
+      assignedAt: new Date().toISOString(),
+      assignmentNote: assignmentNote || "",
+      dueDate: nextDueAt || "",
+    };
+    const result = await client.query(
+      `UPDATE tasks
+       SET assigned_to_id = $3,
+           assigned_to_name = $4,
+           assigned_by_id = $5,
+           assigned_by_name = $6,
+           assigned_at = NOW(),
+           assignment_note = $7,
+           due_at = $8,
+           priority = $9,
+           status = $10,
+           legacy_data = $11::jsonb,
+           completed_at = CASE WHEN $10 = 'DONE' THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
+           completed_by_user_id = CASE WHEN $10 = 'DONE' THEN COALESCE(completed_by_user_id, $5) ELSE completed_by_user_id END,
+           updated_at = NOW()
+       WHERE id = $1 AND organization_id = $2
+       RETURNING *`,
+      [
+        taskId,
+        scopedOrganizationId,
+        assignee.id,
+        assignee.name,
+        actorUser?.id || null,
+        actorUser?.name || null,
+        assignmentNote || null,
+        nextDueAt,
+        nextPriority,
+        nextStatus,
+        JSON.stringify(legacy),
+      ]
+    );
+    const after = result.rows[0];
+    await client.query(
+      `INSERT INTO task_events (
+         id, organization_id, task_id, shipment_id, workflow_instance_id, workflow_step_code,
+         workflow_blocker_id, blocker_code, actor_user_id, event_type, from_assignee_user_id,
+         to_assignee_user_id, from_status, to_status, note, metadata
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'task.reassigned', $10, $11, $12, $13, $14, $15::jsonb)`,
+      [
+        crypto.randomUUID(),
+        scopedOrganizationId,
+        taskId,
+        after.shipment_id || null,
+        after.workflow_instance_id || null,
+        after.workflow_step_code || null,
+        after.workflow_blocker_id || null,
+        after.blocker_code || null,
+        actorUser?.id || null,
+        before.assigned_to_id || null,
+        assignee.id,
+        before.status || null,
+        after.status,
+        assignmentNote || null,
+        JSON.stringify({ priority: after.priority, dueAt: after.due_at || null }),
+      ]
+    );
+    await syncTaskUserRecord(client, after.owner_user_id, after);
+    if (after.assigned_to_id && after.assigned_to_id !== after.owner_user_id) {
+      await syncTaskUserRecord(client, after.assigned_to_id, after);
+    }
+    await createTaskNotification(client, {
+      userId: assignee.id,
+      task: after,
+      title: "ارجاع وظیفه",
+      body: after.title,
+    });
+    if (isHighPriority(after.priority)) {
+      await queueHighPriorityTaskSms(client, after, before.assigned_to_id === assignee.id ? "priority" : "reassigned");
+    }
+    await client.query("COMMIT");
+    return { before, after };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateTaskStatusRecord(taskId, {
+  status,
+  note,
+  actorUser,
+  organizationId,
+} = {}) {
+  const scopedOrganizationId = requireOrganizationScope(
+    organizationId || actorUser?.organizationId || actorUser?.organization_id,
+    "updateTaskStatusRecord"
+  );
+  const safeStatus = normalizeTaskStatus(status);
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query(
+      `SELECT *
+       FROM tasks
+       WHERE id = $1 AND organization_id = $2
+       LIMIT 1`,
+      [taskId, scopedOrganizationId]
+    );
+    const before = beforeResult.rows[0] || null;
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const legacy = {
+      ...(before.legacy_data || {}),
+      status: safeStatus,
+      ...(safeStatus === "DONE" ? { completedAt: new Date().toISOString(), completedByUserId: actorUser?.id || "" } : {}),
+    };
+    const result = await client.query(
+      `UPDATE tasks
+       SET status = $3,
+           completed_at = CASE WHEN $3 = 'DONE' THEN COALESCE(completed_at, NOW()) ELSE NULL END,
+           completed_by_user_id = CASE WHEN $3 = 'DONE' THEN COALESCE(completed_by_user_id, $4) ELSE NULL END,
+           legacy_data = $5::jsonb,
+           updated_at = NOW()
+       WHERE id = $1 AND organization_id = $2
+       RETURNING *`,
+      [taskId, scopedOrganizationId, safeStatus, actorUser?.id || null, JSON.stringify(legacy)]
+    );
+    const after = result.rows[0];
+    await client.query(
+      `INSERT INTO task_events (
+         id, organization_id, task_id, shipment_id, workflow_instance_id, workflow_step_code,
+         workflow_blocker_id, blocker_code, actor_user_id, event_type, from_status, to_status, note, metadata
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'task.status_changed', $10, $11, $12, '{}'::jsonb)`,
+      [
+        crypto.randomUUID(),
+        scopedOrganizationId,
+        taskId,
+        after.shipment_id || null,
+        after.workflow_instance_id || null,
+        after.workflow_step_code || null,
+        after.workflow_blocker_id || null,
+        after.blocker_code || null,
+        actorUser?.id || null,
+        before.status || null,
+        safeStatus,
+        note || null,
+      ]
+    );
+    await syncTaskUserRecord(client, after.owner_user_id, after);
+    if (after.assigned_to_id && after.assigned_to_id !== after.owner_user_id) {
+      await syncTaskUserRecord(client, after.assigned_to_id, after);
+    }
+    await client.query("COMMIT");
+    return { before, after };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function listTaskEvents(taskId, { organizationId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listTaskEvents");
+  const result = await pool.query(
+    `SELECT e.*,
+            actor.name AS actor_name,
+            from_user.name AS from_assignee_name,
+            to_user.name AS to_assignee_name
+     FROM task_events e
+     JOIN tasks t ON t.id = e.task_id AND t.organization_id = e.organization_id
+     LEFT JOIN app_users actor ON actor.id = e.actor_user_id
+     LEFT JOIN app_users from_user ON from_user.id = e.from_assignee_user_id
+     LEFT JOIN app_users to_user ON to_user.id = e.to_assignee_user_id
+     WHERE e.task_id = $1
+       AND e.organization_id = $2
+     ORDER BY e.created_at DESC`,
+    [taskId, scopedOrganizationId]
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    taskId: row.task_id,
+    eventType: row.event_type,
+    actorUserId: row.actor_user_id || null,
+    actorName: row.actor_name || "",
+    fromAssigneeUserId: row.from_assignee_user_id || null,
+    fromAssigneeName: row.from_assignee_name || "",
+    toAssigneeUserId: row.to_assignee_user_id || null,
+    toAssigneeName: row.to_assignee_name || "",
+    fromStatus: row.from_status || null,
+    toStatus: row.to_status || null,
+    note: row.note || "",
+    shipmentId: row.shipment_id || null,
+    workflowInstanceId: row.workflow_instance_id || null,
+    workflowStepCode: row.workflow_step_code || null,
+    workflowBlockerId: row.workflow_blocker_id || null,
+    blockerCode: row.blocker_code || null,
+    metadata: row.metadata || {},
+    createdAt: row.created_at,
+  }));
+}
+
+export async function listOrganizationMembers({ organizationId, includeInactive = false } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listOrganizationMembers");
+  const result = await pool.query(
+    `SELECT u.id, u.name, u.email, u.role, COALESCE(u.status, om.status, 'active') AS status
+     FROM organization_members om
+     JOIN app_users u ON u.id = om.user_id
+     WHERE om.organization_id = $1
+       AND ($2::boolean OR (COALESCE(u.status, 'active') = 'active' AND COALESCE(om.status, 'active') = 'active'))
+     ORDER BY u.name ASC`,
+    [scopedOrganizationId, Boolean(includeInactive)]
+  );
+  return result.rows.map((row) => ({
+    userId: row.id,
+    displayName: row.name,
+    email: row.email,
+    roleName: row.role,
+    active: row.status === "active",
+  }));
+}
+
 export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, task }) {
   const client = await pool.connect();
-  const sourceType = stepId ? "SHIPMENT_STEP" : "SHIPMENT";
-  const sourceId = stepId || shipmentId;
+  const sourceType = task.workflowBlockerId
+    ? "WORKFLOW_BLOCKER"
+    : task.workflowStepCode || task.workflowInstanceId
+      ? "WORKFLOW_STEP"
+      : stepId
+        ? "SHIPMENT_STEP"
+        : "SHIPMENT";
+  const sourceId = task.workflowBlockerId || task.workflowStepCode || task.workflowInstanceId || stepId || shipmentId;
   const organizationId = actorUser?.organizationId || actorUser?.organization_id || null;
 
   try {
     await client.query("BEGIN");
     const shipmentValues = [shipmentId];
-    const organizationFilter = organizationId ? `AND organization_id = $${shipmentValues.push(organizationId)}` : "";
+    const scopeFilter = shipmentScopeClause(shipmentValues, { organizationId, ownerUserId: actorUser?.id }, "");
     const shipmentResult = await client.query(
-      `SELECT * FROM shipments WHERE id = $1 ${organizationFilter}`,
+      `SELECT * FROM shipments WHERE id = $1 ${scopeFilter}`,
       shipmentValues
     );
     const shipment = shipmentResult.rows[0] || null;
@@ -1473,13 +2548,18 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
       sourceType,
       sourceId,
       stepName: task.stepName || existing?.legacy_data?.stepName || "",
+      assignmentNote: task.assignmentNote || existing?.assignment_note || "",
+      workflowInstanceId: task.workflowInstanceId || existing?.workflow_instance_id || undefined,
+      workflowStepCode: task.workflowStepCode || existing?.workflow_step_code || undefined,
+      workflowBlockerId: task.workflowBlockerId || existing?.workflow_blocker_id || undefined,
+      blockerCode: task.blockerCode || existing?.blocker_code || undefined,
     };
 
     const result = existing
       ? await client.query(
           `UPDATE tasks
            SET title = $2,
-               organization_id = COALESCE(organization_id, $11),
+               organization_id = COALESCE(organization_id, $16),
                description = $3,
                status = CASE WHEN status = 'DONE' THEN status ELSE 'IN_PROGRESS' END,
                priority = $4,
@@ -1487,10 +2567,17 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
                assigned_to_name = $6,
                assigned_by_id = $7,
                assigned_by_name = $8,
-               due_at = $9,
-               legacy_data = $10::jsonb,
+               assigned_at = NOW(),
+               assignment_note = $9,
+               due_at = $10,
+               workflow_instance_id = $11,
+               workflow_step_code = $12,
+               workflow_blocker_id = $13,
+               blocker_code = $14,
+               legacy_data = $15::jsonb,
                updated_at = NOW()
            WHERE id = $1
+             AND organization_id = $16
            RETURNING *`,
           [
             existing.id,
@@ -1501,7 +2588,12 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
             assignedToName,
             actorUser.id,
             actorUser.name,
+            task.assignmentNote || existing.assignment_note || null,
             task.dueDate || existing.due_at || null,
+            task.workflowInstanceId || existing.workflow_instance_id || null,
+            task.workflowStepCode || existing.workflow_step_code || null,
+            task.workflowBlockerId || existing.workflow_blocker_id || null,
+            task.blockerCode || existing.blocker_code || null,
             JSON.stringify(legacy),
             shipment.organization_id || actorUser.organizationId || actorUser.organization_id || null,
           ]
@@ -1509,10 +2601,11 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
       : await client.query(
           `INSERT INTO tasks (
              id, organization_id, owner_user_id, title, description, status, priority, assigned_to_id,
-             assigned_to_name, assigned_by_id, assigned_by_name, due_at, source_type,
-             source_id, shipment_id, customer_id, legacy_data
+             assigned_to_name, assigned_by_id, assigned_by_name, assigned_at, assignment_note, due_at, source_type,
+             source_id, shipment_id, customer_id, workflow_instance_id, workflow_step_code,
+             workflow_blocker_id, blocker_code, legacy_data
            )
-           VALUES ($1, $2, $3, $4, $5, 'IN_PROGRESS', $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
+           VALUES ($1, $2, $3, $4, $5, 'IN_PROGRESS', $6, $7, $8, $9, $10, NOW(), $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb)
            RETURNING *`,
           [
             crypto.randomUUID(),
@@ -1525,16 +2618,51 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
             assignedToName,
             actorUser.id,
             actorUser.name,
+            task.assignmentNote || null,
             task.dueDate || null,
             sourceType,
             sourceId,
             shipmentId,
             shipment.customer_id || null,
+            task.workflowInstanceId || null,
+            task.workflowStepCode || null,
+            task.workflowBlockerId || null,
+            task.blockerCode || null,
             JSON.stringify(legacy),
           ]
         );
 
+    await client.query(
+      `INSERT INTO task_events (
+         id, organization_id, task_id, shipment_id, workflow_instance_id, workflow_step_code,
+         workflow_blocker_id, blocker_code, actor_user_id, event_type, from_assignee_user_id,
+         to_assignee_user_id, from_status, to_status, note, metadata
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)`,
+      [
+        crypto.randomUUID(),
+        result.rows[0].organization_id,
+        result.rows[0].id,
+        result.rows[0].shipment_id || null,
+        result.rows[0].workflow_instance_id || null,
+        result.rows[0].workflow_step_code || null,
+        result.rows[0].workflow_blocker_id || null,
+        result.rows[0].blocker_code || null,
+        actorUser.id,
+        existing ? "task.reassigned" : "task.created",
+        existing?.assigned_to_id || null,
+        assignedToId || null,
+        existing?.status || null,
+        result.rows[0].status,
+        task.assignmentNote || null,
+        JSON.stringify({ sourceType, sourceId }),
+      ]
+    );
+
     await syncTaskUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
+    if (result.rows[0].assigned_to_id && result.rows[0].assigned_to_id !== result.rows[0].owner_user_id) {
+      await syncTaskUserRecord(client, result.rows[0].assigned_to_id, result.rows[0]);
+    }
     await createTaskNotification(client, {
       userId: assignedToId,
       task: result.rows[0],
@@ -1561,11 +2689,11 @@ export async function updateShipmentStepRecord({ shipmentId, stepId, updates = {
   try {
     await client.query("BEGIN");
     const shipmentValues = [shipmentId];
-    const organizationFilter = organizationId ? `AND organization_id = $${shipmentValues.push(organizationId)}` : "";
+    const scopeFilter = shipmentScopeClause(shipmentValues, { organizationId, ownerUserId: actorUser?.id }, "");
     const shipmentResult = await client.query(
       `SELECT id, owner_user_id, organization_id
        FROM shipments
-       WHERE id = $1 ${organizationFilter}
+       WHERE id = $1 ${scopeFilter}
        LIMIT 1`,
       shipmentValues
     );
@@ -1684,13 +2812,12 @@ function normalizeAppointmentStatus(status) {
 export async function listCheques({ ownerUserId, organizationId, includeArchived = false } = {}) {
   const conditions = [];
   const values = [];
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listCheques");
+  values.push(scopedOrganizationId);
+  conditions.push(`organization_id = $${values.length}`);
   if (ownerUserId) {
     values.push(ownerUserId);
     conditions.push(`owner_user_id = $${values.length}`);
-  }
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`organization_id = $${values.length}`);
   }
   if (!includeArchived) conditions.push("archived_at IS NULL");
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -1706,7 +2833,7 @@ export async function listCheques({ ownerUserId, organizationId, includeArchived
 
 export async function getChequeRecord(id, { organizationId } = {}) {
   const values = [id];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
+  const organizationFilter = organizationScopeClause(values, organizationId, "organization_id", "getChequeRecord");
   const result = await pool.query(`SELECT * FROM cheques WHERE id = $1 ${organizationFilter} LIMIT 1`, values);
   return result.rows[0] || null;
 }
@@ -1716,6 +2843,8 @@ export async function createChequeRecord({ ownerUserId, actorUserId, cheque }) {
   const id = crypto.randomUUID();
   try {
     await client.query("BEGIN");
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    requireOrganizationScope(owner.rows[0]?.organization_id, "createChequeRecord");
     const result = await client.query(
       `INSERT INTO cheques (
          id, organization_id, owner_user_id, bank_name, cheque_number, amount, due_date, location,
@@ -1752,11 +2881,13 @@ export async function createChequeRecord({ ownerUserId, actorUserId, cheque }) {
 
 export async function updateChequeRecord(id, updates = {}, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateChequeRecord");
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
-    const beforeResult = await client.query(`SELECT * FROM cheques WHERE id = $1 ${organizationFilter}`, beforeValues);
+    const beforeResult = await client.query(
+      "SELECT * FROM cheques WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
+    );
     const before = beforeResult.rows[0] || null;
     if (!before) {
       await client.query("ROLLBACK");
@@ -1777,8 +2908,8 @@ export async function updateChequeRecord(id, updates = {}, { organizationId } = 
            legacy_data = $10::jsonb,
            archived_at = CASE WHEN $8 = 'ARCHIVED' THEN COALESCE(archived_at, NOW()) ELSE archived_at END,
            updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
+        WHERE id = $1 AND organization_id = $11
+        RETURNING *`,
       [
         id,
         updates.bankName === undefined ? null : String(updates.bankName || "").trim(),
@@ -1790,6 +2921,7 @@ export async function updateChequeRecord(id, updates = {}, { organizationId } = 
         status,
         updates.description === undefined ? before.description : updates.description || null,
         JSON.stringify(legacy),
+        scopedOrganizationId,
       ]
     );
     await syncChequeUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
@@ -1813,14 +2945,17 @@ export async function listDueSoonCheques({ ownerUserId, organizationId, days = 7
   const horizon = now + Number(days || 7) * 24 * 60 * 60 * 1000;
   return cheques.filter((cheque) => {
     if (!["ACTIVE", "RETURNED"].includes(cheque.status) || !cheque.dueDate) return false;
-    const parsed = Date.parse(String(cheque.dueDate).replace(/\//g, "-"));
-    return Number.isNaN(parsed) || parsed <= horizon;
+    const parsed = parseOperationalDate(cheque.dueDate);
+    return !parsed || parsed.getTime() <= horizon;
   });
 }
 
 export async function listComplianceMeetings({ ownerUserId, assignedToId, organizationId, includeArchived = false } = {}) {
   const conditions = [];
   const values = [];
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listComplianceMeetings");
+  values.push(scopedOrganizationId);
+  conditions.push(`organization_id = $${values.length}`);
   if (ownerUserId) {
     values.push(ownerUserId);
     conditions.push(`owner_user_id = $${values.length}`);
@@ -1828,10 +2963,6 @@ export async function listComplianceMeetings({ ownerUserId, assignedToId, organi
   if (assignedToId) {
     values.push(assignedToId);
     conditions.push(`assigned_to_id = $${values.length}`);
-  }
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`organization_id = $${values.length}`);
   }
   if (!includeArchived) conditions.push("archived_at IS NULL");
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -1845,8 +2976,8 @@ export async function listComplianceMeetings({ ownerUserId, assignedToId, organi
   const rows = [];
   for (const meeting of result.rows) {
     const docs = await pool.query(
-      "SELECT * FROM meeting_required_documents WHERE meeting_id = $1 ORDER BY created_at ASC",
-      [meeting.id]
+      "SELECT * FROM meeting_required_documents WHERE meeting_id = $1 AND organization_id = $2 ORDER BY created_at ASC",
+      [meeting.id, scopedOrganizationId]
     );
     rows.push(toUiAppointment(meeting, docs.rows));
   }
@@ -1855,7 +2986,7 @@ export async function listComplianceMeetings({ ownerUserId, assignedToId, organi
 
 export async function getComplianceMeetingRecord(id, { organizationId } = {}) {
   const values = [id];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
+  const organizationFilter = organizationScopeClause(values, organizationId, "organization_id", "getComplianceMeetingRecord");
   const result = await pool.query(
     `SELECT * FROM compliance_meetings WHERE id = $1 ${organizationFilter} LIMIT 1`,
     values
@@ -1890,6 +3021,8 @@ export async function createComplianceMeetingRecord({ ownerUserId, actorUser, me
   const id = crypto.randomUUID();
   try {
     await client.query("BEGIN");
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    requireOrganizationScope(owner.rows[0]?.organization_id, "createComplianceMeetingRecord");
     const result = await client.query(
       `INSERT INTO compliance_meetings (
          id, organization_id, owner_user_id, title, organization_name, meeting_at, location, status,
@@ -1930,13 +3063,12 @@ export async function createComplianceMeetingRecord({ ownerUserId, actorUser, me
 
 export async function updateComplianceMeetingRecord(id, updates = {}, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateComplianceMeetingRecord");
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
     const beforeResult = await client.query(
-      `SELECT * FROM compliance_meetings WHERE id = $1 ${organizationFilter}`,
-      beforeValues
+      "SELECT * FROM compliance_meetings WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
     );
     const before = beforeResult.rows[0] || null;
     if (!before) {
@@ -1960,8 +3092,8 @@ export async function updateComplianceMeetingRecord(id, updates = {}, { organiza
            legacy_data = $13::jsonb,
            archived_at = CASE WHEN $6 = 'ARCHIVED' THEN COALESCE(archived_at, NOW()) ELSE archived_at END,
            updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
+        WHERE id = $1 AND organization_id = $14
+        RETURNING *`,
       [
         id,
         updates.purpose || updates.title || null,
@@ -1976,6 +3108,7 @@ export async function updateComplianceMeetingRecord(id, updates = {}, { organiza
         updates.nextActionItems === undefined ? before.next_action_items : updates.nextActionItems || null,
         updates.reminderSent === undefined ? before.reminder_sent : Boolean(updates.reminderSent),
         JSON.stringify(legacy),
+        scopedOrganizationId,
       ]
     );
     if (Array.isArray(updates.requiredDocuments)) {
@@ -1994,13 +3127,12 @@ export async function updateComplianceMeetingRecord(id, updates = {}, { organiza
 
 export async function archiveComplianceMeetingRecord(id, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "archiveComplianceMeetingRecord");
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
     const beforeResult = await client.query(
-      `SELECT * FROM compliance_meetings WHERE id = $1 ${organizationFilter}`,
-      beforeValues
+      "SELECT * FROM compliance_meetings WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
     );
     const before = beforeResult.rows[0] || null;
     if (!before) {
@@ -2012,9 +3144,9 @@ export async function archiveComplianceMeetingRecord(id, { organizationId } = {}
        SET status = 'COMPLETED',
            archived_at = COALESCE(archived_at, NOW()),
            updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
-      [id]
+        WHERE id = $1 AND organization_id = $2
+        RETURNING *`,
+      [id, scopedOrganizationId]
     );
     await syncMeetingUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
     await client.query("COMMIT");
@@ -2075,13 +3207,12 @@ export async function upsertMeetingRequiredDocument(meetingId, document = {}, { 
 
 export async function updateMeetingRequiredDocument(meetingId, documentId, updates = {}, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateMeetingRequiredDocument");
   try {
     await client.query("BEGIN");
-    const meetingValues = [meetingId];
-    const organizationFilter = organizationId ? `AND organization_id = $${meetingValues.push(organizationId)}` : "";
     const meetingResult = await client.query(
-      `SELECT * FROM compliance_meetings WHERE id = $1 ${organizationFilter}`,
-      meetingValues
+      "SELECT * FROM compliance_meetings WHERE id = $1 AND organization_id = $2",
+      [meetingId, scopedOrganizationId]
     );
     const meeting = meetingResult.rows[0] || null;
     if (!meeting) {
@@ -2089,8 +3220,8 @@ export async function updateMeetingRequiredDocument(meetingId, documentId, updat
       return null;
     }
     const beforeResult = await client.query(
-      "SELECT * FROM meeting_required_documents WHERE id = $1 AND meeting_id = $2",
-      [documentId, meetingId]
+      "SELECT * FROM meeting_required_documents WHERE id = $1 AND meeting_id = $2 AND organization_id = $3",
+      [documentId, meetingId, scopedOrganizationId]
     );
     const before = beforeResult.rows[0] || null;
     if (!before) {
@@ -2106,8 +3237,8 @@ export async function updateMeetingRequiredDocument(meetingId, documentId, updat
            file_name = $6,
            legacy_data = $7::jsonb,
            updated_at = NOW()
-       WHERE id = $1 AND meeting_id = $2
-       RETURNING *`,
+        WHERE id = $1 AND meeting_id = $2 AND organization_id = $8
+        RETURNING *`,
       [
         documentId,
         meetingId,
@@ -2116,6 +3247,7 @@ export async function updateMeetingRequiredDocument(meetingId, documentId, updat
         updates.completed === undefined ? before.completed : Boolean(updates.completed),
         updates.fileName === undefined ? before.file_name : updates.fileName || null,
         JSON.stringify(legacy),
+        scopedOrganizationId,
       ]
     );
     await syncMeetingUserRecord(client, meeting.owner_user_id, meeting);
@@ -2130,47 +3262,130 @@ export async function updateMeetingRequiredDocument(meetingId, documentId, updat
 }
 
 export async function getDashboardData(user, permissions = []) {
-  const canSeeAll = permissions.includes("shipments.view_all") || user.role === "CEO" || user.role === "MANAGER";
+  const canViewAllTasks = permissions.includes("tasks.view_all");
+  const canViewCompliance = permissions.includes("compliance.manage");
+  const canViewQuotations = permissions.includes("quotations.manage");
+  const canUseCheques = permissions.includes("cheques.manage");
+  const canViewOrganizationCheques = canUseCheques && (user.role === "CEO" || user.role === "MANAGER");
   const organizationId = user.organizationId || user.organization_id;
-  const shipmentsResult = await pool.query(
-    `SELECT * FROM shipments
-     WHERE archived_at IS NULL AND ($1::text IS NULL OR organization_id = $1)
-     ORDER BY updated_at DESC`,
-    [organizationId || null]
-  );
-  const taskRows = await listTasks(
-    permissions.includes("tasks.view_all") ? { organizationId, includeAll: true } : { organizationId, assignedToId: user.id, includeAll: true }
-  );
-  const documentRows = await listDocuments({ organizationId, ownerUserId: user.id, includeArchived: false });
-  const chequeRows = await listCheques({ organizationId, ownerUserId: canSeeAll ? undefined : user.id });
-  const meetingRows = await listComplianceMeetings(canSeeAll ? { organizationId } : { organizationId, assignedToId: user.id });
-  const quotationRows = await listQuotations({ organizationId, ownerUserId: canSeeAll ? undefined : user.id });
-  const notificationResult = await pool.query(
-    `SELECT * FROM notifications
-     WHERE user_id = $1 AND ($2::text IS NULL OR organization_id = $2) AND read_at IS NULL
-     ORDER BY created_at DESC
-     LIMIT 20`,
-    [user.id, organizationId || null]
-  );
-  const changeResult = await pool.query(
-    `SELECT c.*, u.name AS actor_name
-     FROM change_logs c
-     LEFT JOIN app_users u ON u.id = c.actor_user_id
-     WHERE ($1::text IS NULL OR c.organization_id = $1)
-     ORDER BY c.created_at DESC
-     LIMIT 10`,
-    [organizationId || null]
-  );
-  const usersResult = await pool.query(
-    `SELECT id, name, email, role, is_online, department, last_seen_at
-     FROM app_users
-     WHERE ($1::text IS NULL OR organization_id = $1)
-     ORDER BY is_online DESC, name ASC`
-    ,
-    [organizationId || null]
-  );
 
-  const shipments = shipmentsResult.rows.map((row) => ({
+  const orgParam = organizationId || null;
+  const taskVisibilitySql = "AND ($3::boolean OR t.owner_user_id = $2 OR t.assigned_to_id = $2 OR t.assigned_by_id = $2)";
+  const chequeVisibilitySql = "AND ($3::boolean OR ($4::boolean AND owner_user_id = $2))";
+
+  const [
+    shipmentSummaryResult,
+    latestShipmentsResult,
+    priorityShipmentsResult,
+    taskSummaryResult,
+    myTasksResult,
+    documentCountResult,
+    chequeSummaryResult,
+    meetingRows,
+    quotationSummaryResult,
+    notificationResult,
+    changeResult,
+    usersResult,
+    dueSoonCheques,
+  ] = await Promise.all([
+    pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND status NOT IN ('DELIVERED', 'CLOSED'))::int AS active_shipments,
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND status = 'CUSTOMS')::int AS customs_shipments
+       FROM shipments
+       WHERE ($1::text IS NULL OR organization_id = $1)`,
+      [orgParam]
+    ),
+    pool.query(
+      `SELECT id, shipment_code, customer_name, status, destination, estimated_delivery_at, legacy_data
+       FROM shipments
+       WHERE archived_at IS NULL AND ($1::text IS NULL OR organization_id = $1)
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT 8`,
+      [orgParam]
+    ),
+    pool.query(
+      `SELECT id, shipment_code, customer_name, status, destination, estimated_delivery_at, legacy_data
+       FROM shipments
+       WHERE archived_at IS NULL
+         AND status IN ('ARRIVED', 'CUSTOMS', 'IN_TRANSIT')
+         AND ($1::text IS NULL OR organization_id = $1)
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT 6`,
+      [orgParam]
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE t.status NOT IN ('DONE', 'CANCELLED'))::int AS open_tasks,
+         COUNT(*) FILTER (WHERE t.status = 'DONE')::int AS completed_tasks
+       FROM tasks t
+       WHERE ($1::text IS NULL OR t.organization_id = $1)
+       ${taskVisibilitySql}`,
+      [orgParam, user.id, canViewAllTasks]
+    ),
+    pool.query(
+      `${taskSelect()}
+       WHERE ($1::text IS NULL OR t.organization_id = $1)
+         AND t.assigned_to_id = $2
+         AND t.status NOT IN ('DONE', 'CANCELLED')
+       ORDER BY t.updated_at DESC, t.created_at DESC
+       LIMIT 8`,
+      [orgParam, user.id]
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS documents
+       FROM documents
+       WHERE archived_at IS NULL
+          AND ($1::text IS NULL OR organization_id = $1)`,
+      [orgParam]
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND status = 'ACTIVE')::int AS active_cheques,
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND status = 'RETURNED')::int AS returned_cheques
+        FROM cheques
+        WHERE ($1::text IS NULL OR organization_id = $1)
+        ${chequeVisibilitySql}`,
+      [orgParam, user.id, canViewOrganizationCheques, canUseCheques]
+    ),
+    listComplianceMeetings(canViewCompliance ? { organizationId } : { organizationId, assignedToId: user.id }),
+    pool.query(
+      `SELECT COUNT(*) FILTER (WHERE archived_at IS NULL AND status = 'PENDING')::int AS active_quotations
+       FROM quotations
+       WHERE ($1::text IS NULL OR organization_id = $1)
+         AND $2::boolean`,
+      [orgParam, canViewQuotations]
+    ),
+    pool.query(
+      `SELECT * FROM notifications
+       WHERE user_id = $1 AND ($2::text IS NULL OR organization_id = $2) AND read_at IS NULL
+         AND id <> ALL($3::text[])
+       ORDER BY created_at DESC
+       LIMIT 20`,
+      [user.id, orgParam, ["n1", "n2", "n3", "n4"]]
+    ),
+    pool.query(
+      `SELECT c.*, u.name AS actor_name
+       FROM change_logs c
+       LEFT JOIN app_users u ON u.id = c.actor_user_id
+       WHERE ($1::text IS NULL OR c.organization_id = $1)
+       ORDER BY c.created_at DESC
+       LIMIT 10`,
+      [orgParam]
+    ),
+    pool.query(
+      `SELECT id, name, email, role, is_online, department, last_seen_at
+       FROM app_users
+       WHERE ($1::text IS NULL OR organization_id = $1)
+       ORDER BY is_online DESC, name ASC`,
+      [orgParam]
+    ),
+    canUseCheques
+      ? listDueSoonCheques({ organizationId, ownerUserId: canViewOrganizationCheques ? undefined : user.id })
+      : Promise.resolve([]),
+  ]);
+
+  const toDashboardShipment = (row) => ({
     id: row.id,
     trackingNumber: row.shipment_code,
     customerName: row.customer_name,
@@ -2178,21 +3393,21 @@ export async function getDashboardData(user, permissions = []) {
     destination: row.destination,
     estimatedDelivery: row.estimated_delivery_at,
     freeTimeDays: row.legacy_data?.freeTimeDays || 14,
-  }));
-  const activeShipments = shipments.filter((s) => !["DELIVERED", "CLOSED"].includes(s.status));
-  const customsShipments = shipments.filter((s) => s.status === "CUSTOMS");
-  const openTasks = taskRows.filter((task) => !["DONE", "CANCELLED"].includes(task.status));
-  const completedTasks = taskRows.filter((task) => task.status === "DONE");
-  const activeCheques = chequeRows.filter((cheque) => cheque.status === "ACTIVE");
-  const returnedCheques = chequeRows.filter((cheque) => cheque.status === "RETURNED");
+  });
+
+  const latestShipments = latestShipmentsResult.rows.map(toDashboardShipment);
+  const priorityShipments = priorityShipmentsResult.rows.map(toDashboardShipment);
+  const myTasks = myTasksResult.rows.map(toUiTask);
+  const shipmentSummary = shipmentSummaryResult.rows[0] || {};
+  const taskSummary = taskSummaryResult.rows[0] || {};
+  const chequeSummary = chequeSummaryResult.rows[0] || {};
+  const quotationSummary = quotationSummaryResult.rows[0] || {};
   const upcomingMeetings = meetingRows.filter((meeting) => !["COMPLETED", "CANCELLED"].includes(meeting.status));
   const missingMeetingDocs = meetingRows.flatMap((meeting) =>
     (meeting.requiredDocuments || [])
       .filter((doc) => doc.required && !doc.completed)
       .map((doc) => ({ meetingId: meeting.id, meetingTitle: meeting.purpose, documentName: doc.name }))
   );
-
-  const dueSoonCheques = await listDueSoonCheques({ organizationId, ownerUserId: canSeeAll ? undefined : user.id });
   const alerts = [
     ...notificationResult.rows.map((row) => ({
       id: row.id,
@@ -2215,36 +3430,34 @@ export async function getDashboardData(user, permissions = []) {
       title: "Missing compliance document",
       message: `${item.meetingTitle}: ${item.documentName}`,
       type: "WARNING",
-      link: "/compliance",
+      link: "/compliance-meetings",
       createdAt: new Date().toISOString(),
     })),
   ];
 
   return {
     summary: {
-      activeShipments: activeShipments.length,
-      customsShipments: customsShipments.length,
-      openTasks: openTasks.length,
-      completedTasks: completedTasks.length,
-      documents: documentRows.length,
-      activeCheques: activeCheques.length,
-      returnedCheques: returnedCheques.length,
+      activeShipments: Number(shipmentSummary.active_shipments || 0),
+      customsShipments: Number(shipmentSummary.customs_shipments || 0),
+      openTasks: Number(taskSummary.open_tasks || 0),
+      completedTasks: Number(taskSummary.completed_tasks || 0),
+      documents: Number(documentCountResult.rows[0]?.documents || 0),
+      activeCheques: Number(chequeSummary.active_cheques || 0),
+      returnedCheques: Number(chequeSummary.returned_cheques || 0),
       dueSoonCheques: dueSoonCheques.length,
       upcomingMeetings: upcomingMeetings.length,
       missingMeetingDocuments: missingMeetingDocs.length,
-      activeQuotations: quotationRows.filter((quote) => quote.status === "PENDING").length,
+      activeQuotations: Number(quotationSummary.active_quotations || 0),
     },
-    latestShipments: shipments.slice(0, 8),
-    priorityShipments: shipments
-      .filter((shipment) => ["ARRIVED", "CUSTOMS", "IN_TRANSIT"].includes(shipment.status))
-      .slice(0, 6),
-    myTasks: taskRows.filter((task) => task.assignedToUserId === user.id && task.status !== "DONE").slice(0, 8),
+    latestShipments,
+    priorityShipments,
+    myTasks,
     alerts,
     management: {
       recentChanges: changeResult.rows,
       users: usersResult.rows,
       onlineUsers: usersResult.rows.filter((row) => row.is_online).length,
-      recentlyCompletedTasks: completedTasks.slice(0, 8),
+      recentlyCompletedTasks: [],
     },
   };
 }
@@ -2281,6 +3494,9 @@ function toUiPlan(row) {
 
 function toUiSignupRequest(row) {
   if (!row) return null;
+  const hasPaidPayment = Boolean(row.has_paid_payment);
+  const hasReceipt = Boolean(row.has_receipt);
+  const abandonedCleanupEligible = isAbandonedSignupRow(row, { allowSuspendedUser: true });
   return {
     id: row.id,
     organizationId: row.organization_id,
@@ -2299,9 +3515,24 @@ function toUiSignupRequest(row) {
     paymentStatus: row.payment_status,
     paymentAmountIrr: Number(row.payment_amount_irr || 0),
     organizationStatus: row.organization_status,
+    subscriptionStatus: row.subscription_status,
+    userStatus: row.user_status,
+    hasPaidPayment,
+    hasReceipt,
+    abandonedCleanupEligible,
     createdAt: row.created_at,
     reviewedAt: row.reviewed_at,
   };
+}
+
+function isAbandonedSignupRow(row, { allowSuspendedUser = false } = {}) {
+  if (!row) return false;
+  if (row.has_paid_payment || row.has_receipt) return false;
+  if (["approved"].includes(row.status)) return false;
+  if (["active", "suspended", "cancelled"].includes(row.organization_status)) return false;
+  if (["active", "cancelled"].includes(row.subscription_status)) return false;
+  if (allowSuspendedUser) return !["active"].includes(row.user_status);
+  return ["pending"].includes(row.user_status || "pending");
 }
 
 function toUiContactRequest(row) {
@@ -2653,7 +3884,13 @@ function formatSmsDateTime(value) {
 }
 
 function formatSmsTaskTime(task) {
-  return formatSmsDateTime(task?.due_at || task?.legacy_data?.deadline || task?.legacy_data?.dueDate) || "در اولین فرصت";
+  const legacy = task?.legacy_data || {};
+  const dueDate = task?.due_at || legacy.dueDate || "";
+  const deadline = legacy.deadline || "";
+  const value = dueDate && deadline && !/[T\s]\d{1,2}:\d{2}/.test(String(dueDate))
+    ? `${dueDate} ${deadline}`
+    : dueDate || deadline;
+  return formatSmsDateTime(value) || "در اولین فرصت";
 }
 
 function meetingTemplateKey(windowName) {
@@ -3217,6 +4454,180 @@ export async function assertPlanAllowsUser(organizationId) {
   }
 }
 
+async function getRetryableSignupByOwnerEmail(email, userId) {
+  const result = await pool.query(
+    `SELECT sr.*, o.status AS organization_status, u.status AS user_status,
+            os.id AS subscription_id, os.status AS subscription_status,
+            bp.status AS payment_status,
+            EXISTS (
+              SELECT 1
+              FROM billing_payments paid
+              WHERE (paid.signup_request_id = sr.id OR paid.organization_id = sr.organization_id)
+                AND paid.status = 'paid'
+            ) AS has_paid_payment,
+            EXISTS (
+              SELECT 1
+              FROM billing_receipts receipt
+              LEFT JOIN billing_payments receipt_payment ON receipt_payment.id = receipt.payment_id
+              LEFT JOIN billing_invoices receipt_invoice ON receipt_invoice.id = receipt.invoice_id
+              WHERE receipt.organization_id = sr.organization_id
+                 OR receipt_payment.signup_request_id = sr.id
+                 OR receipt_invoice.signup_request_id = sr.id
+            ) AS has_receipt
+     FROM signup_requests sr
+     JOIN organizations o ON o.id = sr.organization_id
+     JOIN app_users u ON u.id = sr.owner_user_id
+     LEFT JOIN organization_subscriptions os ON os.organization_id = o.id
+     LEFT JOIN billing_payments bp ON bp.id = sr.payment_id
+     WHERE u.id = $2
+        OR lower(u.email) = lower($1)
+     ORDER BY sr.created_at DESC
+     LIMIT 1`,
+    [email, userId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const retryableSignup = ["payment_pending", "payment_failed", "pending_review"].includes(row.status);
+  const retryablePayment = !row.payment_status || ["pending", "failed", "superseded"].includes(row.payment_status);
+  return retryableSignup && retryablePayment && isAbandonedSignupRow(row) ? row : null;
+}
+
+async function retrySignupWithPayment(client, { signup, passwordHash, plan, retryable }) {
+  const paymentId = crypto.randomUUID();
+  const billingCycle = signup.billingCycle === "annual" ? "annual" : "monthly";
+  const amount = billingCycle === "annual" ? plan.annual_price_irr : plan.monthly_price_irr;
+  const ownerEmail = signup.ownerEmail || signup.contactEmail;
+  const ownerName = signup.ownerName || signup.contactName;
+
+  await client.query(
+    `UPDATE billing_payments
+     SET status = 'superseded',
+         updated_at = NOW(),
+         raw_verify = COALESCE(raw_verify, '{}'::jsonb) || $2::jsonb
+     WHERE (signup_request_id = $1 OR organization_id = $3)
+       AND status <> 'paid'`,
+    [retryable.id, JSON.stringify({ reason: "signup_retry", supersededAt: new Date().toISOString() }), retryable.organization_id]
+  );
+  await client.query(
+    `UPDATE billing_invoices
+     SET status = 'void',
+         updated_at = NOW(),
+         metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+     WHERE (signup_request_id = $1 OR organization_id = $3)
+       AND status = 'issued'`,
+    [retryable.id, JSON.stringify({ voidReason: "signup_retry" }), retryable.organization_id]
+  );
+  await client.query(
+    `UPDATE organizations
+     SET name = $2,
+         plan_id = $3,
+         contact_name = $4,
+         contact_email = $5,
+         contact_phone = $6,
+         notes = $7,
+         status = 'pending_payment',
+         legacy_data = $8::jsonb,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [
+      retryable.organization_id,
+      signup.companyName,
+      plan.id,
+      ownerName,
+      ownerEmail,
+      signup.contactPhone || "",
+      signup.notes || null,
+      JSON.stringify({ companySize: signup.companySize, expectedVolume: signup.expectedVolume }),
+    ]
+  );
+  await client.query(
+    `UPDATE app_users
+     SET name = $2,
+         email = $3,
+         password_hash = $4,
+         status = 'pending',
+         updated_at = NOW()
+     WHERE id = $1`,
+    [retryable.owner_user_id, ownerName, ownerEmail, passwordHash]
+  );
+  await client.query(
+    `INSERT INTO organization_members (organization_id, user_id, role, status)
+     VALUES ($1, $2, 'owner', 'pending')
+     ON CONFLICT (organization_id, user_id) DO UPDATE SET status = 'pending'`,
+    [retryable.organization_id, retryable.owner_user_id]
+  );
+  await client.query(
+    `UPDATE organization_subscriptions
+     SET plan_id = $2,
+         status = 'pending_payment',
+         billing_cycle = $3,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [retryable.subscription_id, plan.id, billingCycle]
+  );
+  await client.query(
+    `INSERT INTO billing_payments (
+       id, organization_id, signup_request_id, subscription_id, provider, status,
+       amount_irr, currency, description
+     )
+     VALUES ($1, $2, $3, $4, 'zarinpal', 'pending', $5, 'IRR', $6)`,
+    [paymentId, retryable.organization_id, retryable.id, retryable.subscription_id, amount, `Subscription ${plan.name} Logistic Plus`]
+  );
+  await client.query(
+    `UPDATE signup_requests
+     SET plan_id = $2,
+         company_name = $3,
+         contact_name = $4,
+         contact_email = $5,
+         contact_phone = $6,
+         company_size = $7,
+         expected_volume = $8,
+         notes = $9,
+         status = 'payment_pending',
+         payment_id = $10,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [
+      retryable.id,
+      plan.id,
+      signup.companyName,
+      ownerName,
+      ownerEmail,
+      signup.contactPhone || "",
+      signup.companySize || "",
+      signup.expectedVolume || "",
+      signup.notes || "",
+      paymentId,
+    ]
+  );
+  const invoiceId = await createIssuedInvoiceForPayment(client, {
+    organizationId: retryable.organization_id,
+    subscriptionId: retryable.subscription_id,
+    signupRequestId: retryable.id,
+    paymentId,
+    plan,
+    billingCycle,
+    amount,
+  });
+  await insertSubscriptionEvent(client, {
+    organizationId: retryable.organization_id,
+    subscriptionId: retryable.subscription_id,
+    eventType: "signup.payment_retry",
+    summary: "Signup payment was retried.",
+    after: { invoiceId, paymentId, planId: plan.id, billingCycle, amountIrr: Number(amount) },
+  });
+  await syncUsersCollectionForOrganization(client, retryable.organization_id, retryable.owner_user_id);
+  return {
+    signupRequestId: retryable.id,
+    organizationId: retryable.organization_id,
+    ownerUserId: retryable.owner_user_id,
+    paymentId,
+    invoiceId,
+    amountIrr: Number(amount),
+    plan: toUiPlan(plan),
+  };
+}
+
 export async function createSignupWithPayment({ signup, passwordHash }) {
   const plan = await getSubscriptionPlan(signup.planId || "starter");
   if (!plan) {
@@ -3226,12 +4637,28 @@ export async function createSignupWithPayment({ signup, passwordHash }) {
     throw error;
   }
 
-  const existing = await getUserByEmail(signup.ownerEmail || signup.contactEmail);
+  const ownerEmail = signup.ownerEmail || signup.contactEmail;
+  const existing = await getUserByEmail(ownerEmail);
   if (existing) {
-    const error = new Error("A user with this email already exists.");
-    error.statusCode = 409;
-    error.code = "EMAIL_EXISTS";
-    throw error;
+    const retryable = await getRetryableSignupByOwnerEmail(ownerEmail, existing.id);
+    if (!retryable) {
+      const error = new Error("A user with this email already exists.");
+      error.statusCode = 409;
+      error.code = "EMAIL_EXISTS";
+      throw error;
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const data = await retrySignupWithPayment(client, { signup, passwordHash, plan, retryable });
+      await client.query("COMMIT");
+      return data;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   const organizationId = crypto.randomUUID();
@@ -3489,6 +4916,7 @@ export async function markPaymentRequested(paymentId, { authority, gatewayUrl, r
     `UPDATE billing_payments
      SET gateway_authority = $2,
          gateway_url = $3,
+         status = 'pending',
          raw_request = $4::jsonb,
          requested_at = NOW(),
          updated_at = NOW()
@@ -3499,61 +4927,13 @@ export async function markPaymentRequested(paymentId, { authority, gatewayUrl, r
   return result.rows[0] || null;
 }
 
+export async function markPaymentVerifiedByAuthorityWithResult(authority, { ok, refId, rawVerify }) {
+  return markPaymentVerifiedByAuthorityInRepository(pool, authority, { ok, refId, rawVerify });
+}
+
 export async function markPaymentVerifiedByAuthority(authority, { ok, refId, rawVerify }) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const paymentResult = await client.query(
-      `UPDATE billing_payments
-       SET status = $2,
-           gateway_ref_id = COALESCE($3, gateway_ref_id),
-           raw_verify = $4::jsonb,
-           verified_at = CASE WHEN $2 = 'paid' THEN NOW() ELSE verified_at END,
-           failed_at = CASE WHEN $2 = 'failed' THEN NOW() ELSE failed_at END,
-           updated_at = NOW()
-       WHERE gateway_authority = $1
-       RETURNING *`,
-      [authority, ok ? "paid" : "failed", refId || null, JSON.stringify(rawVerify || {})]
-    );
-    const payment = paymentResult.rows[0];
-    if (payment) {
-      if (ok) {
-        await closeInvoiceForPayment(client, payment);
-      }
-      await client.query(
-        `UPDATE signup_requests
-         SET status = $2, updated_at = NOW()
-         WHERE id = $1`,
-        [payment.signup_request_id, ok ? "pending_review" : "payment_failed"]
-      );
-      await client.query(
-        `UPDATE organizations
-         SET status = $2, updated_at = NOW()
-         WHERE id = $1`,
-        [payment.organization_id, ok ? "pending_review" : "payment_failed"]
-      );
-      await client.query(
-        `UPDATE organization_subscriptions
-         SET status = $2, updated_at = NOW()
-         WHERE id = $1`,
-        [payment.subscription_id, ok ? "pending_review" : "payment_failed"]
-      );
-      await insertSubscriptionEvent(client, {
-        organizationId: payment.organization_id,
-        subscriptionId: payment.subscription_id,
-        eventType: ok ? "payment.verified" : "payment.failed",
-        summary: ok ? "Payment was verified and invoice was paid." : "Payment verification failed.",
-        after: { paymentId: payment.id, status: ok ? "paid" : "failed", refId },
-      });
-    }
-    await client.query("COMMIT");
-    return payment || null;
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+  const result = await markPaymentVerifiedByAuthorityWithResult(authority, { ok, refId, rawVerify });
+  return result.payment || null;
 }
 
 export async function listSignupRequests({ status } = {}) {
@@ -3562,16 +4942,165 @@ export async function listSignupRequests({ status } = {}) {
   if (status) values.push(status);
   const result = await pool.query(
     `SELECT sr.*, sp.name AS plan_name, bp.status AS payment_status, bp.amount_irr AS payment_amount_irr,
-            o.status AS organization_status
+            o.status AS organization_status,
+            u.status AS user_status,
+            os.status AS subscription_status,
+            EXISTS (
+              SELECT 1
+              FROM billing_payments paid
+              WHERE (paid.signup_request_id = sr.id OR paid.organization_id = sr.organization_id)
+                AND paid.status = 'paid'
+            ) AS has_paid_payment,
+            EXISTS (
+              SELECT 1
+              FROM billing_receipts receipt
+              LEFT JOIN billing_payments receipt_payment ON receipt_payment.id = receipt.payment_id
+              LEFT JOIN billing_invoices receipt_invoice ON receipt_invoice.id = receipt.invoice_id
+              WHERE receipt.organization_id = sr.organization_id
+                 OR receipt_payment.signup_request_id = sr.id
+                 OR receipt_invoice.signup_request_id = sr.id
+            ) AS has_receipt
      FROM signup_requests sr
      LEFT JOIN subscription_plans sp ON sp.id = sr.plan_id
      LEFT JOIN billing_payments bp ON bp.id = sr.payment_id
      LEFT JOIN organizations o ON o.id = sr.organization_id
+     LEFT JOIN app_users u ON u.id = sr.owner_user_id
+     LEFT JOIN organization_subscriptions os ON os.organization_id = sr.organization_id
      ${where}
      ORDER BY sr.created_at DESC`,
     values
   );
   return result.rows.map(toUiSignupRequest);
+}
+
+async function getSignupRequestLifecycle(client, requestId, { forUpdate = false } = {}) {
+  const result = await client.query(
+    `SELECT sr.*, sp.name AS plan_name, bp.status AS payment_status, bp.amount_irr AS payment_amount_irr,
+            o.status AS organization_status,
+            u.status AS user_status,
+            os.id AS subscription_id,
+            os.status AS subscription_status,
+            EXISTS (
+              SELECT 1
+              FROM billing_payments paid
+              WHERE (paid.signup_request_id = sr.id OR paid.organization_id = sr.organization_id)
+                AND paid.status = 'paid'
+            ) AS has_paid_payment,
+            EXISTS (
+              SELECT 1
+              FROM billing_receipts receipt
+              LEFT JOIN billing_payments receipt_payment ON receipt_payment.id = receipt.payment_id
+              LEFT JOIN billing_invoices receipt_invoice ON receipt_invoice.id = receipt.invoice_id
+              WHERE receipt.organization_id = sr.organization_id
+                 OR receipt_payment.signup_request_id = sr.id
+                 OR receipt_invoice.signup_request_id = sr.id
+            ) AS has_receipt
+     FROM signup_requests sr
+     LEFT JOIN subscription_plans sp ON sp.id = sr.plan_id
+     LEFT JOIN billing_payments bp ON bp.id = sr.payment_id
+     LEFT JOIN organizations o ON o.id = sr.organization_id
+     LEFT JOIN app_users u ON u.id = sr.owner_user_id
+     LEFT JOIN organization_subscriptions os ON os.organization_id = sr.organization_id
+     WHERE sr.id = $1
+     ${forUpdate ? "FOR UPDATE OF sr" : ""}`,
+    [requestId]
+  );
+  return result.rows[0] || null;
+}
+
+async function getAbandonedSignupDeleteBlockers(client, row) {
+  const blockers = [];
+  if (!row.organization_id || !row.owner_user_id) blockers.push("SIGNUP_GRAPH_INCOMPLETE");
+  if (row.has_paid_payment) blockers.push("PAID_PAYMENT_EXISTS");
+  if (row.has_receipt) blockers.push("RECEIPT_EXISTS");
+  if (row.status === "approved") blockers.push("SIGNUP_APPROVED");
+  if (row.organization_status === "active") blockers.push("ORGANIZATION_ACTIVE");
+  if (row.subscription_status === "active") blockers.push("SUBSCRIPTION_ACTIVE");
+  if (row.user_status === "active") blockers.push("OWNER_USER_ACTIVE");
+  if (!row.organization_id) return blockers;
+
+  const counts = await client.query(
+    `SELECT
+       (SELECT COUNT(*)::int FROM app_users WHERE organization_id = $1 AND id <> $2) AS other_users,
+       (SELECT COUNT(*)::int FROM customers WHERE organization_id = $1) AS customers,
+       (SELECT COUNT(*)::int FROM shipments WHERE organization_id = $1) AS shipments,
+       (SELECT COUNT(*)::int FROM tasks WHERE organization_id = $1) AS tasks,
+       (SELECT COUNT(*)::int FROM documents WHERE organization_id = $1) AS documents,
+       (SELECT COUNT(*)::int FROM cheques WHERE organization_id = $1) AS cheques,
+       (SELECT COUNT(*)::int FROM compliance_meetings WHERE organization_id = $1) AS compliance_meetings,
+       (SELECT COUNT(*)::int FROM quotations WHERE organization_id = $1) AS quotations,
+       (SELECT COUNT(*)::int FROM archive_records WHERE organization_id = $1) AS archive_records,
+       (SELECT COUNT(*)::int FROM chat_threads WHERE organization_id = $1) AS chat_threads`,
+    [row.organization_id, row.owner_user_id]
+  );
+  const recordCounts = counts.rows[0] || {};
+  if (Number(recordCounts.other_users || 0) > 0) blockers.push("ORGANIZATION_HAS_OTHER_USERS");
+  for (const [key, value] of Object.entries(recordCounts)) {
+    if (key !== "other_users" && Number(value || 0) > 0) blockers.push(`HAS_${key.toUpperCase()}`);
+  }
+  return blockers;
+}
+
+export async function deleteAbandonedSignupRequest(requestId, { actorUserId } = {}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const row = await getSignupRequestLifecycle(client, requestId, { forUpdate: true });
+    if (!row) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const blockers = await getAbandonedSignupDeleteBlockers(client, row);
+    if (blockers.length || !isAbandonedSignupRow(row, { allowSuspendedUser: true })) {
+      const error = new Error("This signup is not an abandoned unpaid signup.");
+      error.statusCode = 409;
+      error.code = "ABANDONED_SIGNUP_DELETE_BLOCKED";
+      error.blockers = blockers.length ? blockers : ["NOT_ABANDONED_SIGNUP"];
+      throw error;
+    }
+
+    const organizationId = row.organization_id;
+    const ownerUserId = row.owner_user_id;
+    const releasedEmail = row.contact_email;
+
+    await client.query("DELETE FROM app_sessions WHERE user_id = $1", [ownerUserId]);
+    await client.query("DELETE FROM login_sms_challenges WHERE user_id = $1", [ownerUserId]);
+    await client.query(
+      `DELETE FROM billing_invoice_items
+       WHERE invoice_id IN (
+         SELECT id
+         FROM billing_invoices
+         WHERE signup_request_id = $1 OR organization_id = $2 OR payment_id IN (
+           SELECT id FROM billing_payments WHERE signup_request_id = $1 OR organization_id = $2
+         )
+       )`,
+      [requestId, organizationId]
+    );
+    await client.query(
+      "DELETE FROM billing_invoices WHERE signup_request_id = $1 OR organization_id = $2",
+      [requestId, organizationId]
+    );
+    await client.query(
+      "DELETE FROM billing_payments WHERE signup_request_id = $1 OR organization_id = $2",
+      [requestId, organizationId]
+    );
+    await client.query("DELETE FROM subscription_events WHERE organization_id = $1", [organizationId]);
+    await client.query("DELETE FROM user_records WHERE organization_id = $1 OR owner_user_id = $2", [organizationId, ownerUserId]);
+    await client.query("DELETE FROM notifications WHERE organization_id = $1 OR user_id = $2", [organizationId, ownerUserId]);
+    await client.query("DELETE FROM organization_members WHERE organization_id = $1 OR user_id = $2", [organizationId, ownerUserId]);
+    await client.query("DELETE FROM signup_requests WHERE id = $1", [requestId]);
+    await client.query("DELETE FROM organization_subscriptions WHERE organization_id = $1", [organizationId]);
+    await client.query("DELETE FROM app_users WHERE id = $1 AND organization_id = $2", [ownerUserId, organizationId]);
+    await client.query("DELETE FROM organizations WHERE id = $1", [organizationId]);
+    await client.query("COMMIT");
+    return { id: requestId, deleted: true, releasedEmail, organizationId, ownerUserId, actorUserId: actorUserId || null };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function createContactRequest(request = {}, requestContext = {}) {
@@ -4404,11 +5933,13 @@ export async function createAppUserRecord({ actorUserId, user, passwordHash }) {
   }
 }
 
-export async function updateAppUserRecord(userId, updates, syncOwnerUserId) {
+export async function updateAppUserRecord(userId, updates, syncOwnerUserId, { organizationId, syncOrganizationId } = {}) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const before = await client.query("SELECT * FROM app_users WHERE id = $1", [userId]);
+    const beforeValues = [userId];
+    const beforeOrganizationFilter = organizationId ? ` AND organization_id = $${beforeValues.push(organizationId)}` : "";
+    const before = await client.query(`SELECT * FROM app_users WHERE id = $1 ${beforeOrganizationFilter}`, beforeValues);
     const result = await client.query(
       `UPDATE app_users
        SET name = COALESCE($2, name),
@@ -4422,6 +5953,7 @@ export async function updateAppUserRecord(userId, updates, syncOwnerUserId) {
            bio = COALESCE($10, bio),
            updated_at = NOW()
        WHERE id = $1
+         AND ($11::text IS NULL OR organization_id = $11)
        RETURNING id, name, email, role, avatar, is_online, department, status, last_seen_at,
                  phone, location, bio, two_factor_enabled, notification_preferences, organization_id`,
       [
@@ -4435,6 +5967,7 @@ export async function updateAppUserRecord(userId, updates, syncOwnerUserId) {
         updates.phone || null,
         updates.location || null,
         updates.bio || null,
+        organizationId || null,
       ]
     );
     if (result.rows[0]?.organization_id && updates.status) {
@@ -4443,7 +5976,11 @@ export async function updateAppUserRecord(userId, updates, syncOwnerUserId) {
         [result.rows[0].organization_id, userId, updates.status]
       );
     }
-    await syncUsersCollection(client, syncOwnerUserId);
+    if (syncOrganizationId || result.rows[0]?.organization_id) {
+      await syncUsersCollectionForOrganization(client, syncOrganizationId || result.rows[0]?.organization_id, syncOwnerUserId);
+    } else {
+      await syncUsersCollection(client, syncOwnerUserId);
+    }
     await client.query("COMMIT");
     return { before: before.rows[0] || null, after: result.rows[0] || null };
   } catch (error) {
@@ -4454,44 +5991,57 @@ export async function updateAppUserRecord(userId, updates, syncOwnerUserId) {
   }
 }
 
-export async function listCustomersDetailed({ includeArchived = false, search = "", organizationId } = {}) {
-  const values = [];
-  const conditions = [];
-  if (!includeArchived) conditions.push("c.archived_at IS NULL");
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`c.organization_id = $${values.length}`);
+export async function previewAppUserDeletion(userId, { organizationId, actorUserId } = {}) {
+  return previewUserDeletionFromRepository(pool, userId, { organizationId, actorUserId });
+}
+
+export async function deleteAppUserRecord(userId, { organizationId, actorUserId } = {}) {
+  const preview = await previewAppUserDeletion(userId, { organizationId, actorUserId });
+  if (!preview) return { before: null, deleted: false, preview: null };
+  if (!preview.canDelete) {
+    const error = new Error("User cannot be permanently deleted.");
+    error.statusCode = 409;
+    error.code = "USER_DELETE_BLOCKED";
+    error.blockers = preview.blockers;
+    throw error;
   }
-  if (search) {
-    values.push(`%${String(search).toLowerCase()}%`);
-    conditions.push(
-      `(lower(c.company_name) LIKE $${values.length} OR lower(COALESCE(c.contact_name, '')) LIKE $${values.length} OR lower(COALESCE(c.email, '')) LIKE $${values.length} OR lower(COALESCE(c.phone, '')) LIKE $${values.length})`
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const before = await client.query(
+      "SELECT * FROM app_users WHERE id = $1 AND organization_id = $2 FOR UPDATE",
+      [userId, organizationId]
     );
+    if (!before.rows[0]) {
+      await client.query("ROLLBACK");
+      return { before: null, deleted: false, preview: null };
+    }
+    await client.query(
+      "DELETE FROM user_records WHERE owner_user_id = $1 OR (collection = 'users' AND item_id = $1)",
+      [userId]
+    );
+    await client.query(
+      "DELETE FROM app_users WHERE id = $1 AND organization_id = $2",
+      [userId, organizationId]
+    );
+    await syncUsersCollectionForOrganization(client, organizationId, actorUserId);
+    await client.query("COMMIT");
+    return { before: before.rows[0], deleted: true, preview };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  const result = await pool.query(
-    `SELECT c.*, COUNT(s.id)::int AS shipment_count
-     FROM customers c
-     LEFT JOIN shipments s ON s.customer_id = c.id AND s.archived_at IS NULL
-     ${where}
-     GROUP BY c.id
-     ORDER BY c.updated_at DESC`,
-    values
-  );
-  return result.rows.map((row) => ({
-    ...toUiCustomer({ ...row, legacy_data: { ...(row.legacy_data || {}), shipmentsCount: row.shipment_count } }),
-    duplicateWarning: false,
-  }));
+}
+
+export async function listCustomersDetailed({ includeArchived = false, search = "", organizationId } = {}) {
+  return listCustomersDetailedFromRepository(pool, { includeArchived, search, organizationId });
 }
 
 export async function getCustomerRecord(id, { organizationId } = {}) {
-  const values = [id];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `SELECT * FROM customers WHERE id = $1 ${organizationFilter} LIMIT 1`,
-    values
-  );
-  return toUiCustomer(result.rows[0]);
+  return getCustomerRecordFromRepository(pool, id, { organizationId });
 }
 
 export async function createCustomerRecord({ ownerUserId, actorUserId, customer }) {
@@ -4499,10 +6049,12 @@ export async function createCustomerRecord({ ownerUserId, actorUserId, customer 
   const id = customer.id || crypto.randomUUID();
   try {
     await client.query("BEGIN");
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    const scopedOrganizationId = requireOrganizationScope(owner.rows[0]?.organization_id, "createCustomerRecord");
     if (customer.email) {
       const duplicate = await client.query(
-        "SELECT id FROM customers WHERE lower(email) = lower($1) AND archived_at IS NULL LIMIT 1",
-        [customer.email]
+        "SELECT id FROM customers WHERE lower(email) = lower($1) AND organization_id = $2 AND archived_at IS NULL LIMIT 1",
+        [customer.email, scopedOrganizationId]
       );
       if (duplicate.rows[0]) {
         const error = new Error("A customer with this email already exists.");
@@ -4516,10 +6068,11 @@ export async function createCustomerRecord({ ownerUserId, actorUserId, customer 
          id, organization_id, owner_user_id, company_name, contact_name, email, phone, address,
          notes, status, legacy_data, created_by_id, updated_at
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, 'active', $9::jsonb, $10, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10::jsonb, $11, NOW())
        RETURNING *`,
       [
         id,
+        scopedOrganizationId,
         ownerUserId,
         customer.company || customer.companyName || customer.name,
         customer.name || customer.contactName || null,
@@ -4544,11 +6097,13 @@ export async function createCustomerRecord({ ownerUserId, actorUserId, customer 
 
 export async function updateCustomerRecord(id, updates, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateCustomerRecord");
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
-    const before = await client.query(`SELECT * FROM customers WHERE id = $1 ${organizationFilter}`, beforeValues);
+    const before = await client.query(
+      "SELECT * FROM customers WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
+    );
     const current = before.rows[0];
     if (!current) {
       await client.query("ROLLBACK");
@@ -4556,8 +6111,8 @@ export async function updateCustomerRecord(id, updates, { organizationId } = {})
     }
     if (updates.email && updates.email !== current.email) {
       const duplicate = await client.query(
-        "SELECT id FROM customers WHERE lower(email) = lower($1) AND id <> $2 AND archived_at IS NULL LIMIT 1",
-        [updates.email, id]
+        "SELECT id FROM customers WHERE lower(email) = lower($1) AND id <> $2 AND organization_id = $3 AND archived_at IS NULL LIMIT 1",
+        [updates.email, id, scopedOrganizationId]
       );
       if (duplicate.rows[0]) {
         const error = new Error("A customer with this email already exists.");
@@ -4577,7 +6132,7 @@ export async function updateCustomerRecord(id, updates, { organizationId } = {})
            status = COALESCE($8, status),
            legacy_data = legacy_data || $9::jsonb,
            updated_at = NOW()
-       WHERE id = $1
+       WHERE id = $1 AND organization_id = $10
        RETURNING *`,
       [
         id,
@@ -4589,6 +6144,7 @@ export async function updateCustomerRecord(id, updates, { organizationId } = {})
         updates.notes || null,
         updates.status || null,
         JSON.stringify(updates || {}),
+        scopedOrganizationId,
       ]
     );
     await syncCustomerUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
@@ -4604,11 +6160,13 @@ export async function updateCustomerRecord(id, updates, { organizationId } = {})
 
 export async function archiveCustomerRecord(id, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "archiveCustomerRecord");
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
-    const before = await client.query(`SELECT * FROM customers WHERE id = $1 ${organizationFilter}`, beforeValues);
+    const before = await client.query(
+      "SELECT * FROM customers WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
+    );
     if (!before.rows[0]) {
       await client.query("ROLLBACK");
       return { before: null, after: null };
@@ -4616,9 +6174,9 @@ export async function archiveCustomerRecord(id, { organizationId } = {}) {
     const result = await client.query(
       `UPDATE customers
        SET archived_at = COALESCE(archived_at, NOW()), status = 'archived', updated_at = NOW()
-       WHERE id = $1
+       WHERE id = $1 AND organization_id = $2
        RETURNING *`,
-      [id]
+      [id, scopedOrganizationId]
     );
     await syncCustomerUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
     await client.query("COMMIT");
@@ -4632,13 +6190,14 @@ export async function archiveCustomerRecord(id, { organizationId } = {}) {
 }
 
 export async function listCustomerRelated(id, type, { organizationId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listCustomerRelated");
   if (!(await getCustomerRecord(id, { organizationId }))) return null;
   if (type === "shipments") {
     const result = await pool.query(
       `SELECT * FROM shipments
-       WHERE customer_id = $1 AND ($2::text IS NULL OR organization_id = $2)
+       WHERE customer_id = $1 AND organization_id = $2
        ORDER BY updated_at DESC`,
-      [id, organizationId || null]
+      [id, scopedOrganizationId]
     );
     return result.rows.map((row) => ({
       id: row.id,
@@ -4659,9 +6218,9 @@ export async function listCustomerRelated(id, type, { organizationId } = {}) {
   if (type === "cheques") {
     const result = await pool.query(
       `SELECT * FROM cheques
-       WHERE customer_id = $1 AND ($2::text IS NULL OR organization_id = $2)
+       WHERE customer_id = $1 AND organization_id = $2
        ORDER BY updated_at DESC`,
-      [id, organizationId || null]
+      [id, scopedOrganizationId]
     );
     return result.rows.map(toUiCheque);
   }
@@ -4671,10 +6230,9 @@ export async function listCustomerRelated(id, type, { organizationId } = {}) {
 export async function listQuotations({ ownerUserId, customerId, organizationId, includeArchived = false } = {}) {
   const conditions = [];
   const values = [];
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`organization_id = $${values.length}`);
-  }
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listQuotations");
+  values.push(scopedOrganizationId);
+  conditions.push(`organization_id = $${values.length}`);
   if (ownerUserId) {
     values.push(ownerUserId);
     conditions.push(`owner_user_id = $${values.length}`);
@@ -4691,7 +6249,7 @@ export async function listQuotations({ ownerUserId, customerId, organizationId, 
 
 export async function getQuotationRecord(id, { organizationId } = {}) {
   const values = [id];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
+  const organizationFilter = organizationScopeClause(values, organizationId, "organization_id", "getQuotationRecord");
   const result = await pool.query(`SELECT * FROM quotations WHERE id = $1 ${organizationFilter} LIMIT 1`, values);
   return result.rows[0] || null;
 }
@@ -4701,6 +6259,8 @@ export async function createQuotationRecord({ ownerUserId, actorUserId, quote })
   const id = quote.id || crypto.randomUUID();
   try {
     await client.query("BEGIN");
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    requireOrganizationScope(owner.rows[0]?.organization_id, "createQuotationRecord");
     const result = await client.query(
       `INSERT INTO quotations (
          id, organization_id, owner_user_id, quotation_number, customer_id, customer_name, customer_phone,
@@ -4755,11 +6315,13 @@ export async function createQuotationRecord({ ownerUserId, actorUserId, quote })
 
 export async function updateQuotationRecord(id, updates, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateQuotationRecord");
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
-    const before = await client.query(`SELECT * FROM quotations WHERE id = $1 ${organizationFilter}`, beforeValues);
+    const before = await client.query(
+      "SELECT * FROM quotations WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
+    );
     if (!before.rows[0]) {
       await client.query("ROLLBACK");
       return { before: null, after: null };
@@ -4790,8 +6352,8 @@ export async function updateQuotationRecord(id, updates, { organizationId } = {}
            legacy_data = legacy_data || $23::jsonb,
            archived_at = CASE WHEN $24::boolean THEN COALESCE(archived_at, NOW()) ELSE archived_at END,
            updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
+        WHERE id = $1 AND organization_id = $25
+        RETURNING *`,
       [
         id,
         updates.customerId || null,
@@ -4817,6 +6379,7 @@ export async function updateQuotationRecord(id, updates, { organizationId } = {}
         updates.notes || null,
         JSON.stringify(updates || {}),
         Boolean(updates.isArchived || updates.status === "ARCHIVED"),
+        scopedOrganizationId,
       ]
     );
     await syncQuoteUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
@@ -4834,11 +6397,13 @@ export async function setQuotationStatus(id, status, extra = {}, { organizationI
   const timestampColumn =
     status === "ACCEPTED" ? "accepted_at" : status === "REJECTED" ? "rejected_at" : status === "EXPIRED" ? "expired_at" : null;
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "setQuotationStatus");
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
-    const before = await client.query(`SELECT * FROM quotations WHERE id = $1 ${organizationFilter}`, beforeValues);
+    const before = await client.query(
+      "SELECT * FROM quotations WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
+    );
     if (!before.rows[0]) {
       await client.query("ROLLBACK");
       return { before: null, after: null };
@@ -4850,9 +6415,9 @@ export async function setQuotationStatus(id, status, extra = {}, { organizationI
            ${timestampColumn ? `${timestampColumn} = COALESCE(${timestampColumn}, NOW()),` : ""}
            archived_at = CASE WHEN $2 = 'ARCHIVED' THEN COALESCE(archived_at, NOW()) ELSE archived_at END,
            updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
-      [id, status, extra.notes || extra.reason || null]
+        WHERE id = $1 AND organization_id = $4
+        RETURNING *`,
+      [id, status, extra.notes || extra.reason || null, scopedOrganizationId]
     );
     await syncQuoteUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
     await client.query("COMMIT");
@@ -4867,11 +6432,13 @@ export async function setQuotationStatus(id, status, extra = {}, { organizationI
 
 export async function convertQuotationToShipment(id, actorUserId, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "convertQuotationToShipment");
   try {
     await client.query("BEGIN");
-    const quoteValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${quoteValues.push(organizationId)}` : "";
-    const quoteResult = await client.query(`SELECT * FROM quotations WHERE id = $1 ${organizationFilter}`, quoteValues);
+    const quoteResult = await client.query(
+      "SELECT * FROM quotations WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
+    );
     const quote = quoteResult.rows[0];
     if (!quote) {
       await client.query("ROLLBACK");
@@ -4903,9 +6470,9 @@ export async function convertQuotationToShipment(id, actorUserId, { organization
       `UPDATE quotations
        SET status = 'ACCEPTED', accepted_at = COALESCE(accepted_at, NOW()),
            converted_shipment_id = $2, updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
-      [id, shipmentId]
+        WHERE id = $1 AND organization_id = $3
+        RETURNING *`,
+      [id, shipmentId, scopedOrganizationId]
     );
     await syncQuoteUserRecord(client, quote.owner_user_id, updated.rows[0]);
     await client.query("COMMIT");
@@ -4939,14 +6506,11 @@ const archiveTables = {
 };
 
 export async function listArchiveRecords({ search = "", organizationId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listArchiveRecords");
   const records = [];
   for (const [entityType, config] of Object.entries(archiveTables)) {
-    const values = [];
-    const conditions = ["archived_at IS NOT NULL"];
-    if (organizationId) {
-      values.push(organizationId);
-      conditions.push(`organization_id = $${values.length}`);
-    }
+    const values = [scopedOrganizationId];
+    const conditions = ["archived_at IS NOT NULL", "organization_id = $1"];
     const result = await pool.query(
       `SELECT * FROM ${config.table} WHERE ${conditions.join(" AND ")} ORDER BY archived_at DESC`,
       values
@@ -4984,112 +6548,119 @@ export async function listArchiveRecords({ search = "", organizationId } = {}) {
 export async function archiveEntityRecord(entityType, entityId, actorUserId, { organizationId } = {}) {
   const config = archiveTables[entityType];
   if (!config) return null;
-  const values = [entityId];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `UPDATE ${config.table}
-     SET archived_at = COALESCE(archived_at, NOW()), updated_at = NOW()
-     WHERE ${config.id} = $1 ${organizationFilter}
-     RETURNING *`,
-    values
-  );
-  const row = result.rows[0];
-  if (!row) return null;
-  await pool.query(
-    `INSERT INTO archive_records (
-       id, organization_id, owner_user_id, entity_type, entity_id, title, summary,
-       customer_name, shipment_id, archived_by_id, archived_at, legacy_data
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()), $12::jsonb)
-     ON CONFLICT (entity_type, entity_id) DO UPDATE SET
-       organization_id = EXCLUDED.organization_id,
-       title = EXCLUDED.title,
-       archived_at = EXCLUDED.archived_at,
-       restored_at = NULL,
-       legacy_data = EXCLUDED.legacy_data`,
-    [
-      crypto.randomUUID(),
-      row.organization_id || organizationId || null,
-      row.owner_user_id || actorUserId || null,
-      entityType,
-      entityId,
-      archiveTitle(entityType, row),
-      `${entityType} archived`,
-      row.customer_name || row.company_name || null,
-      row.shipment_id || (entityType === "shipment" ? row.id : null),
-      actorUserId || null,
-      row.archived_at,
-      JSON.stringify(row.legacy_data || {}),
-    ]
-  );
-  return row;
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "archiveEntityRecord");
+
+  return withTransaction(pool, async (client) => {
+    const result = await client.query(
+      `UPDATE ${config.table}
+       SET archived_at = COALESCE(archived_at, NOW()), updated_at = NOW()
+       WHERE ${config.id} = $1 AND organization_id = $2
+       RETURNING *`,
+      [entityId, scopedOrganizationId]
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    await client.query(
+      `INSERT INTO archive_records (
+         id, organization_id, owner_user_id, entity_type, entity_id, title, summary,
+         customer_name, shipment_id, archived_by_id, archived_at, legacy_data
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()), $12::jsonb)
+       ON CONFLICT (entity_type, entity_id) DO UPDATE SET
+         organization_id = EXCLUDED.organization_id,
+         title = EXCLUDED.title,
+         archived_at = EXCLUDED.archived_at,
+         restored_at = NULL,
+         legacy_data = EXCLUDED.legacy_data`,
+      [
+        crypto.randomUUID(),
+        row.organization_id || scopedOrganizationId,
+        row.owner_user_id || actorUserId || null,
+        entityType,
+        entityId,
+        archiveTitle(entityType, row),
+        `${entityType} archived`,
+        row.customer_name || row.company_name || null,
+        row.shipment_id || (entityType === "shipment" ? row.id : null),
+        actorUserId || null,
+        row.archived_at,
+        JSON.stringify(row.legacy_data || {}),
+      ]
+    );
+    if (entityType === "document") {
+      await syncDocumentUserRecord(client, row.owner_user_id, row);
+    }
+    return row;
+  });
 }
 
 export async function restoreEntityRecord(entityType, entityId, { organizationId } = {}) {
   const config = archiveTables[entityType];
   if (!config) return null;
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "restoreEntityRecord");
   const statusReset = {
     customer: ", status = 'active'",
     quotation: ", status = 'PENDING'",
     cheque: ", status = 'CLEARED'",
     compliance_meeting: ", status = 'SCHEDULED'",
   }[entityType] || "";
-  const values = [entityId];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `UPDATE ${config.table}
-     SET archived_at = NULL, updated_at = NOW()${statusReset}
-     WHERE ${config.id} = $1 ${organizationFilter}
-     RETURNING *`,
-    values
-  );
-  const row = result.rows[0] || null;
-  if (!row) return null;
-  await pool.query(
-    `UPDATE archive_records
-     SET restored_at = NOW()
-     WHERE entity_type = $1
-       AND entity_id = $2
-       AND ($3::text IS NULL OR organization_id = $3)`,
-    [entityType, entityId, organizationId || null]
-  );
-  if (entityType === "document") {
-    await syncDocumentUserRecord(pool, row.owner_user_id, row);
-  }
-  return row;
+
+  return withTransaction(pool, async (client) => {
+    const result = await client.query(
+      `UPDATE ${config.table}
+       SET archived_at = NULL, updated_at = NOW()${statusReset}
+       WHERE ${config.id} = $1 AND organization_id = $2
+       RETURNING *`,
+      [entityId, scopedOrganizationId]
+    );
+    const row = result.rows[0] || null;
+    if (!row) return null;
+    await client.query(
+      `UPDATE archive_records
+       SET restored_at = NOW()
+       WHERE entity_type = $1
+         AND entity_id = $2
+         AND organization_id = $3`,
+      [entityType, entityId, scopedOrganizationId]
+    );
+    if (entityType === "document") {
+      await syncDocumentUserRecord(client, row.owner_user_id, row);
+    }
+    return row;
+  });
 }
 
 export async function deleteArchivedEntityRecord(entityType, entityId, { organizationId } = {}) {
   const config = archiveTables[entityType];
   if (!config) return null;
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "deleteArchivedEntityRecord");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const values = [entityId];
-    const conditions = [`${config.id} = $1`, "archived_at IS NOT NULL"];
-    if (organizationId) {
-      values.push(organizationId);
-      conditions.push(`organization_id = $${values.length}`);
-    }
     const result = await client.query(
       `DELETE FROM ${config.table}
-       WHERE ${conditions.join(" AND ")}
+       WHERE ${config.id} = $1
+         AND organization_id = $2
+         AND archived_at IS NOT NULL
        RETURNING *`,
-      values
+      [entityId, scopedOrganizationId]
     );
     const row = result.rows[0];
     if (!row) {
       await client.query("ROLLBACK");
       return null;
     }
-    await client.query("DELETE FROM archive_records WHERE entity_type = $1 AND entity_id = $2", [entityType, entityId]);
+    await client.query(
+      "DELETE FROM archive_records WHERE entity_type = $1 AND entity_id = $2 AND organization_id = $3",
+      [entityType, entityId, scopedOrganizationId]
+    );
     if (entityType === "document") {
       await client.query(
         `DELETE FROM user_records
          WHERE collection = 'documents'
            AND item_id = $1
-           AND ($2::text IS NULL OR organization_id = $2)`,
-        [entityId, organizationId || null]
+           AND organization_id = $2`,
+        [entityId, scopedOrganizationId]
       );
     }
     await client.query("COMMIT");
@@ -5434,125 +7005,25 @@ export function hashCustomerAccessToken(token) {
   return crypto.createHash("sha256").update(String(token || "")).digest("hex");
 }
 
-function publicStatusFromShipment(row) {
-  const labels = {
-    PENDING: "Shipment is being prepared",
-    BOOKED: "Shipment is booked",
-    IN_TRANSIT: "Shipment is in transit",
-    ARRIVED: "Shipment has arrived",
-    CUSTOMS: "Shipment is in customs review",
-    CLEARED: "Shipment is cleared",
-    DELIVERED: "Shipment is delivered",
-    CLOSED: "Shipment is closed",
-  };
-
-  return {
-    label: row.public_label || labels[row.status] || "Shipment status updated",
-    description:
-      row.public_description ||
-      "Your shipment is being handled by our operations team.",
-    lastUpdate: row.public_status_created_at || row.updated_at || row.created_at,
-  };
+function shipmentScopeClause(values, { organizationId, ownerUserId } = {}, alias = "s") {
+  const prefix = alias ? `${alias}.` : "";
+  if (organizationId && ownerUserId) {
+    const organizationParam = values.push(organizationId);
+    const ownerParam = values.push(ownerUserId);
+    return `AND (${prefix}organization_id = $${organizationParam} OR (${prefix}owner_user_id = $${ownerParam} AND ${prefix}organization_id IS NULL))`;
+  }
+  if (organizationId) {
+    return `AND ${prefix}organization_id = $${values.push(organizationId)}`;
+  }
+  if (ownerUserId) {
+    return `AND ${prefix}owner_user_id = $${values.push(ownerUserId)}`;
+  }
+  return "";
 }
 
-function toPublicDocument(row, token) {
-  return {
-    id: row.id,
-    title: row.title,
-    fileName: row.file_name,
-    fileSize: row.file_size,
-    downloadUrl: token
-      ? `/api/public/track/${encodeURIComponent(token)}/documents/${encodeURIComponent(row.id)}`
-      : `/api/public/documents/${encodeURIComponent(row.id)}`,
-    createdAt: row.created_at,
-  };
-}
-
-function toPublicStep(row) {
-  const data = row.data || {};
-  return {
-    id: data.id,
-    label: data.name,
-    status: data.status || "PENDING",
-    order: Number(data.order) || 0,
-    completedAt: data.completedAt || null,
-  };
-}
-
-async function buildPublicShipmentPayload(shipmentId, token) {
-  const shipmentResult = await pool.query(
-    `SELECT
-       s.id,
-       s.owner_user_id,
-       s.shipment_code,
-       s.status,
-       s.origin,
-       s.destination,
-       s.estimated_delivery_at,
-       s.updated_at,
-       s.created_at,
-       e.public_label,
-       e.public_description,
-       e.created_at AS public_status_created_at
-     FROM shipments s
-     LEFT JOIN LATERAL (
-       SELECT public_label, public_description, created_at
-       FROM shipment_status_events
-       WHERE shipment_id = s.id AND is_customer_visible = TRUE
-       ORDER BY created_at DESC
-       LIMIT 1
-     ) e ON TRUE
-     WHERE s.id = $1
-     LIMIT 1`,
-    [shipmentId]
-  );
-
-  const shipment = shipmentResult.rows[0];
-  if (!shipment) return null;
-
-  const docsResult = await pool.query(
-    `SELECT id, title, file_name, file_size, created_at
-     FROM documents
-     WHERE shipment_id = $1
-       AND visibility = 'customer_visible'
-       AND archived_at IS NULL
-     ORDER BY created_at DESC`,
-    [shipmentId]
-  );
-
-  const stepsResult = await pool.query(
-    `SELECT data
-     FROM user_records
-     WHERE owner_user_id = $1
-       AND collection = 'shipmentSteps'
-       AND data->>'shipmentId' = $2
-     ORDER BY COALESCE((data->>'order')::int, 0) ASC`,
-    [shipment.owner_user_id, shipmentId]
-  );
-
-  const publicStatus = publicStatusFromShipment(shipment);
-  return {
-    shipment: {
-      code: shipment.shipment_code,
-      publicStatusLabel: publicStatus.label,
-      publicStatusDescription: publicStatus.description,
-      origin: shipment.origin,
-      destination: shipment.destination,
-      estimatedDelivery: shipment.estimated_delivery_at,
-      lastPublicUpdate: publicStatus.lastUpdate,
-    },
-    steps: stepsResult.rows.map(toPublicStep),
-    documents: docsResult.rows.map((row) => toPublicDocument(row, token)),
-    company: {
-      name: "Logisharp",
-      contactText: "For questions about this shipment, please contact your operations representative.",
-    },
-  };
-}
-
-export async function getShipmentCustomerAccess(shipmentId, { organizationId } = {}) {
+export async function getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId } = {}) {
   const values = [shipmentId];
-  const organizationFilter = organizationId ? `AND s.organization_id = $${values.push(organizationId)}` : "";
+  const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "s");
   const result = await pool.query(
     `SELECT
        s.id,
@@ -5573,7 +7044,7 @@ export async function getShipmentCustomerAccess(shipmentId, { organizationId } =
        LIMIT 1
      ) e ON TRUE
      WHERE s.id = $1
-       ${organizationFilter}
+       ${scopeFilter}
      LIMIT 1`,
     values
   );
@@ -5595,19 +7066,19 @@ export async function getShipmentCustomerAccess(shipmentId, { organizationId } =
   };
 }
 
-export async function generateShipmentCustomerAccess(shipmentId, { organizationId, rotate = true } = {}) {
-  const before = await getShipmentCustomerAccess(shipmentId, { organizationId });
+export async function generateShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId, rotate = true } = {}) {
+  const before = await getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId });
   if (!before) return null;
 
   if (!rotate && before.token) {
     const values = [shipmentId];
-    const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
+    const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "");
     const result = await pool.query(
       `UPDATE shipments
        SET customer_access_enabled = TRUE,
            updated_at = NOW()
        WHERE id = $1
-         ${organizationFilter}
+         ${scopeFilter}
        RETURNING id`,
       values
     );
@@ -5615,14 +7086,14 @@ export async function generateShipmentCustomerAccess(shipmentId, { organizationI
     return {
       token: before.token,
       before,
-      after: await getShipmentCustomerAccess(shipmentId, { organizationId }),
+      after: await getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId }),
     };
   }
 
   const token = createCustomerAccessToken();
   const tokenHash = hashCustomerAccessToken(token);
   const values = [shipmentId, token, tokenHash];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
+  const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "");
   const result = await pool.query(
     `UPDATE shipments
      SET customer_access_token = $2,
@@ -5630,7 +7101,7 @@ export async function generateShipmentCustomerAccess(shipmentId, { organizationI
          customer_access_enabled = TRUE,
          updated_at = NOW()
      WHERE id = $1
-       ${organizationFilter}
+       ${scopeFilter}
      RETURNING id`,
     values
   );
@@ -5639,33 +7110,37 @@ export async function generateShipmentCustomerAccess(shipmentId, { organizationI
   return {
     token,
     before,
-    after: await getShipmentCustomerAccess(shipmentId, { organizationId }),
+    after: await getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId }),
   };
 }
 
-export async function disableShipmentCustomerAccess(shipmentId, { organizationId } = {}) {
-  const before = await getShipmentCustomerAccess(shipmentId, { organizationId });
+export async function disableShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId } = {}) {
+  const before = await getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId });
   if (!before) return null;
 
   const values = [shipmentId];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
+  const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "");
   await pool.query(
     `UPDATE shipments
      SET customer_access_enabled = FALSE,
          updated_at = NOW()
      WHERE id = $1
-       ${organizationFilter}`,
+       ${scopeFilter}`,
     values
   );
 
   return {
     before,
-    after: await getShipmentCustomerAccess(shipmentId, { organizationId }),
+    after: await getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId }),
   };
 }
 
-async function queueCustomerShipmentUpdateSms(queryable, shipmentId, event) {
+async function queueCustomerShipmentUpdateSms(queryable, shipmentId, event, { organizationId } = {}) {
   if (!event?.is_customer_visible) return null;
+  const scopedOrganizationId = requireOrganizationScope(
+    organizationId || event.organization_id,
+    "queueCustomerShipmentUpdateSms"
+  );
   const shipmentResult = await queryable.query(
     `SELECT
        s.id,
@@ -5677,10 +7152,11 @@ async function queueCustomerShipmentUpdateSms(queryable, shipmentId, event) {
        c.company_name AS customer_company_name,
        c.phone AS customer_phone
      FROM shipments s
-     LEFT JOIN customers c ON c.id = s.customer_id
+     LEFT JOIN customers c ON c.id = s.customer_id AND c.organization_id = s.organization_id
      WHERE s.id = $1
+       AND s.organization_id = $2
      LIMIT 1`,
-    [shipmentId]
+    [shipmentId, scopedOrganizationId]
   );
   const shipment = shipmentResult.rows[0];
   if (!shipment?.organization_id) return null;
@@ -5716,8 +7192,9 @@ export async function updateShipmentPublicStatus({
   isCustomerVisible = true,
   createdById,
   organizationId,
+  ownerUserId,
 }) {
-  const shipment = await getShipmentCustomerAccess(shipmentId, { organizationId });
+  const shipment = await getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId });
   if (!shipment) return null;
 
   const result = await pool.query(
@@ -5737,80 +7214,24 @@ export async function updateShipmentPublicStatus({
     ]
   );
   const event = result.rows[0];
-  await queueCustomerShipmentUpdateSms(pool, shipmentId, event);
+  await queueCustomerShipmentUpdateSms(pool, shipmentId, event, { organizationId });
   return event;
 }
 
 export async function getPublicTrackingByToken(token) {
-  if (!token || String(token).length < 24) return null;
-  const tokenHash = hashCustomerAccessToken(token);
-  const result = await pool.query(
-    `SELECT id
-     FROM shipments
-     WHERE customer_access_token_hash = $1
-       AND customer_access_enabled = TRUE
-     LIMIT 1`,
-    [tokenHash]
-  );
-  const shipment = result.rows[0];
-  if (!shipment) return null;
-  return buildPublicShipmentPayload(shipment.id, token);
+  return getPublicTrackingByTokenFromRepository(pool, token);
 }
 
 export async function searchPublicTracking({ shipmentCode, verification }) {
-  if (!shipmentCode || !verification) return null;
-  const normalizedVerification = String(verification).trim().toLowerCase();
-  const result = await pool.query(
-    `SELECT s.id
-     FROM shipments s
-     LEFT JOIN customers c ON c.id = s.customer_id
-     WHERE lower(s.shipment_code) = lower($1)
-       AND s.customer_access_enabled = TRUE
-       AND (
-         lower(COALESCE(c.email, '')) = $2
-         OR regexp_replace(COALESCE(c.phone, ''), '\\D', '', 'g') = regexp_replace($2, '\\D', '', 'g')
-         OR lower(COALESCE(s.legacy_data->>'customerEmail', '')) = $2
-         OR regexp_replace(COALESCE(s.legacy_data->>'customerPhone', ''), '\\D', '', 'g') = regexp_replace($2, '\\D', '', 'g')
-       )
-     LIMIT 1`,
-    [shipmentCode, normalizedVerification]
-  );
-  const shipment = result.rows[0];
-  if (!shipment) return null;
-  return buildPublicShipmentPayload(shipment.id);
+  return searchPublicTrackingFromRepository(pool, { shipmentCode, verification });
 }
 
 export async function getPublicDocument(documentId) {
-  const result = await pool.query(
-    `SELECT d.id, d.title, d.file_name, d.mime_type, d.file_size, d.storage_key, d.legacy_data
-     FROM documents d
-     JOIN shipments s ON s.id = d.shipment_id
-     WHERE d.id = $1
-       AND d.visibility = 'customer_visible'
-       AND d.archived_at IS NULL
-       AND s.customer_access_enabled = TRUE
-     LIMIT 1`,
-    [documentId]
-  );
-  return result.rows[0] || null;
+  return getPublicDocumentFromRepository(pool, documentId);
 }
 
 export async function getPublicDocumentByTrackingToken(token, documentId) {
-  if (!token || String(token).length < 24) return null;
-  const tokenHash = hashCustomerAccessToken(token);
-  const result = await pool.query(
-    `SELECT d.id, d.title, d.file_name, d.mime_type, d.file_size, d.storage_key, d.legacy_data
-     FROM documents d
-     JOIN shipments s ON s.id = d.shipment_id
-     WHERE d.id = $1
-       AND d.visibility = 'customer_visible'
-       AND d.archived_at IS NULL
-       AND s.customer_access_token_hash = $2
-       AND s.customer_access_enabled = TRUE
-     LIMIT 1`,
-    [documentId, tokenHash]
-  );
-  return result.rows[0] || null;
+  return getPublicDocumentByTrackingTokenFromRepository(pool, token, documentId);
 }
 
 export async function updateDocumentVisibility(documentId, visibility, { organizationId } = {}) {
@@ -5934,7 +7355,6 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
     );
     const existingShipments = new Map(existingAccessResult.rows.map((row) => [row.id, row]));
 
-    await client.query("DELETE FROM shipments WHERE owner_user_id = $1", [ownerUserId]);
     for (const shipment of records) {
       const preservedAccess = existingAccess.get(shipment.id) || {};
       const before = existingShipments.get(shipment.id) || null;
@@ -6032,17 +7452,102 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
 
   if (collection === "tasks") {
     const existingTasksResult = await client.query(
-      `SELECT id, source_type, source_id, customer_id, completed_at, legacy_data
+      `SELECT id, source_type, source_id, customer_id, assigned_by_id, assigned_at, assignment_note,
+              workflow_instance_id, workflow_step_code, workflow_blocker_id, blocker_code,
+              completed_at, completed_by_user_id, legacy_data
        FROM tasks
        WHERE owner_user_id = $1`,
       [ownerUserId]
     );
     const existingTasks = new Map(existingTasksResult.rows.map((row) => [row.id, row]));
-    await client.query("DELETE FROM tasks WHERE owner_user_id = $1", [ownerUserId]);
+    const referencedTaskUserIds = Array.from(
+      new Set(
+        records
+          .flatMap((task) => [task.assignedToUserId, task.assignedByUserId, task.completedByUserId])
+          .filter(Boolean)
+      )
+    );
+    const validTaskUserIds = new Set();
+    if (referencedTaskUserIds.length) {
+      const usersResult = await client.query(
+        `SELECT id
+         FROM app_users
+         WHERE organization_id = $1
+           AND id = ANY($2::text[])
+           AND status <> 'suspended'`,
+        [ownerOrganizationId, referencedTaskUserIds]
+      );
+      usersResult.rows.forEach((row) => validTaskUserIds.add(row.id));
+    }
+    const workflowInstanceIds = Array.from(new Set(records.map((task) => task.workflowInstanceId).filter(Boolean)));
+    const validWorkflowInstanceIds = new Set();
+    if (workflowInstanceIds.length) {
+      const workflowResult = await client.query(
+        `SELECT id
+         FROM shipment_workflow_instances
+         WHERE organization_id = $1
+           AND id = ANY($2::text[])`,
+        [ownerOrganizationId, workflowInstanceIds]
+      );
+      workflowResult.rows.forEach((row) => validWorkflowInstanceIds.add(row.id));
+    }
+    const workflowBlockerIds = Array.from(new Set(records.map((task) => task.workflowBlockerId).filter(Boolean)));
+    const validWorkflowBlockerIds = new Set();
+    if (workflowBlockerIds.length) {
+      const blockerResult = await client.query(
+        `SELECT id
+         FROM shipment_workflow_blockers
+         WHERE organization_id = $1
+           AND id = ANY($2::text[])`,
+        [ownerOrganizationId, workflowBlockerIds]
+      );
+      blockerResult.rows.forEach((row) => validWorkflowBlockerIds.add(row.id));
+    }
+    const payloadTaskIds = records.map((task) => task.id).filter(Boolean);
+    if (payloadTaskIds.length) {
+      await client.query(
+        `DELETE FROM tasks
+         WHERE owner_user_id = $1
+           AND NOT (id = ANY($2::text[]))
+           AND workflow_instance_id IS NULL
+           AND workflow_step_code IS NULL
+           AND workflow_blocker_id IS NULL
+           AND blocker_code IS NULL`,
+        [ownerUserId, payloadTaskIds]
+      );
+    } else {
+      await client.query(
+        `DELETE FROM tasks
+         WHERE owner_user_id = $1
+           AND workflow_instance_id IS NULL
+           AND workflow_step_code IS NULL
+           AND workflow_blocker_id IS NULL
+           AND blocker_code IS NULL`,
+        [ownerUserId]
+      );
+    }
     for (const task of records) {
       const existingTask = existingTasks.get(task.id) || {};
       const sourceType = task.sourceType || existingTask.source_type || "MANUAL";
       const sourceId = task.sourceId || existingTask.source_id || null;
+      const assignedToUserId =
+        task.assignedToUserId && validTaskUserIds.has(task.assignedToUserId) ? task.assignedToUserId : null;
+      const assignedByUserId =
+        task.assignedByUserId && validTaskUserIds.has(task.assignedByUserId)
+          ? task.assignedByUserId
+          : existingTask.assigned_by_id || null;
+      const completedByUserId =
+        task.completedByUserId && validTaskUserIds.has(task.completedByUserId)
+          ? task.completedByUserId
+          : existingTask.completed_by_user_id || null;
+      const workflowInstanceId =
+        task.workflowInstanceId && validWorkflowInstanceIds.has(task.workflowInstanceId)
+          ? task.workflowInstanceId
+          : existingTask.workflow_instance_id || null;
+      const workflowBlockerId =
+        task.workflowBlockerId && validWorkflowBlockerIds.has(task.workflowBlockerId)
+          ? task.workflowBlockerId
+          : existingTask.workflow_blocker_id || null;
       const legacy = {
         ...(existingTask.legacy_data || {}),
         ...task,
@@ -6052,10 +7557,12 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
       await client.query(
         `INSERT INTO tasks (
            id, organization_id, owner_user_id, title, description, status, priority, assigned_to_id,
-           assigned_to_name, assigned_by_name, due_at, source_type, source_id,
-           shipment_id, customer_id, legacy_data, completed_at, updated_at
+           assigned_to_name, assigned_by_id, assigned_by_name, assigned_at, assignment_note, due_at, source_type,
+           source_id, shipment_id, customer_id, workflow_instance_id, workflow_step_code,
+           workflow_blocker_id, blocker_code, legacy_data, completed_at, completed_by_user_id, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, NOW())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                 $17, $18, $19, $20, $21, $22, $23::jsonb, $24, $25, NOW())
          ON CONFLICT (id) DO UPDATE SET
            organization_id = EXCLUDED.organization_id,
            title = EXCLUDED.title,
@@ -6064,14 +7571,22 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
            priority = EXCLUDED.priority,
            assigned_to_id = EXCLUDED.assigned_to_id,
            assigned_to_name = EXCLUDED.assigned_to_name,
+           assigned_by_id = EXCLUDED.assigned_by_id,
            assigned_by_name = EXCLUDED.assigned_by_name,
+           assigned_at = EXCLUDED.assigned_at,
+           assignment_note = EXCLUDED.assignment_note,
            due_at = EXCLUDED.due_at,
            source_type = EXCLUDED.source_type,
            source_id = EXCLUDED.source_id,
            shipment_id = EXCLUDED.shipment_id,
            customer_id = EXCLUDED.customer_id,
+           workflow_instance_id = EXCLUDED.workflow_instance_id,
+           workflow_step_code = EXCLUDED.workflow_step_code,
+           workflow_blocker_id = EXCLUDED.workflow_blocker_id,
+           blocker_code = EXCLUDED.blocker_code,
            legacy_data = EXCLUDED.legacy_data,
            completed_at = EXCLUDED.completed_at,
+           completed_by_user_id = EXCLUDED.completed_by_user_id,
            updated_at = NOW()`,
         [
           task.id,
@@ -6081,16 +7596,24 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
           task.description || null,
           task.status || "TODO",
           task.priority || "MEDIUM",
-          task.assignedToUserId || null,
-          task.assignedToName || null,
+          assignedToUserId,
+          assignedToUserId ? task.assignedToName || null : null,
+          assignedByUserId,
           task.assignedByName || null,
+          existingTask.assigned_at || (assignedToUserId ? new Date() : null),
+          task.assignmentNote || existingTask.assignment_note || null,
           task.dueDate || null,
           sourceType,
           sourceId,
           task.shipmentId || null,
           existingTask.customer_id || null,
+          workflowInstanceId,
+          task.workflowStepCode || existingTask.workflow_step_code || null,
+          workflowBlockerId,
+          task.blockerCode || existingTask.blocker_code || null,
           JSON.stringify(legacy),
           task.status === "DONE" ? existingTask.completed_at || new Date() : null,
+          task.status === "DONE" ? completedByUserId : null,
         ]
       );
     }

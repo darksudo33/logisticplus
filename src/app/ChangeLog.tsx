@@ -106,7 +106,7 @@ export default function ChangeLog() {
   const [serverLogs, setServerLogs] = useState<ActivityLog[]>([]);
 
   useEffect(() => {
-    if (currentUser?.role !== "CEO") return;
+    if (!currentUser) return;
     let cancelled = false;
     fetch("/api/changes?limit=150")
       .then(async (response) => {
@@ -117,13 +117,15 @@ export default function ChangeLog() {
         }
       })
       .catch((error) => {
-        console.error(error);
+        if (!cancelled && !(error instanceof TypeError && error.message === "Failed to fetch")) {
+          console.error(error);
+        }
         if (!cancelled) setServerLogs([]);
       });
     return () => {
       cancelled = true;
     };
-  }, [currentUser?.role]);
+  }, [currentUser?.id]);
 
   const logs = useMemo(() => {
     const merged = new Map<string, ActivityLog>();

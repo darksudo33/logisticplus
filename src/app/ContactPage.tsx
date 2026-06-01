@@ -118,7 +118,7 @@ export default function ContactPage() {
               </span>
               <span className="flex flex-col leading-none">
                 <span className="text-sm font-black text-foreground">لجستیک پلاس</span>
-                <span className="mt-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Logistic Plus</span>
+                <span className="mt-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">لجستیک پلاس</span>
               </span>
             </Link>
             <nav aria-label="ناوبری اصلی" className="hidden items-center rounded-xl border border-border/80 bg-card/80 p-1 shadow-sm md:flex">
@@ -150,7 +150,7 @@ export default function ContactPage() {
           <div className="mx-auto grid max-w-7xl gap-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
             <div>
               <p className="mb-3 inline-flex rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-[11px] font-black text-primary">
-                هماهنگی دمو Logistic Plus / لجستیک پلاس
+                هماهنگی دمو لجستیک پلاس
               </p>
               <h1 className="text-3xl font-black leading-tight md:text-5xl">دمو را روی چند پرونده واقعی شرکتتان ببینید</h1>
               <p className="mt-4 max-w-2xl text-sm leading-8 text-muted-foreground">
@@ -334,7 +334,7 @@ export default function ContactPage() {
             </span>
             <span className="flex flex-col leading-none">
               <span className="text-sm font-black text-foreground">لجستیک پلاس</span>
-              <span className="mt-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Logistic Plus</span>
+              <span className="mt-1 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">لجستیک پلاس</span>
             </span>
           </Link>
           <nav className="flex flex-wrap gap-4 text-xs font-bold text-muted-foreground">

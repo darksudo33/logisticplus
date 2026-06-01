@@ -8,9 +8,13 @@ import {
   LockKeyhole,
   MessageSquareText,
   PackageCheck,
+  Radio,
+  Route,
+  ShieldCheck,
   Ship,
   Smartphone,
   Truck,
+  Users,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { Button } from "@/components/ui/button";
@@ -18,50 +22,218 @@ import { ActionSkeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useMockStore } from "../store/useMockStore";
-import { PublicContactActions, PublicPhonePill } from "@/src/components/PublicContactActions";
+import { PublicPhonePill } from "@/src/components/PublicContactActions";
 
-function LoginPreview() {
+type AuthError = Error & {
+  status?: number;
+  code?: string;
+  retryAfter?: number;
+};
+
+const persianDigitMap: Record<string, string> = {
+  "۰": "0",
+  "۱": "1",
+  "۲": "2",
+  "۳": "3",
+  "۴": "4",
+  "۵": "5",
+  "۶": "6",
+  "۷": "7",
+  "۸": "8",
+  "۹": "9",
+  "٠": "0",
+  "١": "1",
+  "٢": "2",
+  "٣": "3",
+  "٤": "4",
+  "٥": "5",
+  "٦": "6",
+  "٧": "7",
+  "٨": "8",
+  "٩": "9",
+};
+
+const toEnglishDigits = (value: string) =>
+  value.replace(/[۰-۹٠-٩]/g, (digit) => persianDigitMap[digit] || digit);
+
+const toPersianDigits = (value: number | string) =>
+  String(value).replace(/\d/g, (digit) => "۰۱۲۳۴۵۶۷۸۹"[Number(digit)]);
+
+const sanitizePhone = (value: string) => toEnglishDigits(value).replace(/[^\d+]/g, "").slice(0, 14);
+
+const sanitizeSmsCode = (value: string) => toEnglishDigits(value).replace(/\D/g, "").slice(0, 6);
+
+const formatRetryTime = (seconds: number) => {
+  if (seconds <= 0) return "";
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return minutes > 0
+    ? `${toPersianDigits(minutes)}:${toPersianDigits(String(remainingSeconds).padStart(2, "0"))}`
+    : `${toPersianDigits(remainingSeconds)} ثانیه`;
+};
+
+const retryAfterFromError = (error: unknown, fallback = 60) => {
+  const retryAfter = Number((error as AuthError)?.retryAfter || 0);
+  return Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : fallback;
+};
+
+const loginErrorMessage = (error: unknown) => {
+  const authError = error as AuthError;
+  if (authError.status === 429 || authError.code === "RATE_LIMITED") {
+    return "تعداد تلاش‌های ورود زیاد شده است. کمی صبر کنید و دوباره امتحان کنید.";
+  }
+  if (authError.code === "PENDING_REVIEW") {
+    return "حساب شرکت هنوز در انتظار بررسی است. در صورت نیاز با پشتیبانی تماس بگیرید.";
+  }
+  if (authError.code === "ORGANIZATION_INACTIVE" || authError.code === "USER_INACTIVE") {
+    return "این حساب در حال حاضر فعال نیست. برای بررسی وضعیت با مدیر شرکت یا پشتیبانی تماس بگیرید.";
+  }
+  if (authError.code === "SUBSCRIPTION_INACTIVE") {
+    return "اشتراک شرکت فعال نیست. برای فعال‌سازی دوباره با پشتیبانی هماهنگ کنید.";
+  }
+  return "ایمیل یا رمز عبور درست نیست.";
+};
+
+const smsRequestErrorMessage = (error: unknown) => {
+  const authError = error as AuthError;
+  if (authError.status === 429 || authError.code === "RATE_LIMITED") {
+    return "درخواست کد پیامکی بیش از حد مجاز بوده است. بعد از پایان زمان انتظار دوباره تلاش کنید.";
+  }
+  return authError.message || "ارسال کد پیامکی ناموفق بود.";
+};
+
+const smsVerifyErrorMessage = (error: unknown) => {
+  const authError = error as AuthError;
+  if (authError.status === 429 || authError.code === "SMS_CODE_LOCKED" || authError.code === "RATE_LIMITED") {
+    return "تعداد تلاش برای این کد زیاد شده است. کمی صبر کنید یا کد جدید بگیرید.";
+  }
+  return "کد پیامکی درست نیست یا منقضی شده است.";
+};
+
+const operationStats = [
+  { label: "محموله فعال", value: "۲۴", icon: Ship, tone: "bg-primary/10 text-primary" },
+  { label: "سند کنترل‌شده", value: "۱۱۸", icon: FileText, tone: "bg-emerald-500/10 text-emerald-700" },
+  { label: "وظیفه امروز", value: "۱۲", icon: ClipboardList, tone: "bg-amber-500/10 text-amber-700" },
+];
+
+const accessHighlights = [
+  "ورود امن برای تیم عملیاتی و مدیریت شرکت",
+  "محموله، مشتری، سند و وظیفه در یک پنل فارسی",
+  "دسترسی سریع به داشبورد بعد از ورود موفق",
+];
+
+function LogisticsMotionScene() {
+  const routePoints = [
+    { className: "right-[12%] top-[60%]", delay: 0 },
+    { className: "right-[34%] top-[48%]", delay: 0.35 },
+    { className: "right-[57%] top-[34%]", delay: 0.7 },
+    { className: "right-[80%] top-[24%]", delay: 1.05 },
+  ];
+
   return (
-    <div className="rounded-xl border border-border bg-card p-4 shadow-2xl">
-      <div className="mb-4 flex items-center justify-between border-b border-border pb-4">
-        <div className="flex items-center gap-2">
-          <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground">
-            <Ship className="h-5 w-5" />
+    <div className="relative overflow-hidden rounded-xl border border-border bg-card shadow-2xl shadow-primary/10">
+      <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between gap-3 border-b border-border/70 bg-card/78 px-4 py-3 backdrop-blur-xl">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">
+            <Route className="h-4 w-4" />
           </span>
-          <div>
-            <div className="text-sm font-black">لجستیک پلاس</div>
-            <div className="text-[10px] font-bold text-muted-foreground">نمای داخلی عملیات</div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-black text-foreground">مرکز عملیات Logistic Plus</p>
+            <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">دسترسی داخلی تیم لجستیک</p>
           </div>
         </div>
-        <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[10px] font-black text-emerald-700">
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1.5 text-[10px] font-black text-emerald-700">
+          <Radio className="h-3.5 w-3.5" />
           آنلاین
         </span>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="relative h-[320px] overflow-hidden sm:h-[380px]">
+        <img
+          src="/landing/logisticplus-login-transport-hero.jpg"
+          alt="شبکه حمل‌ونقل لجستیک پلاس"
+          decoding="async"
+          fetchPriority="high"
+          className="h-full w-full object-cover object-center"
+        />
+        <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(247,251,255,0.08),rgba(247,251,255,0.38)_58%,rgba(247,251,255,0.78))] dark:bg-[linear-gradient(180deg,rgba(7,17,31,0.06),rgba(7,17,31,0.38)_58%,rgba(7,17,31,0.78))]" />
+        <div className="absolute inset-x-4 bottom-5 rounded-xl border border-border/80 bg-card/86 p-2 shadow-sm backdrop-blur-xl sm:inset-x-6 sm:bottom-6 sm:p-3">
+          <div className="grid grid-cols-3 gap-2">
+            {operationStats.map((item) => {
+              const Icon = item.icon;
+              return (
+                <div key={item.label} className="rounded-lg border border-border bg-background/80 p-2 sm:p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-black text-muted-foreground sm:text-[11px]">{item.label}</span>
+                    <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-lg sm:h-8 sm:w-8 ${item.tone}`}>
+                      <Icon className="h-4 w-4" />
+                    </span>
+                  </div>
+                  <p className="mt-2 font-mono text-xl font-black leading-none text-foreground sm:mt-3 sm:text-2xl">{item.value}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="pointer-events-none absolute inset-0 hidden sm:block">
+          <div className="absolute right-[16%] top-[27%] h-px w-[68%] rotate-[-10deg] bg-primary/25" />
+          {routePoints.map((point) => (
+            <motion.span
+              key={point.className}
+              className={`absolute h-3 w-3 rounded-full border-2 border-card bg-primary shadow-[0_0_18px_rgba(37,99,235,0.55)] ${point.className}`}
+              animate={{ scale: [1, 1.45, 1], opacity: [0.7, 1, 0.7] }}
+              transition={{ duration: 2.4, repeat: Infinity, delay: point.delay }}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OperationsPreviewCard() {
+  return (
+    <div className="grid gap-4 rounded-xl border border-border bg-card p-4 shadow-sm lg:grid-cols-[1fr_0.9fr]">
+      <div className="rounded-xl border border-border bg-background p-4">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-black text-foreground">نمای ورود به عملیات</p>
+            <p className="mt-1 text-xs font-bold text-muted-foreground">پس از ورود، تیم به فضای کاری روزانه می‌رسد.</p>
+          </div>
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+            <ShieldCheck className="h-5 w-5" />
+          </span>
+        </div>
+        <div className="grid gap-2">
+          {accessHighlights.map((item) => (
+            <div key={item} className="flex items-start gap-2 rounded-lg bg-card px-3 py-2 text-xs font-bold leading-6 text-muted-foreground ring-1 ring-border/80">
+              <CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-emerald-600" />
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid gap-2 rounded-xl border border-border bg-muted/35 p-3">
         {[
-          { label: "وضعیت بار", value: "به‌روز", icon: Truck },
-          { label: "پیگیری تیم", value: "مسئول‌دار", icon: ClipboardList },
-          { label: "اسناد", value: "کنار پرونده", icon: FileText },
+          { label: "حمل دریایی", detail: "ردیابی کانتینر", icon: Ship },
+          { label: "حمل زمینی", detail: "مسیر و تحویل", icon: Truck },
+          { label: "کاربران شرکت", detail: "سطح دسترسی امن", icon: Users },
         ].map((item) => {
           const Icon = item.icon;
           return (
-            <div key={item.label} className="rounded-xl border border-border bg-background p-4">
-              <Icon className="mb-3 h-5 w-5 text-primary" />
-              <div className="text-2xl font-black">{item.value}</div>
-              <div className="mt-1 text-xs font-bold text-muted-foreground">{item.label}</div>
+            <div key={item.label} className="flex items-center gap-3 rounded-lg border border-border bg-background p-3">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+                <Icon className="h-4 w-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-xs font-black text-foreground">{item.label}</p>
+                <p className="mt-1 truncate text-[11px] font-bold text-muted-foreground">{item.detail}</p>
+              </div>
             </div>
           );
         })}
-      </div>
-
-      <div className="mt-3 space-y-2">
-        {["پرونده محموله آماده پیگیری", "سند خصوصی در پنل داخلی ماند", "لینک امن مشتری آماده ارسال است"].map((item) => (
-          <div key={item} className="flex items-center gap-2 rounded-xl bg-muted/45 px-3 py-2 text-xs font-bold text-muted-foreground">
-            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-            {item}
-          </div>
-        ))}
       </div>
     </div>
   );
@@ -161,31 +333,22 @@ export default function LoginPage() {
         </div>
       </header>
 
-      <main className="mx-auto grid min-h-[calc(100vh-73px)] max-w-7xl gap-8 px-4 py-8 lg:grid-cols-[1fr_440px] lg:items-center lg:py-12">
+      <main className="mx-auto grid min-h-[calc(100vh-73px)] max-w-7xl gap-8 px-4 py-8 lg:grid-cols-[minmax(0,1fr)_440px] lg:items-center lg:py-12">
         <motion.section
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.45 }}
-          className="hidden space-y-6 lg:block"
+          className="order-2 mx-auto w-full max-w-3xl space-y-5 lg:order-none"
         >
-          <div className="max-w-2xl">
-            <p className="mb-3 inline-flex rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-[11px] font-black text-primary">
-              ورود به پنل داخلی Logistic Plus
-            </p>
-            <h2 className="text-4xl font-black leading-tight">ورود به جایی که پرونده‌های عملیاتی تیم شما مرتب می‌ماند</h2>
-            <p className="mt-4 text-sm leading-8 text-muted-foreground">
-              محموله‌ها، اسناد، مشتریان، وظایف و لینک‌های پیگیری مشتری در یک محیط فارسی و راست‌چین کنار هم قرار می‌گیرند؛ برای تیم‌هایی که نمی‌خواهند کارها بین فایل، تماس و چت گم شود.
-            </p>
-            <PublicContactActions className="mt-6 max-w-xl" signupLabel="ثبت‌نام شرکت" demoLabel="درخواست دمو" />
-          </div>
-          <LoginPreview />
+          <LogisticsMotionScene />
+          <OperationsPreviewCard />
         </motion.section>
 
         <motion.section
           initial={{ opacity: 0, scale: 0.98 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.35 }}
-          className="mx-auto w-full max-w-[440px]"
+          className="order-1 mx-auto w-full max-w-[440px] lg:order-none"
         >
           <div className="rounded-xl border border-border bg-card p-6 shadow-2xl md:p-8">
             <div className="mb-8 text-center">

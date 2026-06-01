@@ -1,5 +1,4 @@
 import React from "react";
-import { Button } from "@/components/ui/button";
 import { reportClientError } from "@/src/lib/errorReporting";
 
 type State = { hasError: boolean };
@@ -30,9 +29,13 @@ export class ClientErrorBoundary extends React.Component<React.PropsWithChildren
           <p className="text-sm text-muted-foreground mb-5">
             گزارش خطا برای بررسی در پنل ادمین ثبت شد. صفحه را دوباره بارگذاری کنید.
           </p>
-          <Button onClick={() => window.location.reload()} className="rounded-xl font-bold">
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="rounded-xl bg-primary px-4 py-2 text-sm font-bold text-primary-foreground transition hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             بارگذاری مجدد
-          </Button>
+          </button>
         </div>
       </div>
     );

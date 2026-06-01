@@ -455,25 +455,64 @@ export function SignupPendingPage() {
   const [params] = useSearchParams();
   const payment = params.get("payment");
   const isPaid = payment === "paid";
+  const isFailed = payment === "failed";
+  const isMissing = payment === "missing" || payment === "unknown";
+  const statusCopy = isPaid
+    ? {
+        title: "پرداخت ثبت شد؛ در انتظار تأیید",
+        message: "پرداخت شما با موفقیت ثبت شد. حساب شرکت پس از بررسی مدیر سیستم فعال می‌شود و سپس امکان ورود با ایمیل و رمز عبور فراهم خواهد شد.",
+        tone: "bg-emerald-500/10 text-emerald-600",
+        primary: "بازگشت به ورود",
+        primaryTo: "/login",
+        secondary: "تماس با ما",
+        secondaryTo: "/contact",
+      }
+    : isFailed
+      ? {
+          title: "پرداخت ناموفق یا لغوشده",
+          message: "ثبت‌نام شما هنوز فعال نشده است. می‌توانید با همان ایمیل دوباره ثبت‌نام را انجام دهید و یک پرداخت جدید بسازید.",
+          tone: "bg-rose-500/10 text-rose-600",
+          primary: "تلاش دوباره",
+          primaryTo: "/signup",
+          secondary: "تماس با پشتیبانی",
+          secondaryTo: "/contact",
+        }
+      : isMissing
+        ? {
+            title: "نتیجه پرداخت قابل بررسی نیست",
+            message: "شناسه پرداخت از درگاه دریافت نشد یا با درخواست ثبت‌نام شما تطبیق نداشت. اگر مبلغی از حساب شما کسر شده است با پشتیبانی تماس بگیرید.",
+            tone: "bg-amber-500/10 text-amber-600",
+            primary: "تماس با پشتیبانی",
+            primaryTo: "/contact",
+            secondary: "تلاش دوباره",
+            secondaryTo: "/signup",
+          }
+        : {
+            title: "درخواست شما ثبت شد",
+            message: "اگر پرداخت را کامل کرده‌اید، پس از تأیید مدیر سیستم امکان ورود فراهم می‌شود. در غیر این صورت می‌توانید ثبت‌نام را دوباره انجام دهید.",
+            tone: "bg-amber-500/10 text-amber-600",
+            primary: "بازگشت به ورود",
+            primaryTo: "/login",
+            secondary: "تماس با ما",
+            secondaryTo: "/contact",
+          };
 
   return (
     <PublicShell>
       <main className="mx-auto flex min-h-[70vh] max-w-2xl items-center px-4 py-10">
         <Card className="w-full rounded-xl border-border text-center shadow-sm">
           <CardContent className="space-y-5 p-8">
-            <div className={cn("mx-auto flex h-16 w-16 items-center justify-center rounded-2xl", isPaid ? "bg-emerald-500/10 text-emerald-600" : "bg-amber-500/10 text-amber-600")}>
+            <div className={cn("mx-auto flex h-16 w-16 items-center justify-center rounded-2xl", statusCopy.tone)}>
               {isPaid ? <ShieldCheck className="h-8 w-8" /> : <Clock className="h-8 w-8" />}
             </div>
-            <h1 className="text-2xl font-black">{isPaid ? "پرداخت ثبت شد؛ در انتظار تأیید" : "درخواست شما ثبت شد"}</h1>
-            <p className="text-sm leading-7 text-muted-foreground">
-              حساب شرکت شما پس از بررسی مدیر سیستم فعال می‌شود. بعد از تأیید، امکان ورود با ایمیل و رمز عبور ثبت‌شده فراهم خواهد شد.
-            </p>
+            <h1 className="text-2xl font-black">{statusCopy.title}</h1>
+            <p className="text-sm leading-7 text-muted-foreground">{statusCopy.message}</p>
             <div className="grid gap-3 sm:grid-cols-2">
               <Button asChild className="h-11 rounded-xl font-black">
-                <Link to="/login">بازگشت به ورود</Link>
+                <Link to={statusCopy.primaryTo}>{statusCopy.primary}</Link>
               </Button>
               <Button asChild variant="outline" className="h-11 rounded-xl border-emerald-500/25 font-black text-emerald-700 hover:bg-emerald-500/10">
-                <Link to="/contact">تماس با ما</Link>
+                <Link to={statusCopy.secondaryTo}>{statusCopy.secondary}</Link>
               </Button>
             </div>
           </CardContent>

@@ -32,10 +32,13 @@ import { EmptyState, EmptyTableRow, resetFiltersAction } from "@/src/components/
 import { User, UserRole } from "../types";
 import {
   CheckCircle2,
+  AlertTriangle,
   Filter,
+  KeyRound,
   LockKeyhole,
   Mail,
   MoreHorizontal,
+  Pencil,
   Search,
   Shield,
   ShieldCheck,
@@ -43,6 +46,7 @@ import {
   UserPlus,
   Users,
   UserX,
+  Trash2,
 } from "lucide-react";
 
 const roleOptions: { value: UserRole; label: string; tone: string }[] = [
@@ -76,6 +80,12 @@ const roleTone = (role?: string) => roleOptions.find((item) => item.value === ro
 const userStatus = (user: User) => user.status || "active";
 const isActiveUser = (user: User) => userStatus(user) !== "suspended";
 
+type DeletePreview = {
+  canDelete: boolean;
+  blockers: Array<{ code: string; message: string; count?: number }>;
+  user: User;
+};
+
 const formatDate = (value?: string) => {
   if (!value) return "ثبت نشده";
   try {
@@ -88,16 +98,29 @@ const formatDate = (value?: string) => {
 export default function UserManagement() {
   const users = useMockStore((state) => state.users);
   const currentUser = useMockStore((state) => state.currentUser);
-  const loadCurrentUserRecords = useMockStore((state) => state.loadCurrentUserRecords);
+  const refreshUsers = useMockStore((state) => state.refreshUsers);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("ALL");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [isAddUserOpen, setIsAddUserOpen] = useState(false);
+  const [isEditUserOpen, setIsEditUserOpen] = useState(false);
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isSuspendDialogOpen, setIsSuspendDialogOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [deletePreview, setDeletePreview] = useState<DeletePreview | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [userLimit, setUserLimit] = useState<number | null>(null);
+  const [editUser, setEditUser] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    location: "",
+    bio: "",
+    role: "OPERATIONS" as UserRole,
+  });
+  const [temporaryPassword, setTemporaryPassword] = useState("");
   const [newUser, setNewUser] = useState({
     name: "",
     email: "",
@@ -107,7 +130,7 @@ export default function UserManagement() {
   });
 
   useEffect(() => {
-    loadCurrentUserRecords().catch(() => undefined);
+    refreshUsers().catch(() => undefined);
     fetch("/api/billing/my-subscription")
       .then((response) => response.json())
       .then((payload) => {
@@ -117,7 +140,7 @@ export default function UserManagement() {
         }
       })
       .catch(() => setUserLimit(null));
-  }, [loadCurrentUserRecords]);
+  }, [refreshUsers]);
 
   const activeUsers = useMemo(() => users.filter(isActiveUser), [users]);
   const suspendedUsers = useMemo(() => users.filter((user) => userStatus(user) === "suspended"), [users]);
@@ -157,7 +180,7 @@ export default function UserManagement() {
     if (!response.ok || payload?.ok === false) {
       throw new Error(apiMessage(payload?.error?.code, payload?.error?.message));
     }
-    await loadCurrentUserRecords();
+    await refreshUsers();
     return payload?.data;
   };
 
@@ -257,6 +280,104 @@ export default function UserManagement() {
       toast.success("دسترسی کاربر دوباره فعال شد.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "فعال‌سازی کاربر ناموفق بود.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const openEditDialog = (user: User) => {
+    setSelectedUser(user);
+    setEditUser({
+      name: user.name || "",
+      email: user.email || "",
+      phone: user.phone || "",
+      location: user.location || "",
+      bio: user.bio || "",
+      role: user.role,
+    });
+    setIsEditUserOpen(true);
+  };
+
+  const handleEditUser = async () => {
+    if (!selectedUser) return;
+    setIsSaving(true);
+    try {
+      await saveUser(`/api/users/${selectedUser.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: editUser.name.trim(),
+          email: editUser.email.trim(),
+          phone: editUser.phone.trim(),
+          location: editUser.location.trim(),
+          bio: editUser.bio.trim(),
+          role: editUser.role,
+        }),
+      });
+      toast.success("اطلاعات کاربر به‌روزرسانی شد.");
+      setIsEditUserOpen(false);
+      setSelectedUser(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ویرایش کاربر ناموفق بود.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const openPasswordDialog = (user: User) => {
+    setSelectedUser(user);
+    setTemporaryPassword("");
+    setIsPasswordDialogOpen(true);
+  };
+
+  const handlePasswordReset = async () => {
+    if (!selectedUser) return;
+    if (temporaryPassword.length < 8) {
+      toast.error("رمز عبور موقت باید حداقل ۸ کاراکتر باشد.");
+      return;
+    }
+    setIsSaving(true);
+    try {
+      await saveUser(`/api/users/${selectedUser.id}/password`, {
+        method: "POST",
+        body: JSON.stringify({ password: temporaryPassword }),
+      });
+      toast.success("رمز عبور موقت ذخیره شد.");
+      setIsPasswordDialogOpen(false);
+      setSelectedUser(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "تغییر رمز عبور ناموفق بود.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const openDeleteDialog = async (user: User) => {
+    setSelectedUser(user);
+    setDeletePreview(null);
+    setIsDeleteDialogOpen(true);
+    try {
+      const response = await fetch(`/api/users/${user.id}/delete-preview`);
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || payload?.ok === false) {
+        throw new Error(apiMessage(payload?.error?.code, payload?.error?.message));
+      }
+      setDeletePreview(payload.data);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "بررسی حذف کاربر ناموفق بود.");
+    }
+  };
+
+  const handlePermanentDelete = async () => {
+    if (!selectedUser) return;
+    setIsSaving(true);
+    try {
+      await saveUser(`/api/users/${selectedUser.id}`, { method: "DELETE" });
+      toast.success("کاربر به‌صورت دائمی حذف شد.");
+      setIsDeleteDialogOpen(false);
+      setSelectedUser(null);
+      setDeletePreview(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "حذف دائمی کاربر ناموفق بود.");
     } finally {
       setIsSaving(false);
     }
@@ -555,6 +676,23 @@ export default function UserManagement() {
                                 )}
                               />
                               <DropdownMenuContent className="w-56 bg-card text-right text-foreground shadow-lg" align="end" dir="rtl">
+                                <DropdownMenuItem
+                                  disabled={isSaving}
+                                  onClick={() => openEditDialog(user)}
+                                  className="rounded-lg text-xs font-bold"
+                                >
+                                  <Pencil className="ml-2 h-3.5 w-3.5" />
+                                  ویرایش اطلاعات
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  disabled={isSaving}
+                                  onClick={() => openPasswordDialog(user)}
+                                  className="rounded-lg text-xs font-bold"
+                                >
+                                  <KeyRound className="ml-2 h-3.5 w-3.5" />
+                                  تنظیم رمز موقت
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator className="bg-border" />
                                 <DropdownMenuGroup>
                                   <DropdownMenuLabel className="text-[10px] text-muted-foreground">تغییر نقش</DropdownMenuLabel>
                                   {roleOptions.map((role) => (
@@ -589,6 +727,15 @@ export default function UserManagement() {
                                     تعلیق دسترسی
                                   </DropdownMenuItem>
                                 )}
+                                <DropdownMenuSeparator className="bg-border" />
+                                <DropdownMenuItem
+                                  disabled={isSaving || isSelf}
+                                  onClick={() => openDeleteDialog(user)}
+                                  className="rounded-lg text-xs font-bold text-destructive focus:bg-destructive/10"
+                                >
+                                  <Trash2 className="ml-2 h-3.5 w-3.5" />
+                                  حذف دائمی
+                                </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </div>
@@ -640,6 +787,121 @@ export default function UserManagement() {
             <Button type="button" variant="outline" onClick={() => setIsSuspendDialogOpen(false)} className="h-10 rounded-xl">
               انصراف
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isEditUserOpen} onOpenChange={setIsEditUserOpen}>
+        <DialogContent className="bg-card text-right text-foreground sm:max-w-[560px]" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg font-black">
+              <Pencil className="h-5 w-5 text-primary" />
+              ویرایش کاربر
+            </DialogTitle>
+            <DialogDescription className="text-right text-muted-foreground">
+              مشخصات، نقش و اطلاعات تماس کاربر را بدون تغییر مسیرهای قبلی به‌روزرسانی کنید.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-3 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-muted-foreground">نام</Label>
+              <Input value={editUser.name} onChange={(event) => setEditUser((old) => ({ ...old, name: event.target.value }))} className="h-11 rounded-xl" />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-muted-foreground">ایمیل</Label>
+              <Input dir="ltr" type="email" value={editUser.email} onChange={(event) => setEditUser((old) => ({ ...old, email: event.target.value }))} className="h-11 rounded-xl" />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-muted-foreground">نقش</Label>
+              <Select value={editUser.role} onValueChange={(value) => setEditUser((old) => ({ ...old, role: value as UserRole }))}>
+                <SelectTrigger className="h-11 rounded-xl"><SelectValue /></SelectTrigger>
+                <SelectContent dir="rtl">
+                  {roleOptions.map((role) => <SelectItem key={role.value} value={role.value}>{role.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-muted-foreground">تلفن</Label>
+              <Input dir="ltr" value={editUser.phone} onChange={(event) => setEditUser((old) => ({ ...old, phone: event.target.value }))} className="h-11 rounded-xl" />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-muted-foreground">موقعیت</Label>
+              <Input value={editUser.location} onChange={(event) => setEditUser((old) => ({ ...old, location: event.target.value }))} className="h-11 rounded-xl" />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-muted-foreground">یادداشت داخلی</Label>
+              <Input value={editUser.bio} onChange={(event) => setEditUser((old) => ({ ...old, bio: event.target.value }))} className="h-11 rounded-xl" />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:justify-start">
+            <Button onClick={handleEditUser} disabled={isSaving} className="h-10 flex-1 rounded-xl font-black">
+              {isSaving ? <ActionSkeleton inverted className="w-28" /> : "ذخیره تغییرات"}
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setIsEditUserOpen(false)} className="h-10 rounded-xl">انصراف</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
+        <DialogContent className="bg-card text-right text-foreground sm:max-w-[430px]" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg font-black">
+              <KeyRound className="h-5 w-5 text-primary" />
+              تنظیم رمز موقت
+            </DialogTitle>
+            <DialogDescription className="text-right text-muted-foreground">
+              رمز جدید را فقط از مسیر امن داخلی در اختیار کاربر قرار دهید.
+              {selectedUser && <span className="mt-2 block font-black text-foreground">کاربر: {selectedUser.name}</span>}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-3">
+            <Label className="text-xs font-bold text-muted-foreground">رمز عبور جدید</Label>
+            <Input dir="ltr" type="password" value={temporaryPassword} onChange={(event) => setTemporaryPassword(event.target.value)} className="h-11 rounded-xl" />
+          </div>
+          <DialogFooter className="gap-2 sm:justify-start">
+            <Button onClick={handlePasswordReset} disabled={isSaving} className="h-10 flex-1 rounded-xl font-black">
+              {isSaving ? <ActionSkeleton inverted className="w-28" /> : "ذخیره رمز"}
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setIsPasswordDialogOpen(false)} className="h-10 rounded-xl">انصراف</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <DialogContent className="bg-card text-right text-foreground sm:max-w-[500px]" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg font-black text-destructive">
+              <Trash2 className="h-5 w-5" />
+              حذف دائمی کاربر
+            </DialogTitle>
+            <DialogDescription className="text-right text-muted-foreground">
+              حذف دائمی فقط برای کاربران تعلیق‌شده و بدون وابستگی فعال انجام می‌شود. حذف دسترسی امن‌تر همان تعلیق کاربر است.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-xl border border-border bg-muted/30 p-4 text-sm">
+            {!deletePreview ? (
+              <ActionSkeleton className="w-48" />
+            ) : deletePreview.canDelete ? (
+              <div className="font-bold text-emerald-600">این کاربر برای حذف دائمی آماده است.</div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 font-black text-amber-700">
+                  <AlertTriangle className="h-4 w-4" />
+                  حذف فعلا مسدود است
+                </div>
+                {deletePreview.blockers.map((blocker) => (
+                  <div key={blocker.code} className="text-xs text-muted-foreground">
+                    {blocker.message} {blocker.count ? `(${blocker.count})` : ""}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter className="gap-2 sm:justify-start">
+            <Button variant="destructive" onClick={handlePermanentDelete} disabled={isSaving || !deletePreview?.canDelete} className="h-10 flex-1 rounded-xl font-black">
+              {isSaving ? <ActionSkeleton className="w-28 bg-destructive/25" /> : "حذف دائمی"}
+            </Button>
+            <Button type="button" variant="outline" onClick={() => setIsDeleteDialogOpen(false)} className="h-10 rounded-xl">انصراف</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

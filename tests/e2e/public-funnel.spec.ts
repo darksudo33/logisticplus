@@ -55,14 +55,21 @@ for (const viewport of viewports) {
       await expect(page.locator("h1").first()).toBeVisible();
       const planLinks = page.locator('a[href*="/signup?plan="]');
       await expect(planLinks).toHaveCount(3);
-      await expect(planLinks.filter({ hasText: "شروع ثبت‌نام" }).first()).toBeVisible();
-      await expect(page.locator("body")).toContainText("SMS");
-      await expect(page.locator("body")).toContainText("افزونه");
+      await expect(planLinks.first()).toBeVisible();
+      await expect(page.locator("body")).toContainText(/SMS|پیامک/);
+      await expect(page.locator("body")).toContainText("محموله ماهانه نامحدود");
+      await expect(page.locator("body")).toContainText("هر ۱۰ ظرفیت محموله اضافه");
+    });
+
+    test("/signup/pending failed payment copy invites retry", async ({ page }) => {
+      await page.goto("/signup/pending?payment=failed");
+      await expect(page.locator("body")).toContainText(/پرداخت ناموفق|لغوشده/);
+      await expect(page.locator('a[href="/signup"]').first()).toBeVisible();
     });
 
     test("/ landing advertises SMS alert capability", async ({ page }) => {
       await page.goto("/");
-      await expect(page.locator("body")).toContainText("SMS");
+      await expect(page.locator("body")).toContainText(/SMS|پیامک/);
       await expect(page.locator("body")).toContainText("دمیوراژ");
       await expect(page.locator("body")).toContainText("وضعیت");
     });

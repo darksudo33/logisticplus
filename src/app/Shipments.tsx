@@ -39,6 +39,8 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { ShipmentStatus } from "../types";
+import { ShamsiDateTimeField } from "@/src/components/ShamsiDateTimeField";
+import { getShipmentProgress } from "@/src/lib/shipmentWorkflow";
 
 const StatusBadge = ({ status }: { status: string }) => {
   const styles: Record<string, string> = {
@@ -94,9 +96,9 @@ export default function Shipments() {
     estimatedDelivery: "",
   });
 
-  const handleAddShipment = () => {
+  const handleAddShipment = async () => {
     const customer = customers.find(c => c.id === newShipment.customerId);
-    addShipment({
+    await addShipment({
       ...newShipment,
       customerName: customer?.name || "مشتری متفرقه",
       status: "PENDING",
@@ -113,6 +115,23 @@ export default function Shipments() {
       destination: "",
       estimatedDelivery: "",
     });
+  };
+
+  const handleArchiveShipment = async (id: string) => {
+    try {
+      await archiveShipment(id);
+      toast.success("Ù…Ø­Ù…ÙˆÙ„Ù‡ Ø¨Ù‡ Ø¨Ø§ÛŒÚ¯Ø§Ù†ÛŒ Ù…Ù†ØªÙ‚Ù„ Ø´Ø¯.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Ø¨Ø§ÛŒÚ¯Ø§Ù†ÛŒ Ù…Ø­Ù…ÙˆÙ„Ù‡ Ù†Ø§Ù…ÙˆÙÙ‚ Ø¨ÙˆØ¯.");
+    }
+  };
+
+  const handleShipmentStatusChange = async (id: string, status: ShipmentStatus) => {
+    try {
+      await updateShipmentStatus(id, status);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ØªØºÛŒÛŒØ± ÙˆØ¶Ø¹ÛŒØª Ù…Ø­Ù…ÙˆÙ„Ù‡ Ù†Ø§Ù…ÙˆÙÙ‚ Ø¨ÙˆØ¯.");
+    }
   };
 
   const processedShipments = React.useMemo(() => {
@@ -188,7 +207,7 @@ export default function Shipments() {
         <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
           <DialogTrigger
             render={(triggerProps) => (
-              <Button {...triggerProps} className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 h-10 w-full sm:w-auto text-xs font-bold px-4 rounded-xl">
+              <Button {...triggerProps} data-testid="open-shipment-dialog" className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 h-10 w-full sm:w-auto text-xs font-bold px-4 rounded-xl">
                 <Plus className="w-3.5 h-3.5" />
                 ثبت محموله جدید
               </Button>
@@ -259,18 +278,17 @@ export default function Shipments() {
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="eta" className="text-xs text-muted-foreground">تاریخ تحویل تخمینی (ETA)</Label>
-                <Input 
+                <ShamsiDateTimeField
                   id="eta" 
-                  placeholder="۱۴۰۳/۰۴/۱۵"
-                  className="bg-muted border-border text-xs h-9" 
+                  label="تاریخ و ساعت تحویل تخمینی (ETA)"
                   value={newShipment.estimatedDelivery}
-                  onChange={e => setNewShipment({...newShipment, estimatedDelivery: e.target.value})}
+                  onChange={(estimatedDelivery) => setNewShipment({ ...newShipment, estimatedDelivery })}
+                  triggerClassName="bg-muted text-xs h-9"
                 />
               </div>
             </div>
             <DialogFooter>
-              <Button onClick={handleAddShipment} className="w-full bg-primary text-primary-foreground font-bold h-10">
+              <Button data-testid="submit-shipment" onClick={handleAddShipment} className="w-full bg-primary text-primary-foreground font-bold h-10">
                 ایجاد محموله
               </Button>
             </DialogFooter>
@@ -348,13 +366,7 @@ export default function Shipments() {
         {processedShipments.length > 0 ? (
           processedShipments.map((shipment) => {
             const stepsForShipment = shipmentSteps.filter(s => s.shipmentId === shipment.id);
-            const totalSteps = stepsForShipment.length;
-            const completedSteps = stepsForShipment.filter(s => s.status === 'COMPLETED').length;
-            let progressValue = totalSteps > 0 ? (completedSteps / totalSteps) * 100 : 0;
-            
-            if (shipment.status === 'DELIVERED') progressValue = 100;
-            else if (shipment.status === 'CLEARED' && progressValue < 80) progressValue = 85;
-            else if (shipment.status === 'ARRIVED' && progressValue < 50) progressValue = 60;
+            const progress = getShipmentProgress(shipment, stepsForShipment);
             
             return (
               <Card key={shipment.id} className="bg-card border-border rounded-xl overflow-hidden shadow-sm p-4">
@@ -391,7 +403,7 @@ export default function Shipments() {
                           {(shipment.status === "DELIVERED" || shipment.status === "CLOSED") && (
                             <DropdownMenuItem 
                               className="text-xs cursor-pointer hover:bg-amber-500/10 text-amber-500 font-bold flex items-center gap-2 rounded-lg"
-                              onClick={() => { archiveShipment(shipment.id); toast.success("محموله به بایگانی منتقل شد."); }}
+                              onClick={() => handleArchiveShipment(shipment.id)}
                             >
                               <Archive className="w-3.5 h-3.5" />
                               بایگانی محموله
@@ -416,7 +428,7 @@ export default function Shipments() {
                            <DropdownMenuItem 
                              key={status.value} 
                              className="text-xs cursor-pointer hover:bg-muted flex justify-between items-center rounded-lg"
-                             onClick={() => updateShipmentStatus(shipment.id, status.value as ShipmentStatus)}
+                             onClick={() => handleShipmentStatusChange(shipment.id, status.value as ShipmentStatus)}
                            >
                              <span className="font-medium">{status.label}</span>
                              {shipment.status === status.value && <Check className="w-3 h-3 text-primary" />}
@@ -442,11 +454,11 @@ export default function Shipments() {
                   <div className="flex justify-between items-center text-[9px] font-bold">
                     <span className="text-muted-foreground">پیشرفت فرآیند</span>
                     <span className="text-primary">
-                      {Math.round(progressValue)}%
+                      {progress.percent}%
                     </span>
                   </div>
                   <Progress 
-                    value={progressValue} 
+                    value={progress.value}
                     className="h-1 bg-muted" 
                   />
                </div>
@@ -515,13 +527,7 @@ export default function Shipments() {
                 {processedShipments.length > 0 ? (
                   processedShipments.map((shipment) => {
                     const stepsForShipment = shipmentSteps.filter(s => s.shipmentId === shipment.id);
-                    const totalSteps = stepsForShipment.length;
-                    const completedSteps = stepsForShipment.filter(s => s.status === 'COMPLETED').length;
-                    let progressValue = totalSteps > 0 ? (completedSteps / totalSteps) * 100 : 0;
-                    
-                    if (shipment.status === 'DELIVERED') progressValue = 100;
-                    else if (shipment.status === 'CLEARED' && progressValue < 80) progressValue = 85;
-                    else if (shipment.status === 'ARRIVED' && progressValue < 50) progressValue = 60;
+                    const progress = getShipmentProgress(shipment, stepsForShipment);
 
                     return (
                       <tr key={shipment.id} className="hover:bg-muted/30 transition-colors group">
@@ -537,11 +543,11 @@ export default function Shipments() {
                             <div className="flex justify-between items-center text-[10px]">
                               <StatusBadge status={shipment.status} />
                               <span className="font-bold text-primary">
-                                {Math.round(progressValue)}%
+                                {progress.percent}%
                               </span>
                             </div>
                             <Progress 
-                              value={progressValue} 
+                              value={progress.value}
                               className="h-1.5 bg-muted" 
                             />
                           </div>
@@ -576,7 +582,7 @@ export default function Shipments() {
                                  {(shipment.status === "DELIVERED" || shipment.status === "CLOSED") && (
                                    <DropdownMenuItem 
                                      className="text-xs cursor-pointer hover:bg-amber-500/10 text-amber-500 font-bold flex items-center gap-2 rounded-lg"
-                                     onClick={() => { archiveShipment(shipment.id); toast.success("محموله به بایگانی منتقل شد."); }}
+                                     onClick={() => handleArchiveShipment(shipment.id)}
                                    >
                                      <Archive className="w-3.5 h-3.5" />
                                      بایگانی محموله
@@ -608,7 +614,7 @@ export default function Shipments() {
                                    <DropdownMenuItem 
                                      key={status.value} 
                                      className="text-xs cursor-pointer hover:bg-muted flex justify-between items-center rounded-lg"
-                                     onClick={() => updateShipmentStatus(shipment.id, status.value as ShipmentStatus)}
+                                     onClick={() => handleShipmentStatusChange(shipment.id, status.value as ShipmentStatus)}
                                    >
                                      <span className="font-medium">{status.label}</span>
                                      {shipment.status === status.value && <Check className="w-3 h-3 text-primary" />}

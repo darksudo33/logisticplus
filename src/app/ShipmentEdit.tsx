@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useMockStore } from "@/src/store/useMockStore";
 import { ShipmentStatus } from "@/src/types";
+import { ShamsiDateTimeField } from "@/src/components/ShamsiDateTimeField";
 
 export function ShipmentEdit() {
   const { id } = useParams();
@@ -59,9 +60,9 @@ export function ShipmentEdit() {
     );
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent | React.MouseEvent) => {
     e.preventDefault();
-    updateShipment(shipment.id, formData);
+    await updateShipment(shipment.id, formData);
     navigate(`/shipments/${shipment.id}`);
   };
 
@@ -162,15 +163,11 @@ export function ShipmentEdit() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label className="text-xs font-bold text-muted-foreground pr-1 flex items-center gap-2">
-                      <Calendar className="w-3 h-3 text-primary" />
-                      تاریخ تقریبی تحویل
-                    </Label>
-                    <Input 
-                      type="date"
-                      className="bg-background border-border h-11 text-sm focus:ring-primary" 
+                    <ShamsiDateTimeField
+                      label="تاریخ و ساعت تقریبی تحویل"
                       value={formData.estimatedDelivery}
-                      onChange={e => setFormData({...formData, estimatedDelivery: e.target.value})}
+                      onChange={(estimatedDelivery) => setFormData({ ...formData, estimatedDelivery })}
+                      triggerClassName="bg-background border-border h-11 text-sm focus:ring-primary"
                     />
                   </div>
                   <div className="space-y-2">

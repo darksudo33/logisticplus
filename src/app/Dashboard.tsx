@@ -20,8 +20,9 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "motion/react";
-import { differenceInSeconds, format, parse } from "date-fns-jalali";
+import { differenceInSeconds, format } from "date-fns-jalali";
 import { EmptyState, EmptyTableRow, SetupChecklist } from "@/src/components/EmptyState";
+import { getShamsiDatePart, parseShamsiDateTimeValue } from "@/src/components/ShamsiDateTimeField";
 
 const cardBase = "rounded-lg border-border bg-card shadow-none transition-all";
 
@@ -115,18 +116,13 @@ export default function Dashboard() {
     let cancelled = false;
     const loadDashboard = async () => {
       try {
-        const endpoints = ["summary", "latest-shipments", "priority-shipments", "my-tasks", "alerts", "management"];
-        const responses = await Promise.all(endpoints.map((endpoint) => fetch(`/api/dashboard/${endpoint}`)));
-        const payloads = await Promise.all(responses.map((response) => response.json()));
+        const response = await fetch("/api/dashboard");
+        const payload = await response.json();
+        if (!response.ok || payload?.ok === false) {
+          throw new Error(payload?.error?.message || "Could not load dashboard.");
+        }
         if (cancelled) return;
-        setDashboardData({
-          summary: payloads[0]?.data,
-          latestShipments: payloads[1]?.data,
-          priorityShipments: payloads[2]?.data,
-          myTasks: payloads[3]?.data,
-          alerts: payloads[4]?.data,
-          management: payloads[5]?.data,
-        });
+        setDashboardData(payload.data || null);
       } catch {
         if (!cancelled) setDashboardData(null);
       }
@@ -142,7 +138,7 @@ export default function Dashboard() {
   const visibleShipments = shipments.filter((shipment) => !shipment.isArchived);
   const activeShipments = shipments.filter((s) => !s.isArchived && s.status !== "DELIVERED" && s.status !== "CLOSED");
   const customsShipments = shipments.filter((s) => !s.isArchived && s.status === "CUSTOMS");
-  const openTodayTasks = tasks.filter((t) => t.status !== "DONE" && t.dueDate === today);
+  const openTodayTasks = tasks.filter((t) => t.status !== "DONE" && getShamsiDatePart(t.dueDate) === today);
   const completedTasks = tasks.filter((t) => t.status === "DONE");
   const demurrageRisk = shipments.filter((s) => s.status === "ARRIVED" && (s.freeTimeDays || 14) < 5);
   const summary = dashboardData?.summary;
@@ -181,11 +177,19 @@ export default function Dashboard() {
     {
       label: "فعال کردن رهگیری مشتری",
       description: "بعد از ثبت محموله، لینک رهگیری عمومی را بسازید.",
-      done: visibleShipments.some((shipment) => Boolean((shipment as any).publicTrackingToken || (shipment as any).customerAccessToken)),
+      done: visibleShipments.some((shipment) =>
+        Boolean(
+          shipment.customerAccessEnabled ||
+            shipment.hasCustomerAccess ||
+            (shipment as any).publicTrackingToken ||
+            (shipment as any).customerAccessToken
+        )
+      ),
       to: "/shipments",
       icon: PlusCircle,
     },
   ];
+  const hasIncompleteSetup = setupItems.some((item) => !item.done);
 
   const recentShipments = React.useMemo(() => dashboardData?.latestShipments?.length ? dashboardData.latestShipments : visibleShipments.slice(0, 8), [dashboardData, visibleShipments]);
   const recentTasks = React.useMemo(() => tasks.slice(0, 4), [tasks]);
@@ -245,8 +249,10 @@ export default function Dashboard() {
         let daysRem = 5;
         try {
           if (s.estimatedDelivery) {
-            const delivery = parse(s.estimatedDelivery, "yyyy/MM/dd", new Date());
-            daysRem = differenceInSeconds(delivery, new Date()) / (24 * 3600);
+            const delivery = parseShamsiDateTimeValue(s.estimatedDelivery);
+            if (delivery) {
+              daysRem = differenceInSeconds(delivery, new Date()) / (24 * 3600);
+            }
           }
         } catch (error) {
           daysRem = 5;
@@ -284,7 +290,7 @@ export default function Dashboard() {
         ))}
       </div>
 
-      <SetupChecklist items={setupItems} />
+      {hasIncompleteSetup ? <SetupChecklist items={setupItems} /> : null}
 
       <section className="space-y-2.5">
         <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">

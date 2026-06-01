@@ -45,6 +45,11 @@ type PublicTrackingPayload = {
     destination?: string;
     estimatedDelivery?: string;
     lastPublicUpdate?: string;
+    currentPublicPhase?: string;
+    currentPublicLabel?: string;
+    completedPublicStepsCount?: number;
+    totalPublicStepsCount?: number;
+    publicNote?: string;
   };
   steps?: PublicStep[];
   documents: PublicDocument[];
@@ -287,6 +292,35 @@ function PublicTrackingResult({ data }: { data: PublicTrackingPayload }) {
           value={data.shipment.estimatedDelivery}
         />
       </div>
+
+      {Boolean(data.shipment.totalPublicStepsCount) && (
+        <Card className="rounded-2xl border-blue-100 bg-white shadow-sm">
+          <CardContent className="p-5">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-xs font-black text-blue-700">{data.shipment.currentPublicPhase || "پیشرفت محموله"}</p>
+                <h3 className="mt-2 text-lg font-black leading-8 text-slate-950">
+                  {data.shipment.currentPublicLabel || statusLabel}
+                </h3>
+                {data.shipment.publicNote && (
+                  <p className="mt-2 text-sm font-medium leading-7 text-slate-600">{data.shipment.publicNote}</p>
+                )}
+              </div>
+              <Badge className="w-fit border-blue-200 bg-blue-50 px-3 py-1 text-blue-700 hover:bg-blue-50">
+                {data.shipment.completedPublicStepsCount || 0} از {data.shipment.totalPublicStepsCount || 0}
+              </Badge>
+            </div>
+            <div className="mt-4 h-2 overflow-hidden rounded-full bg-blue-50">
+              <div
+                className="h-full rounded-full bg-blue-600 transition-all"
+                style={{
+                  width: `${data.shipment.totalPublicStepsCount ? Math.round(((data.shipment.completedPublicStepsCount || 0) / data.shipment.totalPublicStepsCount) * 100) : 0}%`,
+                }}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <CustomerStepsBox steps={data.steps} />
 

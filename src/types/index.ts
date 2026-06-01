@@ -6,7 +6,7 @@
 export type UserRole = "CEO" | "MANAGER" | "OPERATIONS" | "CUSTOMER_SERVICE" | "FINANCE";
 export type ShipmentStatus = "PENDING" | "BOOKED" | "IN_TRANSIT" | "ARRIVED" | "CUSTOMS" | "CLEARED" | "DELIVERED" | "CLOSED";
 export type StepStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED";
-export type TaskStatus = "TODO" | "IN_PROGRESS" | "DONE" | "BLOCKED" | "CANCELLED";
+export type TaskStatus = "TODO" | "ASSIGNED" | "IN_PROGRESS" | "WAITING" | "BLOCKED" | "DONE" | "CANCELLED";
 export type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
 export type DemurrageStatus = "ACTIVE" | "PAID" | "WAIVED";
 
@@ -58,6 +58,8 @@ export interface Shipment {
   actualDelivery?: string;
   freeTimeDays: number;
   isArchived?: boolean;
+  customerAccessEnabled?: boolean;
+  hasCustomerAccess?: boolean;
 }
 
 export interface ShipmentStep {
@@ -72,16 +74,149 @@ export interface ShipmentStep {
 
 export interface Task {
   id: string;
+  organizationId?: string;
+  ownerUserId?: string;
   title: string;
   description: string;
   assignedToUserId: string;
   assignedToName: string;
+  assignedByUserId?: string;
   assignedByName: string;
+  assignedAt?: string;
+  assignmentNote?: string;
   status: TaskStatus;
   priority: TaskPriority;
   dueDate: string;
   deadline?: string; // Optional field for explicit time/date deadline
   shipmentId?: string;
+  completedAt?: string;
+  completedByUserId?: string;
+  sourceType?: string;
+  sourceId?: string;
+  workflowInstanceId?: string;
+  workflowStepCode?: string;
+  workflowBlockerId?: string;
+  blockerCode?: string;
+  createdAt: string;
+}
+
+export type ShipmentWorkflowRoute = "green" | "yellow" | "red";
+export type ShipmentWorkflowStepStatus = "pending" | "active" | "completed" | "skipped";
+export type ShipmentWorkflowBlockerStatus = "open" | "resolved" | "cancelled";
+
+export interface OrganizationMemberOption {
+  userId: string;
+  displayName: string;
+  email: string;
+  roleName: string;
+  active: boolean;
+}
+
+export interface ShipmentWorkflowPhase {
+  id: string;
+  labelFa: string;
+  labelEn: string;
+}
+
+export interface ShipmentWorkflowStep {
+  code: string;
+  phaseId: string | null;
+  phaseLabelFa: string;
+  phaseLabelEn: string;
+  labelFa: string;
+  labelEn: string;
+  order: number;
+  status: ShipmentWorkflowStepStatus;
+  isVisible: boolean;
+  isExceptional: boolean;
+  internalNote: string;
+  publicNote: string;
+  completedByUserId?: string | null;
+  completedAt?: string | null;
+  blockers?: ShipmentWorkflowBlocker[];
+}
+
+export interface ShipmentWorkflowBlocker {
+  id: string;
+  workflowInstanceId: string;
+  shipmentId: string;
+  stepCode?: string | null;
+  blockerCode: string;
+  labelFa: string;
+  labelEn: string;
+  status: ShipmentWorkflowBlockerStatus;
+  internalNote: string;
+  publicNote: string;
+  createdByUserId?: string | null;
+  createdAt: string;
+  resolvedByUserId?: string | null;
+  resolvedAt?: string | null;
+}
+
+export interface ShipmentWorkflowEvent {
+  id: string;
+  eventType: string;
+  stepCode?: string | null;
+  blockerId?: string | null;
+  blockerCode?: string | null;
+  actorUserId?: string | null;
+  actorName?: string;
+  internalNote?: string;
+  publicNote?: string;
+  publicVisible?: boolean;
+  createdAt: string;
+}
+
+export interface ShipmentWorkflowProgress {
+  definition: {
+    key: string;
+    phases: ShipmentWorkflowPhase[];
+    steps: Array<{ code: string; phaseId: string; labelFa: string; labelEn: string; order: number }>;
+    blockers: Array<{ code: string; labelFa: string; labelEn: string }>;
+  };
+  shipmentId: string;
+  workflow: null | {
+    id: string;
+    workflowKey: string;
+    status: "active" | "completed" | "cancelled";
+    shipmentId: string;
+    currentStepCode: string;
+    customsRoute?: ShipmentWorkflowRoute | null;
+    startedAt: string;
+    completedAt?: string | null;
+  };
+  phases: ShipmentWorkflowPhase[];
+  steps: ShipmentWorkflowStep[];
+  blockers: ShipmentWorkflowBlocker[];
+  history: ShipmentWorkflowEvent[];
+  summary: null | {
+    currentStepCode?: string | null;
+    currentLabelFa: string;
+    currentLabelEn: string;
+    currentPublicPhase: string;
+    currentPublicLabel: string;
+    completedStepsCount: number;
+    totalStepsCount: number;
+    openBlockersCount: number;
+    isBlocked: boolean;
+  };
+}
+
+export interface TaskEvent {
+  id: string;
+  taskId: string;
+  eventType: string;
+  actorUserId?: string | null;
+  actorName?: string;
+  fromAssigneeUserId?: string | null;
+  fromAssigneeName?: string;
+  toAssigneeUserId?: string | null;
+  toAssigneeName?: string;
+  fromStatus?: string | null;
+  toStatus?: string | null;
+  note?: string;
+  workflowStepCode?: string | null;
+  blockerCode?: string | null;
   createdAt: string;
 }
 
@@ -136,6 +271,32 @@ export interface ShipmentDocument {
   version?: number;
 }
 
+export type CommercialCardStatus = "VALID" | "EXPIRING_SOON" | "EXPIRED";
+
+export interface CommercialCardDocument {
+  id: string;
+  title: string;
+  fileName?: string;
+  fileSize?: string;
+  description?: string;
+  uploadedAt: string;
+}
+
+export interface CommercialCard {
+  id: string;
+  holderName: string;
+  cardNumber: string;
+  issueDate: string;
+  expirationDate: string;
+  nationalId?: string;
+  responsibleName?: string;
+  responsiblePhone?: string;
+  description?: string;
+  documents: CommercialCardDocument[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Channel {
   id: string;
   name: string;
@@ -185,6 +346,7 @@ export interface Quote {
   status: QuoteStatus;
   notes?: string;
   createdAt: string;
+  isArchived?: boolean;
 }
 
 export interface Cheque {
@@ -221,4 +383,5 @@ export interface Appointment {
   nextActionItems?: string;
   reminderSent: boolean;
   createdAt: string;
+  isArchived?: boolean;
 }
