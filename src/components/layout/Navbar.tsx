@@ -7,7 +7,7 @@ import React, { useState, useEffect } from "react";
 import { format } from "date-fns-jalali";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { LayoutDashboard, Ship, Users, CheckSquare, MessageSquare, ChevronRight, ChevronLeft, LogOut, Search, Bell, FileText, History, Settings as SettingsIcon, Menu, ShieldCheck, CreditCard, Archive, Calculator, X, Sun, Moon } from "lucide-react";
+import { LayoutDashboard, Ship, Users, CheckSquare, MessageSquare, ChevronRight, ChevronLeft, LogOut, Search, Bell, FileText, History, Settings as SettingsIcon, Menu, ShieldCheck, CreditCard, Archive, Calculator, X, Sun, Moon, IdCard } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMockStore } from "../../store/useMockStore";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,8 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { GlobalSearch } from "@/src/components/search/GlobalSearch";
+import { useCurrentUserPermissions } from "@/src/hooks/useCurrentUserPermissions";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,10 +31,11 @@ import {
 const sidebarItems = [
   { icon: ShieldCheck, label: "ادمین پلتفرم", path: "/admin", platformOnly: true },
   { icon: LayoutDashboard, label: "داشبورد", path: "/dashboard" },
-  { icon: Users, label: "مراجعات حضوری", path: "/compliance" },
+  { icon: Users, label: "مراجعات حضوری", path: "/compliance-meetings" },
   { icon: CreditCard, label: "مدیریت چک‌ها", path: "/cheques" },
+  { icon: IdCard, label: "کارت‌های بازرگانی", path: "/commercial-cards" },
   { icon: Ship, label: "محموله‌ها", path: "/shipments" },
-  { icon: Calculator, label: "مدیریت کوتاژ", path: "/quotage" },
+  { icon: Calculator, label: "مدیریت کوتاژ", path: "/quotations" },
   { icon: Users, label: "مشتریان", path: "/customers" },
   { icon: Archive, label: "بایگانی", path: "/archive" },
   { icon: ShieldCheck, label: "مدیریت کاربران", path: "/management", ceoOnly: true },
@@ -42,19 +45,16 @@ const sidebarItems = [
   { icon: MessageSquare, label: "چت", path: "/chat" },
 ];
 
-function hasPermission(user: any, permission: string) {
-  return Array.isArray(user?.permissions) && user.permissions.includes(permission);
-}
-
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const currentUser = useMockStore(state => state.currentUser);
   const setCurrentUser = useMockStore(state => state.setCurrentUser);
+  const { isPlatformAdmin } = useCurrentUserPermissions();
 
   const menuItems = sidebarItems.filter(item => {
-    if ((item as any).platformOnly && !hasPermission(currentUser, "platform.admin")) return false;
+    if ((item as any).platformOnly) return false;
     if ((item as any).ceoOnly && currentUser?.role !== "CEO") return false;
     return true;
   });
@@ -69,7 +69,7 @@ export function Sidebar() {
 
   return (
     <div className={cn(
-      "h-screen bg-card/95 backdrop-blur-xl border-l border-border/80 transition-all duration-300 hidden lg:flex flex-col pt-3",
+      "h-screen min-h-0 bg-card/95 backdrop-blur-xl border-l border-border/80 transition-all duration-300 hidden lg:flex flex-col pt-3",
       collapsed ? "w-[72px]" : "w-[224px]"
     )}>
       <div className={cn("px-3 mb-4 flex items-center gap-2 font-sans", collapsed ? "justify-center" : "justify-between")}>
@@ -102,6 +102,12 @@ export function Sidebar() {
                 <span>تنظیمات حساب</span>
                 <SettingsIcon className="w-3 h-3 text-primary" />
               </DropdownMenuItem>
+              {isPlatformAdmin && (
+                <DropdownMenuItem data-testid="admin-console-shortcut-menu" onClick={() => navigate("/platform-admin")} className="focus:bg-accent cursor-pointer text-xs text-right w-full flex items-center justify-between rounded-lg h-9">
+                  <span>Admin Console</span>
+                  <ShieldCheck className="w-3 h-3 text-primary" />
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator className="bg-border" />
               <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:bg-destructive/10 cursor-pointer text-xs rounded-lg h-9">
                 <LogOut className="w-3 h-3 ml-2" />
@@ -121,8 +127,8 @@ export function Sidebar() {
         </Button>
       </div>
 
-      <ScrollArea className="flex-1 px-2 font-sans">
-        <nav className="space-y-1">
+      <ScrollArea className="min-h-0 flex-1 px-2 font-sans">
+        <nav className="space-y-1 pb-6">
           {menuItems.map((item) => (
             <Link
               key={item.path}
@@ -171,6 +177,7 @@ export function TopBar() {
   const unreadCount = notifications.filter(n => !n.isRead).length;
   const currentTheme = useMockStore(state => state.currentTheme);
   const toggleTheme = useMockStore(state => state.toggleTheme);
+  const { isPlatformAdmin } = useCurrentUserPermissions();
 
   const handleLogout = () => {
     fetch("/api/auth/logout", { method: "POST" }).catch((error) => {
@@ -180,13 +187,20 @@ export function TopBar() {
     navigate("/login");
   };
 
+  const notificationTime = (createdAt: string) => {
+    const date = new Date(createdAt);
+    return Number.isNaN(date.getTime()) ? "" : format(date, "HH:mm");
+  };
+
   const handleNotificationClick = (id: string, link?: string) => {
-    markNotificationRead(id);
+    void markNotificationRead(id).catch((error) => {
+      console.error("Notification read update failed:", error);
+    });
     if (link) navigate(link);
   };
 
   const menuItems = sidebarItems.filter(item => {
-    if ((item as any).platformOnly && !hasPermission(currentUser, "platform.admin")) return false;
+    if ((item as any).platformOnly) return false;
     if ((item as any).ceoOnly && currentUser?.role !== "CEO") return false;
     return true;
   });
@@ -196,12 +210,12 @@ export function TopBar() {
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date());
-    }, 1000);
+    }, 60_000);
     return () => clearInterval(timer);
   }, []);
 
   const dateString = format(currentTime, "EEEE، d MMMM yyyy");
-  const timeString = format(currentTime, "HH:mm:ss");
+  const timeString = format(currentTime, "HH:mm");
 
   return (
     <header className="h-14 bg-card/80 backdrop-blur-xl border-b border-border/80 px-4 md:px-5 flex items-center justify-between sticky top-0 z-30 font-sans">
@@ -209,11 +223,11 @@ export function TopBar() {
         {/* Mobile Menu Trigger */}
         <Sheet>
           <SheetTrigger render={(triggerProps) => (
-            <Button {...triggerProps} variant="ghost" size="icon" className="lg:hidden text-muted-foreground">
+            <Button {...triggerProps} data-testid="mobile-nav-trigger" variant="ghost" size="icon" className="lg:hidden text-muted-foreground">
               <Menu className="w-5 h-5" />
             </Button>
           )} />
-          <SheetContent side="right" className="bg-card border-border p-0 w-[280px] text-right font-sans overflow-hidden flex flex-col" dir="rtl">
+          <SheetContent side="right" className="flex h-[100dvh] max-h-[100dvh] min-h-0 w-[280px] flex-col overflow-hidden bg-card p-0 text-right font-sans border-border" dir="rtl">
             <div className="absolute inset-0 bg-gradient-to-b from-primary/5 via-transparent to-transparent pointer-events-none" />
             
             <SheetHeader className="p-6 border-b border-border relative z-10 bg-card/80 backdrop-blur-md">
@@ -227,7 +241,7 @@ export function TopBar() {
               </div>
             </SheetHeader>
 
-            <ScrollArea className="flex-1 relative z-10">
+            <ScrollArea className="relative z-10 min-h-0 flex-1">
               <nav className="p-4 space-y-1.5 focus-visible:outline-none">
                 {menuItems.map((item, idx) => (
                   <motion.div
@@ -259,7 +273,7 @@ export function TopBar() {
               </nav>
             </ScrollArea>
 
-            <div className="mt-auto p-4 border-t border-border bg-card/80 backdrop-blur-xl relative z-10">
+            <div className="relative z-10 mt-auto shrink-0 border-t border-border bg-card/80 p-4 backdrop-blur-xl">
                <div className="bg-muted/40 rounded-3xl p-3 border border-border flex items-center gap-3 group">
                   <div className="relative">
                     <Avatar className="w-10 h-10 border-2 border-primary/20 group-hover:border-primary/50 transition-colors">
@@ -289,19 +303,33 @@ export function TopBar() {
           </SheetContent>
         </Sheet>
 
+        <GlobalSearch />
+
         {/* Global Search - Hidden on very small screens */}
-        <div className="relative w-full max-w-sm hidden sm:block">
+        <div className="hidden">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input placeholder="جستجو پیشرفته..." className="bg-muted border-border pr-10 focus-visible:ring-primary/50 h-9 text-[11px] text-muted-foreground rounded-lg" />
         </div>
         
         {/* Mobile Search Icon only */}
-        <Button variant="ghost" size="icon" className="sm:hidden text-muted-foreground">
+        <Button variant="ghost" size="icon" className="hidden">
           <Search className="w-4 h-4" />
         </Button>
       </div>
 
       <div className="flex items-center gap-2 md:gap-4">
+        {isPlatformAdmin && (
+          <Button
+            data-testid="admin-console-shortcut"
+            variant="outline"
+            className="hidden h-9 rounded-xl px-3 text-xs font-black text-primary sm:inline-flex"
+            onClick={() => navigate("/platform-admin")}
+          >
+            <ShieldCheck className="ml-2 h-4 w-4" />
+            Admin Console
+          </Button>
+        )}
+
         <div className="hidden xl:flex items-center gap-3 text-muted-foreground bg-muted/50 px-4 py-1.5 rounded-full border border-border">
           <span className="text-[11px] font-medium tracking-tight">{dateString}</span>
           <div className="w-[1px] h-3 bg-border" />
@@ -327,7 +355,11 @@ export function TopBar() {
                 <Button 
                   variant="ghost" 
                   className="text-[10px] text-primary h-auto p-0 hover:bg-transparent"
-                  onClick={markAllNotificationsRead}
+                  onClick={() => {
+                    void markAllNotificationsRead().catch((error) => {
+                      console.error("Notifications read update failed:", error);
+                    });
+                  }}
                 >
                   حذف همه
                 </Button>
@@ -360,7 +392,7 @@ export function TopBar() {
                           {notification.type === "SUCCESS" && "تایید"}
                           {notification.type === "URGENT" && "فوری"}
                         </Badge>
-                        <span className="text-[10px] text-muted-foreground font-mono opacity-60">۱۴:۳{notification.id[1]}</span>
+                        <span className="text-[10px] text-muted-foreground font-mono opacity-60">{notificationTime(notification.createdAt)}</span>
                       </div>
                       <p className="text-[11px] font-black text-foreground leading-snug">{notification.title}</p>
                       <p className="text-[10px] text-muted-foreground line-clamp-2 leading-relaxed">{notification.message}</p>

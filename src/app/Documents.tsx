@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppDataStore } from "@/src/store/useMockStore";
 import { 
   FileText, 
   Search, 
@@ -32,18 +32,20 @@ import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { DocumentType } from "../types";
 import { EmptyState, resetFiltersAction } from "@/src/components/EmptyState";
+import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
 
 export default function Documents() {
   const navigate = useNavigate();
-  const documents = useMockStore(state => state.documents);
-  const shipments = useMockStore(state => state.shipments);
-  const loadCurrentUserRecords = useMockStore(state => state.loadCurrentUserRecords);
+  const documents = useAppDataStore(state => state.documents);
+  const shipments = useAppDataStore(state => state.shipments);
+  const refreshDocumentRecords = useAppDataStore(state => state.refreshDocuments);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("ALL");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [documentToArchive, setDocumentToArchive] = useState<{ id: string; name: string } | null>(null);
   const [newDoc, setNewDoc] = useState({
     name: "",
     type: "OTHER" as DocumentType,
@@ -81,7 +83,7 @@ export default function Documents() {
   ];
 
   const refreshDocuments = async () => {
-    await loadCurrentUserRecords();
+    await refreshDocumentRecords();
   };
 
   const handleAddDoc = async () => {
@@ -123,11 +125,11 @@ export default function Documents() {
     const response = await fetch(`/api/documents/${encodeURIComponent(id)}/archive`, { method: "POST" });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload.ok) {
-      toast.error(payload.error?.message || "بایگانی سند ناموفق بود.");
-      return;
+      throw new Error(payload.error?.message || "بایگانی سند ناموفق بود.");
     }
     await refreshDocuments();
     toast.success("سند با موفقیت بایگانی شد.");
+    setDocumentToArchive(null);
   };
 
   const handleVisibilityChange = async (id: string, visibility: "internal" | "customer_visible") => {
@@ -386,7 +388,7 @@ export default function Documents() {
                               variant="ghost"
                               size="icon"
                               className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                              onClick={() => handleArchiveDoc(doc.id)}
+                              onClick={() => setDocumentToArchive({ id: doc.id, name: doc.name })}
                               aria-label={`Archive ${doc.name}`}
                               title="Archive document"
                              >
@@ -411,6 +413,16 @@ export default function Documents() {
           )}
         </CardContent>
       </Card>
+      <DeleteConfirmDialog
+        isOpen={Boolean(documentToArchive)}
+        onClose={() => setDocumentToArchive(null)}
+        onConfirm={() => documentToArchive ? handleArchiveDoc(documentToArchive.id) : undefined}
+        title="بایگانی سند"
+        description="این سند از فهرست فعال خارج می‌شود و از بخش بایگانی قابل بازیابی خواهد بود."
+        itemName={documentToArchive?.name}
+        confirmLabel="انتقال به بایگانی"
+        pendingLabel="در حال بایگانی..."
+      />
     </div>
   );
 }

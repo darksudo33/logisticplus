@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { User, Customer, Shipment, Task, Message, ActivityLog, Demurrage, ShipmentStep, ShipmentStatus, TaskStatus, ShipmentDocument, Channel, Notification, Appointment, AppointmentStatus, Cheque, Quote } from "../types";
+import { User, Customer, Shipment, Task, Message, ActivityLog, Demurrage, ShipmentStep, ShipmentStatus, TaskStatus, ShipmentDocument, Channel, Notification, Appointment, AppointmentStatus, Cheque, Quote, CommercialCard, OrganizationMemberOption, ShipmentWorkflowProgress, TaskEvent } from "../types";
+import { buildShipmentWorkflowSteps, ensureShipmentWorkflowSteps } from "../lib/shipmentWorkflow";
 
 const CURRENT_USER_STORAGE_KEY = "logisticplus.currentUser";
 
@@ -16,6 +17,18 @@ type LoginUser = User & {
   notification_preferences?: Record<string, boolean>;
 };
 
+type ApiRequestError = Error & {
+  status?: number;
+  code?: string;
+  field?: string;
+  retryAfter?: number;
+};
+
+const logBackgroundNotificationRefreshError = (error: unknown) => {
+  if (error instanceof TypeError && error.message === "Failed to fetch") return;
+  console.error("Could not refresh notifications.", error);
+};
+
 const COLLECTION_KEYS = [
   "users",
   "customers",
@@ -26,8 +39,8 @@ const COLLECTION_KEYS = [
   "demurrageRecords",
   "shipmentSteps",
   "documents",
+  "commercialCards",
   "channels",
-  "notifications",
   "appointments",
   "cheques",
   "quotes",
@@ -49,6 +62,79 @@ const normalizeUser = (user: LoginUser | null): User | null => {
     twoFactorEnabled: user.twoFactorEnabled ?? user.two_factor_enabled ?? false,
     notificationPreferences: user.notificationPreferences ?? user.notification_preferences ?? {},
   } as User;
+};
+
+const normalizeShipmentStatus = (status: unknown): ShipmentStatus => {
+  const value = String(status || "PENDING").toUpperCase();
+  return (["PENDING", "BOOKED", "IN_TRANSIT", "ARRIVED", "CUSTOMS", "CLEARED", "DELIVERED", "CLOSED"].includes(value)
+    ? value
+    : "PENDING") as ShipmentStatus;
+};
+
+const normalizeShipmentRecord = (record: any): Shipment => {
+  const legacy = record?.legacy_data || record || {};
+  const freeTimeDays = Number(record?.freeTimeDays ?? legacy.freeTimeDays ?? record?.free_time_days ?? 0);
+  return {
+    id: record.id,
+    trackingNumber: record.trackingNumber || record.shipment_code || legacy.trackingNumber || record.id,
+    containerNumber: record.containerNumber || legacy.containerNumber || "",
+    customerId: record.customerId || record.customer_id || legacy.customerId || "",
+    customerName: record.customerName || record.customer_name || legacy.customerName || "",
+    origin: record.origin || legacy.origin || "",
+    destination: record.destination || legacy.destination || "",
+    status: normalizeShipmentStatus(record.status || legacy.status),
+    createdAt: record.createdAt || record.created_at || legacy.createdAt || new Date().toISOString(),
+    estimatedDelivery: record.estimatedDelivery || record.estimated_delivery_at || legacy.estimatedDelivery || "",
+    actualDelivery: record.actualDelivery || record.actual_delivery_at || legacy.actualDelivery || undefined,
+    freeTimeDays: Number.isFinite(freeTimeDays) ? freeTimeDays : 0,
+    isArchived: Boolean(record.isArchived ?? record.archived_at ?? legacy.isArchived),
+    customerAccessEnabled: Boolean(
+      record.customerAccessEnabled ??
+        record.customer_access_enabled ??
+        legacy.customerAccessEnabled ??
+        legacy.customer_access_enabled
+    ),
+    hasCustomerAccess: Boolean(
+      record.hasCustomerAccess ??
+        record.has_customer_access ??
+        record.customerAccessEnabled ??
+        record.customer_access_enabled ??
+        legacy.hasCustomerAccess ??
+        legacy.customerAccessEnabled ??
+        legacy.customer_access_enabled
+    ),
+  };
+};
+
+const normalizeTaskRecord = (record: any): Task => {
+  const legacy = record?.legacy_data || record || {};
+  return {
+    id: record.id,
+    organizationId: record.organizationId || record.organization_id || legacy.organizationId || undefined,
+    ownerUserId: record.ownerUserId || record.owner_user_id || legacy.ownerUserId || undefined,
+    title: record.title || legacy.title || "",
+    description: record.description || legacy.description || "",
+    assignedToUserId: record.assignedToUserId || record.assigned_to_id || legacy.assignedToUserId || "",
+    assignedToName: record.assignedToName || record.assigned_to_name || legacy.assignedToName || "",
+    assignedByUserId: record.assignedByUserId || record.assigned_by_id || legacy.assignedByUserId || "",
+    assignedByName: record.assignedByName || record.assigned_by_name || legacy.assignedByName || "",
+    assignedAt: record.assignedAt || record.assigned_at || legacy.assignedAt || "",
+    assignmentNote: record.assignmentNote || record.assignment_note || legacy.assignmentNote || "",
+    status: String(record.status || legacy.status || "TODO").toUpperCase() as TaskStatus,
+    priority: String(record.priority || legacy.priority || "MEDIUM").toUpperCase() as any,
+    dueDate: record.dueDate || record.due_at || legacy.dueDate || "",
+    deadline: record.deadline || legacy.deadline || "",
+    shipmentId: record.shipmentId || record.shipment_id || legacy.shipmentId || undefined,
+    completedAt: record.completedAt || record.completed_at || legacy.completedAt || undefined,
+    completedByUserId: record.completedByUserId || record.completed_by_user_id || legacy.completedByUserId || undefined,
+    sourceType: record.sourceType || record.source_type || legacy.sourceType || undefined,
+    sourceId: record.sourceId || record.source_id || legacy.sourceId || undefined,
+    workflowInstanceId: record.workflowInstanceId || record.workflow_instance_id || legacy.workflowInstanceId || undefined,
+    workflowStepCode: record.workflowStepCode || record.workflow_step_code || legacy.workflowStepCode || undefined,
+    workflowBlockerId: record.workflowBlockerId || record.workflow_blocker_id || legacy.workflowBlockerId || undefined,
+    blockerCode: record.blockerCode || record.blocker_code || legacy.blockerCode || undefined,
+    createdAt: record.createdAt || record.created_at || legacy.createdAt || new Date().toISOString(),
+  };
 };
 
 const getStoredCurrentUser = (): User | null => {
@@ -76,17 +162,33 @@ const persistCurrentUser = (user: User | null) => {
   }
 };
 
+const createApiRequestError = async (response: Response, fallbackMessage: string): Promise<ApiRequestError> => {
+  const payload = await response.json().catch(() => ({}));
+  const retryAfter = Number(response.headers.get("Retry-After") || 0);
+  const error = new Error(payload?.error?.message || payload?.message || fallbackMessage) as ApiRequestError;
+  error.status = response.status;
+  error.code = payload?.error?.code;
+  error.field = payload?.error?.field;
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    error.retryAfter = retryAfter;
+  }
+  return error;
+};
+
 interface MockStore {
   currentUser: User | null;
   users: User[];
   customers: Customer[];
   shipments: Shipment[];
   tasks: Task[];
+  shipmentProgressById: Record<string, ShipmentWorkflowProgress | null>;
+  organizationMembers: OrganizationMemberOption[];
   messages: Message[];
   activityLogs: ActivityLog[];
   demurrageRecords: Demurrage[];
   shipmentSteps: ShipmentStep[];
   documents: ShipmentDocument[];
+  commercialCards: CommercialCard[];
   channels: Channel[];
   notifications: Notification[];
   appointments: Appointment[];
@@ -95,13 +197,29 @@ interface MockStore {
   isHydratingFromDatabase: boolean;
   hydrateFromRecords: (records: Record<string, any[]>) => void;
   loadCurrentUserRecords: () => Promise<void>;
+  restoreCurrentUserFromSession: () => Promise<User | null>;
+  refreshUsers: () => Promise<void>;
+  refreshCustomers: () => Promise<void>;
+  refreshDocuments: () => Promise<void>;
+  refreshShipments: () => Promise<void>;
+  refreshTasks: () => Promise<void>;
+  refreshShipmentProgress: (shipmentId: string) => Promise<ShipmentWorkflowProgress | null>;
+  startShipmentWorkflow: (shipmentId: string) => Promise<ShipmentWorkflowProgress | null>;
+  updateShipmentWorkflowCurrent: (shipmentId: string, updates: Record<string, any>) => Promise<ShipmentWorkflowProgress | null>;
+  addShipmentWorkflowBlocker: (shipmentId: string, body: Record<string, any>) => Promise<ShipmentWorkflowProgress | null>;
+  resolveShipmentWorkflowBlocker: (shipmentId: string, body: Record<string, any>) => Promise<ShipmentWorkflowProgress | null>;
+  fetchOrganizationMembers: () => Promise<OrganizationMemberOption[]>;
+  assignTask: (taskId: string, body: Record<string, any>) => Promise<Task>;
+  updateTaskStatusRemote: (taskId: string, body: { status: TaskStatus | string; note?: string }) => Promise<Task>;
+  fetchTaskEvents: (taskId: string) => Promise<TaskEvent[]>;
+  refreshNotifications: () => Promise<void>;
   loginWithPassword: (email: string, password: string, remember?: boolean) => Promise<User>;
   loginWithPhoneCode: (phone: string, code: string, remember?: boolean) => Promise<User>;
 
   setCurrentUser: (user: User | null) => void;
-  addShipment: (shipment: Omit<Shipment, "id">) => void;
-  updateShipment: (id: string, updates: Partial<Shipment>) => void;
-  updateShipmentStatus: (id: string, status: ShipmentStatus) => void;
+  addShipment: (shipment: Omit<Shipment, "id">) => Promise<void>;
+  updateShipment: (id: string, updates: Partial<Shipment>) => Promise<void>;
+  updateShipmentStatus: (id: string, status: ShipmentStatus) => Promise<void>;
   addTask: (task: Omit<Task, "id" | "createdAt">) => void;
   updateTask: (id: string, updates: Partial<Task>) => void;
   updateTaskStatus: (id: string, status: TaskStatus) => void;
@@ -114,8 +232,11 @@ interface MockStore {
   deleteUser: (id: string) => void;
   addDocument: (document: Omit<ShipmentDocument, "id" | "createdAt">) => void;
   deleteDocument: (id: string) => void;
-  markNotificationRead: (id: string) => void;
-  markAllNotificationsRead: () => void;
+  addCommercialCard: (card: Omit<CommercialCard, "id" | "createdAt" | "updatedAt">) => void;
+  updateCommercialCard: (id: string, updates: Partial<Omit<CommercialCard, "id" | "createdAt">>) => void;
+  deleteCommercialCard: (id: string) => void;
+  markNotificationRead: (id: string) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
   addNotification: (notification: Omit<Notification, "id" | "isRead" | "createdAt" | "link"> & { link?: string }) => void;
   updateCurrentUser: (updates: Partial<User>) => void;
   addAppointment: (appointment: Omit<Appointment, "id" | "createdAt" | "reminderSent">) => void;
@@ -134,10 +255,10 @@ interface MockStore {
   addCheque: (cheque: Omit<Cheque, "id" | "createdAt">) => void;
   updateCheque: (id: string, updates: Partial<Cheque>) => void;
   deleteCheque: (id: string) => void;
-  archiveShipment: (id: string) => void;
+  archiveShipment: (id: string) => Promise<void>;
   archiveCheque: (id: string) => void;
   archiveDocument: (id: string) => void;
-  unarchiveShipment: (id: string) => void;
+  unarchiveShipment: (id: string) => Promise<void>;
   unarchiveCheque: (id: string, originalStatus?: any) => void;
   unarchiveDocument: (id: string) => void;
   permanentDeleteShipment: (id: string) => void;
@@ -149,17 +270,23 @@ interface MockStore {
   deleteQuote: (id: string) => void;
 }
 
+let suppressNextDatabaseSave = false;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
 export const useMockStore = create<MockStore>((set) => ({
   currentUser: getStoredCurrentUser(),
   users: [],
   customers: [],
   shipments: [],
   tasks: [],
+  shipmentProgressById: {},
+  organizationMembers: [],
   messages: [],
   activityLogs: [],
   demurrageRecords: [],
   shipmentSteps: [],
   documents: [],
+  commercialCards: [],
   channels: [],
   notifications: [],
   appointments: [],
@@ -173,34 +300,41 @@ export const useMockStore = create<MockStore>((set) => ({
   toggleTheme: () => set((state) => ({ currentTheme: state.currentTheme === 'light' ? 'dark' : 'light' })),
   deletedItems: [] as { id: string, entityType: string, data: any, deletedAt: string }[],
 
-  hydrateFromRecords: (records) => set(() => ({
-    users: records.users || [],
-    customers: records.customers || [],
-    shipments: records.shipments || [],
-    tasks: records.tasks || [],
-    messages: records.messages || [],
-    activityLogs: records.activityLogs || [],
-    demurrageRecords: records.demurrageRecords || [],
-    shipmentSteps: records.shipmentSteps || [],
-    documents: records.documents || [],
-    channels: records.channels || [],
-    notifications: records.notifications || [],
-    appointments: records.appointments || [],
-    cheques: records.cheques || [],
-    quotes: records.quotes || [],
-    deletedItems: records.deletedItems || [],
-    defaultSteps: records.defaultSteps || [],
-    hasHydratedFromDatabase: true,
-    isHydratingFromDatabase: false,
-  })),
+  hydrateFromRecords: (records) => {
+    suppressNextDatabaseSave = true;
+    const defaultSteps = records.defaultSteps || [];
+    const repairedWorkflow = ensureShipmentWorkflowSteps(records.shipments || [], records.shipmentSteps || [], defaultSteps);
+    set(() => ({
+      users: records.users || [],
+      customers: records.customers || [],
+      shipments: records.shipments || [],
+      tasks: (records.tasks || []).map(normalizeTaskRecord),
+      messages: records.messages || [],
+      activityLogs: records.activityLogs || [],
+      demurrageRecords: records.demurrageRecords || [],
+      shipmentSteps: repairedWorkflow.shipmentSteps,
+      documents: records.documents || [],
+      commercialCards: records.commercialCards || [],
+      channels: records.channels || [],
+      notifications: records.notifications || [],
+      appointments: records.appointments || [],
+      cheques: records.cheques || [],
+      quotes: records.quotes || [],
+      deletedItems: records.deletedItems || [],
+      defaultSteps,
+      hasHydratedFromDatabase: true,
+      isHydratingFromDatabase: false,
+    }));
+  },
 
   loadCurrentUserRecords: async () => {
     const user = useMockStore.getState().currentUser;
     if (!user) return;
 
     useMockStore.setState({ isHydratingFromDatabase: true });
-    const authResponse = await fetch("/api/auth/me");
+    const authResponse = await fetch("/api/auth/me", { cache: "no-store" });
     if (!authResponse.ok) {
+      const error = await createApiRequestError(authResponse, "Could not restore current session.");
       if (authResponse.status === 401 || authResponse.status === 403) {
         persistCurrentUser(null);
         useMockStore.setState({
@@ -211,7 +345,7 @@ export const useMockStore = create<MockStore>((set) => ({
       } else {
         useMockStore.setState({ isHydratingFromDatabase: false });
       }
-      throw new Error("Could not restore current session.");
+      throw error;
     }
 
     const authPayload = await authResponse.json();
@@ -231,8 +365,9 @@ export const useMockStore = create<MockStore>((set) => ({
     persistCurrentUser(restoredUser);
     useMockStore.setState({ currentUser: restoredUser });
 
-    const response = await fetch(`/api/users/${restoredUser.id}/bootstrap`);
+    const response = await fetch(`/api/users/${encodeURIComponent(restoredUser.id)}/bootstrap`);
     if (!response.ok) {
+      const error = await createApiRequestError(response, "Could not load database records.");
       if (response.status === 401 || response.status === 403) {
         persistCurrentUser(null);
         useMockStore.setState({
@@ -241,12 +376,280 @@ export const useMockStore = create<MockStore>((set) => ({
           isHydratingFromDatabase: false,
         });
       } else {
-        useMockStore.setState({ isHydratingFromDatabase: false });
+        useMockStore.setState({ hasHydratedFromDatabase: true, isHydratingFromDatabase: false });
       }
-      throw new Error("Could not load database records.");
+      throw error;
     }
     const payload = await response.json();
     useMockStore.getState().hydrateFromRecords(payload.records || {});
+    useMockStore.getState().refreshNotifications().catch(logBackgroundNotificationRefreshError);
+  },
+
+  restoreCurrentUserFromSession: async () => {
+    const response = await fetch("/api/auth/me", { cache: "no-store" });
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        persistCurrentUser(null);
+        useMockStore.setState({
+          currentUser: null,
+          hasHydratedFromDatabase: false,
+          isHydratingFromDatabase: false,
+        });
+      }
+      throw await createApiRequestError(response, "Could not restore current session.");
+    }
+
+    const payload = await response.json();
+    const user = normalizeUser({
+      ...payload?.data?.user,
+      permissions: payload?.data?.permissions || payload?.data?.user?.permissions || [],
+    });
+    if (!user) return null;
+    persistCurrentUser(user);
+    useMockStore.setState({ currentUser: user });
+    return user;
+  },
+
+  refreshUsers: async () => {
+    const user = useMockStore.getState().currentUser;
+    if (!user) return;
+
+    const response = await fetch("/api/users");
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        persistCurrentUser(null);
+        useMockStore.setState({
+          currentUser: null,
+          hasHydratedFromDatabase: false,
+          isHydratingFromDatabase: false,
+        });
+      }
+      throw new Error("Could not refresh users.");
+    }
+    const payload = await response.json();
+    suppressNextDatabaseSave = true;
+    useMockStore.setState({ users: payload.data || [] });
+  },
+
+  refreshDocuments: async () => {
+    const user = useMockStore.getState().currentUser;
+    if (!user) return;
+
+    const response = await fetch("/api/documents?includeArchived=true");
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        persistCurrentUser(null);
+        useMockStore.setState({
+          currentUser: null,
+          hasHydratedFromDatabase: false,
+          isHydratingFromDatabase: false,
+        });
+      }
+      throw new Error("Could not refresh documents.");
+    }
+    const payload = await response.json();
+    useMockStore.setState({ documents: payload.data || [] });
+  },
+
+  refreshCustomers: async () => {
+    const user = useMockStore.getState().currentUser;
+    if (!user) return;
+
+    const response = await fetch("/api/customers?includeArchived=true");
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        persistCurrentUser(null);
+        useMockStore.setState({
+          currentUser: null,
+          hasHydratedFromDatabase: false,
+          isHydratingFromDatabase: false,
+        });
+      }
+      throw new Error("Could not refresh customers.");
+    }
+    const payload = await response.json();
+    useMockStore.setState({ customers: payload.data || [] });
+  },
+
+  refreshShipments: async () => {
+    const user = useMockStore.getState().currentUser;
+    if (!user) return;
+
+    const response = await fetch("/api/shipments");
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        persistCurrentUser(null);
+        useMockStore.setState({
+          currentUser: null,
+          hasHydratedFromDatabase: false,
+          isHydratingFromDatabase: false,
+        });
+      }
+      throw new Error("Could not refresh shipments.");
+    }
+    const payload = await response.json();
+    suppressNextDatabaseSave = true;
+    useMockStore.setState({ shipments: (payload.data || []).map(normalizeShipmentRecord) });
+  },
+
+  refreshTasks: async () => {
+    const user = useMockStore.getState().currentUser;
+    if (!user) return;
+
+    const response = await fetch("/api/tasks");
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        persistCurrentUser(null);
+        useMockStore.setState({
+          currentUser: null,
+          hasHydratedFromDatabase: false,
+          isHydratingFromDatabase: false,
+        });
+      }
+      throw new Error("Could not refresh tasks.");
+    }
+    const payload = await response.json();
+    suppressNextDatabaseSave = true;
+    useMockStore.setState({ tasks: (payload.data || []).map(normalizeTaskRecord) });
+  },
+
+  refreshShipmentProgress: async (shipmentId) => {
+    const response = await fetch(`/api/shipments/${encodeURIComponent(shipmentId)}/progress`, { cache: "no-store" });
+    if (!response.ok) throw await createApiRequestError(response, "Could not load shipment progress.");
+    const payload = await response.json();
+    const data = payload.data || null;
+    suppressNextDatabaseSave = true;
+    useMockStore.setState((state) => ({
+      shipmentProgressById: { ...state.shipmentProgressById, [shipmentId]: data },
+    }));
+    return data;
+  },
+
+  startShipmentWorkflow: async (shipmentId) => {
+    const response = await fetch(`/api/shipments/${encodeURIComponent(shipmentId)}/progress/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (!response.ok) throw await createApiRequestError(response, "Could not start shipment workflow.");
+    const payload = await response.json();
+    const data = payload.data || null;
+    useMockStore.setState((state) => ({
+      shipmentProgressById: { ...state.shipmentProgressById, [shipmentId]: data },
+    }));
+    return data;
+  },
+
+  updateShipmentWorkflowCurrent: async (shipmentId, updates) => {
+    const response = await fetch(`/api/shipments/${encodeURIComponent(shipmentId)}/progress/current`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates || {}),
+    });
+    if (!response.ok) throw await createApiRequestError(response, "Could not update shipment workflow.");
+    const payload = await response.json();
+    const data = payload.data || null;
+    useMockStore.setState((state) => ({
+      shipmentProgressById: { ...state.shipmentProgressById, [shipmentId]: data },
+    }));
+    return data;
+  },
+
+  addShipmentWorkflowBlocker: async (shipmentId, body) => {
+    const response = await fetch(`/api/shipments/${encodeURIComponent(shipmentId)}/progress/blockers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    if (!response.ok) throw await createApiRequestError(response, "Could not add workflow blocker.");
+    const payload = await response.json();
+    const data = payload.data?.progress || payload.data || null;
+    useMockStore.setState((state) => ({
+      shipmentProgressById: { ...state.shipmentProgressById, [shipmentId]: data },
+    }));
+    return data;
+  },
+
+  resolveShipmentWorkflowBlocker: async (shipmentId, body) => {
+    const response = await fetch(`/api/shipments/${encodeURIComponent(shipmentId)}/progress/unblock`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    if (!response.ok) throw await createApiRequestError(response, "Could not resolve workflow blocker.");
+    const payload = await response.json();
+    const data = payload.data?.progress || payload.data || null;
+    useMockStore.setState((state) => ({
+      shipmentProgressById: { ...state.shipmentProgressById, [shipmentId]: data },
+    }));
+    return data;
+  },
+
+  fetchOrganizationMembers: async () => {
+    const response = await fetch("/api/organization/members");
+    if (!response.ok) throw await createApiRequestError(response, "Could not load organization members.");
+    const payload = await response.json();
+    const data = payload.data || [];
+    useMockStore.setState({ organizationMembers: data });
+    return data;
+  },
+
+  assignTask: async (taskId, body) => {
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/assign`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    if (!response.ok) throw await createApiRequestError(response, "Could not assign task.");
+    const payload = await response.json();
+    const task = normalizeTaskRecord(payload.data);
+    useMockStore.setState((state) => ({
+      tasks: state.tasks.map((item) => item.id === task.id ? task : item),
+    }));
+    return task;
+  },
+
+  updateTaskStatusRemote: async (taskId, body) => {
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    if (!response.ok) throw await createApiRequestError(response, "Could not update task status.");
+    const payload = await response.json();
+    const task = normalizeTaskRecord(payload.data);
+    useMockStore.setState((state) => ({
+      tasks: state.tasks.map((item) => item.id === task.id ? task : item),
+    }));
+    return task;
+  },
+
+  fetchTaskEvents: async (taskId) => {
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/events`);
+    if (!response.ok) throw await createApiRequestError(response, "Could not load task history.");
+    const payload = await response.json();
+    return payload.data || [];
+  },
+
+  refreshNotifications: async () => {
+    const user = useMockStore.getState().currentUser;
+    if (!user) return;
+
+    const response = await fetch("/api/notifications?includeRead=true&limit=50");
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        persistCurrentUser(null);
+        useMockStore.setState({
+          currentUser: null,
+          hasHydratedFromDatabase: false,
+          isHydratingFromDatabase: false,
+        });
+      }
+      throw new Error("Could not refresh notifications.");
+    }
+    const payload = await response.json();
+    suppressNextDatabaseSave = true;
+    useMockStore.setState({ notifications: payload.data || [] });
   },
 
   loginWithPassword: async (email, password, remember = false) => {
@@ -259,7 +662,7 @@ export const useMockStore = create<MockStore>((set) => ({
 
     if (!response.ok) {
       useMockStore.setState({ isHydratingFromDatabase: false });
-      throw new Error("Invalid email or password.");
+      throw await createApiRequestError(response, "Invalid email or password.");
     }
 
     const payload = await response.json();
@@ -267,6 +670,7 @@ export const useMockStore = create<MockStore>((set) => ({
     persistCurrentUser(user);
     set({ currentUser: user });
     useMockStore.getState().hydrateFromRecords(payload.records || {});
+    useMockStore.getState().refreshNotifications().catch(logBackgroundNotificationRefreshError);
     return user as User;
   },
 
@@ -280,7 +684,7 @@ export const useMockStore = create<MockStore>((set) => ({
 
     if (!response.ok) {
       useMockStore.setState({ isHydratingFromDatabase: false });
-      throw new Error("Invalid or expired SMS code.");
+      throw await createApiRequestError(response, "Invalid or expired SMS code.");
     }
 
     const payload = await response.json();
@@ -288,6 +692,7 @@ export const useMockStore = create<MockStore>((set) => ({
     persistCurrentUser(user);
     set({ currentUser: user });
     useMockStore.getState().hydrateFromRecords(payload.records || {});
+    useMockStore.getState().refreshNotifications().catch(logBackgroundNotificationRefreshError);
     return user as User;
   },
 
@@ -374,11 +779,14 @@ export const useMockStore = create<MockStore>((set) => ({
         customers: [],
         shipments: [],
         tasks: [],
+        shipmentProgressById: {},
+        organizationMembers: [],
         messages: [],
         activityLogs: [],
         demurrageRecords: [],
         shipmentSteps: [],
         documents: [],
+        commercialCards: [],
         channels: [],
         notifications: [],
         appointments: [],
@@ -394,27 +802,21 @@ export const useMockStore = create<MockStore>((set) => ({
     set({ currentUser: user });
   },
 
-  addShipment: (shipment) => {
+  addShipment: async (shipment) => {
     const id = `s${Math.random().toString(36).substr(2, 5)}`;
     const newShipment = { ...shipment, id };
-    const stepNames = useMockStore.getState().defaultSteps
-      .sort((a, b) => a.order - b.order)
-      .map(step => step.name);
-    const newSteps = stepNames.map((name, i) => ({
-      id: `step-${id}-${i}`,
-      shipmentId: id,
-      name,
-      order: i,
-      status: i === 0 ? "IN_PROGRESS" : "PENDING" as any
-    }));
+    const newSteps = buildShipmentWorkflowSteps(id, useMockStore.getState().defaultSteps);
 
     set((state) => ({
       shipments: [newShipment, ...state.shipments],
       shipmentSteps: [...state.shipmentSteps, ...newSteps]
     }));
+    await persistCurrentStateNow();
+    await useMockStore.getState().refreshShipments();
   },
 
-  updateShipment: (id, updates) => set((state) => {
+  updateShipment: async (id, updates) => {
+    set((state) => {
     const shipment = state.shipments.find(s => s.id === id);
     const log: ActivityLog = {
       id: `l${Date.now()}-ship-upd`,
@@ -429,9 +831,13 @@ export const useMockStore = create<MockStore>((set) => ({
       shipments: state.shipments.map(s => s.id === id ? { ...s, ...updates } : s),
       activityLogs: [log, ...state.activityLogs]
     };
-  }),
+    });
+    await persistCurrentStateNow();
+    await useMockStore.getState().refreshShipments();
+  },
 
-  updateShipmentStatus: (id, status) => set((state) => {
+  updateShipmentStatus: async (id, status) => {
+    set((state) => {
     const shipment = state.shipments.find(s => s.id === id);
     const log: ActivityLog = {
       id: `l${Date.now()}`,
@@ -446,7 +852,10 @@ export const useMockStore = create<MockStore>((set) => ({
       shipments: state.shipments.map(s => s.id === id ? { ...s, status } : s),
       activityLogs: [log, ...state.activityLogs]
     };
-  }),
+    });
+    await persistCurrentStateNow();
+    await useMockStore.getState().refreshShipments();
+  },
 
   addTask: (task) => set((state) => {
     const newTask = { ...task, id: `t${Date.now()}`, createdAt: new Date().toISOString() };
@@ -559,24 +968,83 @@ export const useMockStore = create<MockStore>((set) => ({
   deleteDocument: (id) => set((state) => ({
     documents: state.documents.filter(d => d.id !== id)
   })),
-  markNotificationRead: (id) => set((state) => ({
-    notifications: state.notifications.map(n => n.id === id ? { ...n, isRead: true } : n)
+  addCommercialCard: (card) => set((state) => {
+    const now = new Date().toISOString();
+    const newCard: CommercialCard = {
+      ...card,
+      id: `cc${Date.now()}`,
+      createdAt: now,
+      updatedAt: now,
+    };
+    return {
+      commercialCards: [newCard, ...state.commercialCards],
+    };
+  }),
+  updateCommercialCard: (id, updates) => set((state) => ({
+    commercialCards: state.commercialCards.map((card) =>
+      card.id === id ? { ...card, ...updates, updatedAt: new Date().toISOString() } : card
+    ),
   })),
-  markAllNotificationsRead: () => set((state) => ({
-    notifications: state.notifications.map(n => ({ ...n, isRead: true }))
+  deleteCommercialCard: (id) => set((state) => ({
+    commercialCards: state.commercialCards.filter((card) => card.id !== id),
   })),
-  addNotification: (notification) => set((state) => ({
-    notifications: [
-      {
-        ...notification,
-        id: `n${Date.now()}`,
-        isRead: false,
-        createdAt: new Date().toISOString(),
-        link: notification.link || "/dashboard"
-      },
-      ...state.notifications
-    ]
-  })),
+  markNotificationRead: async (id) => {
+    const previousNotifications = useMockStore.getState().notifications;
+    suppressNextDatabaseSave = true;
+    set((state) => ({
+      notifications: state.notifications.map(n => n.id === id ? { ...n, isRead: true } : n)
+    }));
+
+    const response = await fetch(`/api/notifications/${encodeURIComponent(id)}/read`, {
+      method: "PATCH",
+    });
+    if (!response.ok) {
+      suppressNextDatabaseSave = true;
+      useMockStore.setState({ notifications: previousNotifications });
+      throw await createApiRequestError(response, "Could not mark notification as read.");
+    }
+    const payload = await response.json();
+    if (payload?.data) {
+      suppressNextDatabaseSave = true;
+      useMockStore.setState((state) => ({
+        notifications: state.notifications.map(n => n.id === id ? payload.data : n)
+      }));
+    }
+  },
+  markAllNotificationsRead: async () => {
+    const previousNotifications = useMockStore.getState().notifications;
+    suppressNextDatabaseSave = true;
+    set((state) => ({
+      notifications: state.notifications.map(n => ({ ...n, isRead: true }))
+    }));
+
+    const response = await fetch("/api/notifications/read-all", {
+      method: "PATCH",
+    });
+    if (!response.ok) {
+      suppressNextDatabaseSave = true;
+      useMockStore.setState({ notifications: previousNotifications });
+      throw await createApiRequestError(response, "Could not mark notifications as read.");
+    }
+    const payload = await response.json();
+    suppressNextDatabaseSave = true;
+    useMockStore.setState({ notifications: payload.data || [] });
+  },
+  addNotification: (notification) => {
+    suppressNextDatabaseSave = true;
+    set((state) => ({
+      notifications: [
+        {
+          ...notification,
+          id: `n${Date.now()}`,
+          isRead: false,
+          createdAt: new Date().toISOString(),
+          link: notification.link || "/dashboard"
+        },
+        ...state.notifications
+      ]
+    }));
+  },
   addUser: (user) => set((state) => {
     const freshUser = { ...user, id: `u${Date.now()}` };
     const log: ActivityLog = {
@@ -743,7 +1211,8 @@ export const useMockStore = create<MockStore>((set) => ({
     };
   }),
   
-  archiveShipment: (id) => set((state) => {
+  archiveShipment: async (id) => {
+    set((state) => {
     const shipment = state.shipments.find(s => s.id === id);
     const log: ActivityLog = {
       id: `l${Date.now()}-ship-arc`,
@@ -758,7 +1227,10 @@ export const useMockStore = create<MockStore>((set) => ({
       shipments: state.shipments.map(s => s.id === id ? { ...s, isArchived: true } : s),
       activityLogs: [log, ...state.activityLogs]
     };
-  }),
+    });
+    await persistCurrentStateNow();
+    await useMockStore.getState().refreshShipments();
+  },
 
   archiveCheque: (id) => set((state) => {
     const cheque = state.cheques.find(c => c.id === id);
@@ -794,7 +1266,8 @@ export const useMockStore = create<MockStore>((set) => ({
     };
   }),
 
-  unarchiveShipment: (id) => set((state) => {
+  unarchiveShipment: async (id) => {
+    set((state) => {
     const shipment = state.shipments.find(s => s.id === id);
     const log: ActivityLog = {
       id: `l${Date.now()}-ship-unarc`,
@@ -809,7 +1282,10 @@ export const useMockStore = create<MockStore>((set) => ({
       shipments: state.shipments.map(s => s.id === id ? { ...s, isArchived: false } : s),
       activityLogs: [log, ...state.activityLogs]
     };
-  }),
+    });
+    await persistCurrentStateNow();
+    await useMockStore.getState().refreshShipments();
+  },
 
   unarchiveCheque: (id, originalStatus) => set((state) => {
     const cheque = state.cheques.find(c => c.id === id);
@@ -915,8 +1391,6 @@ export const useMockStore = create<MockStore>((set) => ({
   }),
 }));
 
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
-
 const buildDatabasePayload = (state: MockStore) => {
   return COLLECTION_KEYS.reduce((records, key) => {
     if (CANONICAL_API_COLLECTIONS.has(key)) return records;
@@ -941,7 +1415,19 @@ const saveStateToDatabase = async (state: MockStore) => {
   }
 };
 
+async function persistCurrentStateNow() {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  await saveStateToDatabase(useMockStore.getState());
+}
+
 useMockStore.subscribe((state) => {
+  if (suppressNextDatabaseSave) {
+    suppressNextDatabaseSave = false;
+    return;
+  }
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     saveStateToDatabase(state).catch((error) => {
@@ -950,3 +1436,5 @@ useMockStore.subscribe((state) => {
     });
   }, 500);
 });
+
+export const useAppDataStore = useMockStore;
