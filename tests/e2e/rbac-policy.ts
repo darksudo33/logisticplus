@@ -10,6 +10,9 @@ export type RoutePolicy = {
 export const RBAC_TENANT_POLICY: RoutePolicy[] = [
   { family: "auth", method: "GET", path: "/api/auth/me", auth: "required", permission: null, tenantScope: "own-organization" },
   { family: "shipments", method: "GET", path: "/api/shipments", auth: "required", permission: "shipments.view_all", tenantScope: "own-organization" },
+  { family: "shipments", method: "POST", path: "/api/shipments", auth: "required", permission: "shipments.create", tenantScope: "own-organization" },
+  { family: "shipments", method: "GET", path: "/api/shipments/:id", auth: "required", permission: "shipments.view_all", tenantScope: "own-organization" },
+  { family: "shipments", method: "PATCH", path: "/api/shipments/:id/operational-fields", auth: "required", permission: "shipments.update", tenantScope: "own-organization" },
   { family: "search", method: "GET", path: "/api/search", auth: "required", permission: "entity-specific", tenantScope: "own-organization" },
   { family: "shipments", method: "PATCH", path: "/api/shipments/:id/steps/:stepId", auth: "required", permission: "shipment_steps.update", tenantScope: "own-organization" },
   { family: "shipments", method: "POST", path: "/api/shipments/:id/tasks", auth: "required", permission: "tasks.create", tenantScope: "own-organization" },
@@ -32,9 +35,11 @@ export const RBAC_TENANT_POLICY: RoutePolicy[] = [
   { family: "compliance", method: "GET", path: "/api/compliance-meetings/:id", auth: "required", permission: "compliance.manage|assigned", tenantScope: "own-organization" },
   { family: "quotations", method: "GET", path: "/api/quotations/:id", auth: "required", permission: "quotations.manage", tenantScope: "own-organization" },
   { family: "archive", method: "POST", path: "/api/archive/:entityType/:entityId", auth: "required", permission: "archive.view", tenantScope: "own-organization" },
+  { family: "audit", method: "GET", path: "/api/audit-logs", auth: "required", permission: "changes.view", tenantScope: "own-organization" },
   { family: "changes", method: "GET", path: "/api/changes/:id", auth: "required", permission: "changes.view", tenantScope: "own-organization" },
   { family: "chat", method: "GET", path: "/api/chat/threads/:id/messages", auth: "required", permission: "chat.use", tenantScope: "own-organization" },
   { family: "platform-admin", method: "GET", path: "/api/admin/overview", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
+  { family: "platform-admin", method: "GET", path: "/api/admin/audit-logs", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
   { family: "platform-admin", method: "GET", path: "/api/admin/contact-requests", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
   { family: "platform-admin", method: "GET", path: "/api/admin/sms-deliveries", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
   { family: "platform-admin", method: "GET", path: "/api/admin/sms-analytics", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
@@ -48,6 +53,7 @@ export const RBAC_TENANT_POLICY: RoutePolicy[] = [
 
 export const NORMAL_APP_ROUTE_FAMILIES = [
   "archive",
+  "audit",
   "changes",
   "chat",
   "cheques",

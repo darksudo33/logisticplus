@@ -271,6 +271,15 @@ async function seedRolesAndPermissions(client: Client) {
       );
     }
   }
+
+  await client.query(
+    `INSERT INTO user_permissions (user_id, permission_id, reason)
+     SELECT $1, id, 'Bridge owner explicit platform admin grant'
+     FROM permissions
+     WHERE key = 'platform.admin'
+     ON CONFLICT (user_id, permission_id) DO NOTHING`,
+    [ownerUserId]
+  );
 }
 
 async function bridgeUsers(client: Client, users: any[]) {

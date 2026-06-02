@@ -3,6 +3,7 @@ import pg from "pg";
 import {
   getPublicDocument as getPublicDocumentFromRepository,
   getPublicDocumentByTrackingToken as getPublicDocumentByTrackingTokenFromRepository,
+  getPublicTrackingTokenAuditState as getPublicTrackingTokenAuditStateFromRepository,
   getPublicTrackingByToken as getPublicTrackingByTokenFromRepository,
   searchPublicTracking as searchPublicTrackingFromRepository,
 } from "./public-tracking.js";
@@ -27,7 +28,7 @@ import {
   previewUserDeletion as previewUserDeletionFromRepository,
 } from "./repositories/users.js";
 import { DEFAULT_SMS_TEMPLATE_MAP, renderSmsTemplateBody } from "./sms-templates.js";
-import { organizationScopeClause, requireOrganizationScope } from "./tenant-scope.js";
+import { organizationIdFromTenantContext, organizationScopeClause, requireOrganizationScope } from "./tenant-scope.js";
 import { withTransaction } from "./transaction.js";
 
 const { Pool } = pg;
@@ -562,10 +563,14 @@ async function searchUsers({ user, normalizedQuery, fetchLimit }) {
   );
 }
 
-export async function searchOperationalRecords({ user, q, type = "all", limit = 20, offset = 0 } = {}) {
-  if (!user?.organizationId) {
+export async function searchOperationalRecords({ user, tenantContext, q, type = "all", limit = 20, offset = 0 } = {}) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "searchOperationalRecords")
+    : user?.organizationId;
+  if (!scopedOrganizationId) {
     throw createForbiddenSearchError("organization");
   }
+  const scopedUser = { ...user, organizationId: scopedOrganizationId, organization_id: scopedOrganizationId };
 
   const requestedType = SEARCH_REQUEST_TYPES.has(String(type)) ? String(type) : "all";
   const normalizedQuery = normalizeOperationalSearchQuery(q);
@@ -583,16 +588,16 @@ export async function searchOperationalRecords({ user, q, type = "all", limit = 
   const searches = [];
   for (const selectedType of selectedTypes) {
     if (!access[selectedType]) continue;
-    if (selectedType === "shipments") searches.push(searchShipments({ user, normalizedQuery, fetchLimit }));
-    if (selectedType === "customers") searches.push(searchCustomers({ user, normalizedQuery, fetchLimit }));
+    if (selectedType === "shipments") searches.push(searchShipments({ user: scopedUser, normalizedQuery, fetchLimit }));
+    if (selectedType === "customers") searches.push(searchCustomers({ user: scopedUser, normalizedQuery, fetchLimit }));
     if (selectedType === "documents") {
-      searches.push(searchDocuments({ user, normalizedQuery, fetchLimit }));
-      searches.push(searchDocumentVersions({ user, normalizedQuery, fetchLimit }));
+      searches.push(searchDocuments({ user: scopedUser, normalizedQuery, fetchLimit }));
+      searches.push(searchDocumentVersions({ user: scopedUser, normalizedQuery, fetchLimit }));
     }
-    if (selectedType === "tasks") searches.push(searchTasks({ user, normalizedQuery, fetchLimit, ownOnly: access.tasksOwnOnly }));
-    if (selectedType === "archive") searches.push(searchArchive({ user, normalizedQuery, fetchLimit }));
-    if (selectedType === "tracking") searches.push(searchTracking({ user, normalizedQuery, fetchLimit }));
-    if (selectedType === "users") searches.push(searchUsers({ user, normalizedQuery, fetchLimit }));
+    if (selectedType === "tasks") searches.push(searchTasks({ user: scopedUser, normalizedQuery, fetchLimit, ownOnly: access.tasksOwnOnly }));
+    if (selectedType === "archive") searches.push(searchArchive({ user: scopedUser, normalizedQuery, fetchLimit }));
+    if (selectedType === "tracking") searches.push(searchTracking({ user: scopedUser, normalizedQuery, fetchLimit }));
+    if (selectedType === "users") searches.push(searchUsers({ user: scopedUser, normalizedQuery, fetchLimit }));
   }
 
   const settled = await Promise.all(searches);
@@ -723,19 +728,28 @@ async function listBootstrapShipments(ownerUserId, organizationId) {
   return result.rows.map(toUiShipment);
 }
 
-export async function getRecordsForUser(ownerUserId) {
+export async function getRecordsForUser(ownerUserId, { organizationId, tenantContext } = {}) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "getRecordsForUser")
+    : organizationId
+      ? requireOrganizationScope(organizationId, "getRecordsForUser")
+      : null;
   const user = await getUserById(ownerUserId);
+  if (scopedOrganizationId && user?.organization_id !== scopedOrganizationId) return null;
+
+  const values = [ownerUserId];
+  const organizationFilter = scopedOrganizationId ? ` AND (organization_id = $${values.push(scopedOrganizationId)} OR organization_id IS NULL)` : "";
   const result = await pool.query(
     `SELECT collection, item_id, data
      FROM user_records
-     WHERE owner_user_id = $1
+     WHERE owner_user_id = $1${organizationFilter}
      ORDER BY collection, item_id`,
-    [ownerUserId]
+    values
   );
 
   const records = recordsFromRows(result.rows);
-  const organizationId = user?.organization_id || null;
-  if (!organizationId || String(user?.role || "").toUpperCase() === "CUSTOMER_VIEWER") {
+  const userOrganizationId = user?.organization_id || null;
+  if (!userOrganizationId || String(user?.role || "").toUpperCase() === "CUSTOMER_VIEWER") {
     return records;
   }
 
@@ -750,15 +764,15 @@ export async function getRecordsForUser(ownerUserId) {
     shipmentSteps,
     commercialCards,
   ] = await Promise.all([
-    listOrganizationUsersForBootstrap(organizationId),
-    listCustomersDetailed({ organizationId, includeArchived: true }),
-    listBootstrapShipments(ownerUserId, organizationId),
-    listTasks({ organizationId, includeAll: true }),
-    listDocuments({ organizationId, includeArchived: true }),
-    listComplianceMeetings({ organizationId, includeArchived: true }),
-    listQuotations({ organizationId, includeArchived: true }),
-    listOrganizationUserRecords(organizationId, "shipmentSteps"),
-    listOrganizationUserRecords(organizationId, "commercialCards"),
+    listOrganizationUsersForBootstrap(userOrganizationId),
+    listCustomersDetailed({ organizationId: userOrganizationId, includeArchived: true }),
+    listBootstrapShipments(ownerUserId, userOrganizationId),
+    listTasks({ organizationId: userOrganizationId, includeAll: true }),
+    listDocuments({ organizationId: userOrganizationId, includeArchived: true }),
+    listComplianceMeetings({ organizationId: userOrganizationId, includeArchived: true }),
+    listQuotations({ organizationId: userOrganizationId, includeArchived: true }),
+    listOrganizationUserRecords(userOrganizationId, "shipmentSteps"),
+    listOrganizationUserRecords(userOrganizationId, "commercialCards"),
   ]);
 
   return {
@@ -775,11 +789,16 @@ export async function getRecordsForUser(ownerUserId) {
   };
 }
 
-export async function replaceRecordsForUser(ownerUserId, recordsByCollection) {
+export async function replaceRecordsForUser(ownerUserId, recordsByCollection, { organizationId, tenantContext } = {}) {
   const client = await pool.connect();
   const entries = Object.entries(recordsByCollection || {}).filter(([, records]) =>
     Array.isArray(records)
   );
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "replaceRecordsForUser")
+    : organizationId
+      ? requireOrganizationScope(organizationId, "replaceRecordsForUser")
+      : null;
 
   try {
     await client.query("BEGIN");
@@ -787,6 +806,10 @@ export async function replaceRecordsForUser(ownerUserId, recordsByCollection) {
       ownerUserId,
     ]);
     const ownerOrganizationId = ownerResult.rows[0]?.organization_id || null;
+    if (scopedOrganizationId && ownerOrganizationId !== scopedOrganizationId) {
+      await client.query("ROLLBACK");
+      return null;
+    }
 
     let total = 0;
     for (const [collection, records] of entries) {
@@ -864,7 +887,7 @@ export async function createSession(userId, { remember = false } = {}) {
     [userId]
   );
 
-  return { token, expiresAt, remember };
+  return { id, token, expiresAt, remember };
 }
 
 function createLoginSmsCode() {
@@ -972,6 +995,8 @@ export async function getSessionByToken(token) {
     `SELECT
        s.id AS session_id,
        s.expires_at,
+       s.revoked_at,
+       s.last_seen_at AS session_last_seen_at,
        u.id,
        u.name,
        u.email,
@@ -1000,7 +1025,9 @@ export async function getSessionByToken(token) {
        AND om.user_id = u.id
       LEFT JOIN organizations o ON o.id = u.organization_id
       LEFT JOIN organization_subscriptions os ON os.organization_id = o.id
-     WHERE s.token_hash = $1 AND s.expires_at > NOW()
+     WHERE s.token_hash = $1
+       AND s.expires_at > NOW()
+       AND s.revoked_at IS NULL
      LIMIT 1`,
     [tokenHash]
   );
@@ -1008,7 +1035,7 @@ export async function getSessionByToken(token) {
   const row = result.rows[0];
   if (!row) return null;
 
-  const lastSeenAt = row.last_seen_at ? new Date(row.last_seen_at).getTime() : 0;
+  const lastSeenAt = row.session_last_seen_at ? new Date(row.session_last_seen_at).getTime() : 0;
   if (!lastSeenAt || Date.now() - lastSeenAt > 60_000) {
     pool
       .query("UPDATE app_sessions SET last_seen_at = NOW() WHERE id = $1", [row.session_id])
@@ -1044,6 +1071,34 @@ export async function getSessionByToken(token) {
       organizationPlanId: row.organization_plan_id,
       subscriptionStatus: row.subscription_status,
     },
+  };
+}
+
+export async function getSessionAuditStateByToken(token) {
+  if (!token) return null;
+  const tokenHash = hashSessionToken(token);
+  const result = await pool.query(
+    `SELECT
+       s.id,
+       s.user_id,
+       s.expires_at,
+       s.revoked_at,
+       u.organization_id
+     FROM app_sessions s
+     LEFT JOIN app_users u ON u.id = s.user_id
+     WHERE s.token_hash = $1
+     LIMIT 1`,
+    [tokenHash]
+  );
+  const session = result.rows[0];
+  if (!session) return { matched: false, reason: "unknown_session" };
+  const expired = session.expires_at && new Date(session.expires_at).getTime() <= Date.now();
+  return {
+    matched: true,
+    sessionId: session.id,
+    userId: session.user_id,
+    organizationId: session.organization_id,
+    reason: session.revoked_at ? "revoked" : expired ? "expired" : "not_active",
   };
 }
 
@@ -1120,28 +1175,153 @@ export async function updateUserNotificationPreferences(userId, preferences) {
 
 export async function deleteSessionByToken(token) {
   if (!token) return;
-  await pool.query("DELETE FROM app_sessions WHERE token_hash = $1", [
+  await pool.query("UPDATE app_sessions SET revoked_at = COALESCE(revoked_at, NOW()) WHERE token_hash = $1", [
     hashSessionToken(token),
   ]);
 }
 
 export async function getUserPermissions(userId) {
   const result = await pool.query(
-    `SELECT p.key, u.email
-     FROM app_users u
-     JOIN roles r ON lower(r.name) = lower(u.role)
-     JOIN role_permissions rp ON rp.role_id = r.id
-     JOIN permissions p ON p.id = rp.permission_id
-     WHERE u.id = $1
-     ORDER BY p.key`,
+    `SELECT key
+     FROM (
+       SELECT p.key
+       FROM app_users u
+       JOIN roles r ON lower(r.name) = lower(u.role)
+       JOIN role_permissions rp ON rp.role_id = r.id
+       JOIN permissions p ON p.id = rp.permission_id
+       WHERE u.id = $1
+       UNION
+       SELECT p.key
+       FROM user_permissions up
+       JOIN permissions p ON p.id = up.permission_id
+       WHERE up.user_id = $1
+     ) granted_permissions
+     ORDER BY key`,
     [userId]
   );
-  const permissions = new Set(result.rows.map((row) => row.key));
-  const email = result.rows[0]?.email;
-  if (userId === "u1" || String(email || "").toLowerCase() === "darksudo22@gmail.com") {
-    permissions.add("platform.admin");
+  return result.rows.map((row) => row.key);
+}
+
+async function getUserPermissionsWithClient(queryable, userId) {
+  const result = await queryable.query(
+    `SELECT key
+     FROM (
+       SELECT p.key
+       FROM app_users u
+       JOIN roles r ON lower(r.name) = lower(u.role)
+       JOIN role_permissions rp ON rp.role_id = r.id
+       JOIN permissions p ON p.id = rp.permission_id
+       WHERE u.id = $1
+       UNION
+       SELECT p.key
+       FROM user_permissions up
+       JOIN permissions p ON p.id = up.permission_id
+       WHERE up.user_id = $1
+     ) granted_permissions
+     ORDER BY key`,
+    [userId]
+  );
+  return result.rows.map((row) => row.key);
+}
+
+export async function grantUserPermission(userId, permissionKey, { grantedById, reason, audit } = {}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const targetResult = await client.query(
+      "SELECT id, organization_id, role, status FROM app_users WHERE id = $1 LIMIT 1",
+      [userId]
+    );
+    const target = targetResult.rows[0];
+    if (!target) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const permissionResult = await client.query("SELECT id, key FROM permissions WHERE key = $1 LIMIT 1", [permissionKey]);
+    const permission = permissionResult.rows[0];
+    if (!permission) {
+      const error = new Error("Permission was not found.");
+      error.statusCode = 404;
+      error.code = "PERMISSION_NOT_FOUND";
+      throw error;
+    }
+    const before = { permissions: await getUserPermissionsWithClient(client, userId) };
+    await client.query(
+      `INSERT INTO user_permissions (user_id, permission_id, granted_by_id, reason)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, permission_id) DO UPDATE SET
+         granted_by_id = EXCLUDED.granted_by_id,
+         reason = EXCLUDED.reason`,
+      [userId, permission.id, grantedById || null, reason || null]
+    );
+    const after = { permissions: await getUserPermissionsWithClient(client, userId) };
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? target.organization_id ?? null,
+        before,
+        after,
+        metadata: { ...(audit.metadata || {}), permissionKey },
+        queryable: client,
+        required: true,
+      });
+    }
+    await client.query("COMMIT");
+    return { target, permissionKey, before, after };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
-  return [...permissions].sort();
+}
+
+export async function revokeUserPermission(userId, permissionKey, { audit } = {}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const targetResult = await client.query(
+      "SELECT id, organization_id, role, status FROM app_users WHERE id = $1 LIMIT 1",
+      [userId]
+    );
+    const target = targetResult.rows[0];
+    if (!target) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const permissionResult = await client.query("SELECT id, key FROM permissions WHERE key = $1 LIMIT 1", [permissionKey]);
+    const permission = permissionResult.rows[0];
+    if (!permission) {
+      const error = new Error("Permission was not found.");
+      error.statusCode = 404;
+      error.code = "PERMISSION_NOT_FOUND";
+      throw error;
+    }
+    const before = { permissions: await getUserPermissionsWithClient(client, userId) };
+    await client.query(
+      "DELETE FROM user_permissions WHERE user_id = $1 AND permission_id = $2",
+      [userId, permission.id]
+    );
+    const after = { permissions: await getUserPermissionsWithClient(client, userId) };
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? target.organization_id ?? null,
+        before,
+        after,
+        metadata: { ...(audit.metadata || {}), permissionKey },
+        queryable: client,
+        required: true,
+      });
+    }
+    await client.query("COMMIT");
+    return { target, permissionKey, before, after };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function requirePermission(user, permissionKey) {
@@ -1191,7 +1371,8 @@ export async function listFeatureRecords(feature, { organizationId } = {}) {
     throw error;
   }
   if (feature === "shipments") {
-    return listShipmentRecordsFromRepository(pool, { organizationId });
+    const rows = await listShipmentRecordsFromRepository(pool, { organizationId });
+    return rows.map(toUiShipment);
   }
 
   const scopedOrganizationId = requireOrganizationScope(organizationId, `listFeatureRecords:${feature}`);
@@ -1207,6 +1388,11 @@ export async function listFeatureRecords(feature, { organizationId } = {}) {
 
 export async function getShipmentRecord(shipmentId, { organizationId } = {}) {
   return getShipmentRecordFromRepository(pool, shipmentId, { organizationId });
+}
+
+export async function getShipmentOperationalRecord(shipmentId, { organizationId } = {}) {
+  const row = await getShipmentRecordFromRepository(pool, shipmentId, { organizationId });
+  return toUiShipment(row);
 }
 
 function toUiShipment(row) {
@@ -1234,7 +1420,215 @@ function toUiShipment(row) {
         legacy.publicTrackingToken ||
         legacy.customerAccessToken
     ),
+    priority: row.priority || legacy.priority || "normal",
+    assignedManagerId: row.assigned_manager_id || legacy.assignedManagerId || undefined,
+    notes: legacy.notes || "",
+    containerCount: legacy.containerCount ?? undefined,
+    grossWeightKg: legacy.grossWeightKg ?? legacy.weight ?? undefined,
+    weight: legacy.weight ?? legacy.grossWeightKg ?? undefined,
+    customsDeclarationNumber: legacy.customsDeclarationNumber || "",
+    customsStatus: legacy.customsStatus || "",
+    importPermitNumber: legacy.importPermitNumber || "",
   };
+}
+
+function cleanShipmentLegacyPatch(updates = {}) {
+  const legacyPatch = {};
+  for (const key of [
+    "containerNumber",
+    "containerCount",
+    "grossWeightKg",
+    "weight",
+    "actualDelivery",
+    "freeTimeDays",
+    "notes",
+    "customsDeclarationNumber",
+    "customsStatus",
+    "importPermitNumber",
+  ]) {
+    if (updates[key] !== undefined) legacyPatch[key] = updates[key] ?? "";
+  }
+  return legacyPatch;
+}
+
+async function validateShipmentMutationRelations(client, { organizationId, ownerUserId, customerId, assignedManagerId }) {
+  if (ownerUserId) {
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    if (owner.rows[0]?.organization_id !== organizationId) {
+      const error = new Error("Shipment owner does not belong to the authenticated organization.");
+      error.code = "TENANT_SCOPE_REQUIRED";
+      error.statusCode = 403;
+      throw error;
+    }
+  }
+
+  let customerRow = null;
+  if (customerId) {
+    const customer = await client.query(
+      "SELECT id, company_name, contact_name FROM customers WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL",
+      [customerId, organizationId]
+    );
+    if (!customer.rows[0]) {
+      const error = new Error("Shipment customer was not found.");
+      error.code = "CUSTOMER_NOT_FOUND";
+      error.statusCode = 404;
+      throw error;
+    }
+    customerRow = customer.rows[0];
+  }
+
+  if (assignedManagerId) {
+    const manager = await client.query(
+      "SELECT id FROM app_users WHERE id = $1 AND organization_id = $2 AND status <> 'suspended'",
+      [assignedManagerId, organizationId]
+    );
+    if (!manager.rows[0]) {
+      const error = new Error("Assigned manager was not found.");
+      error.code = "ASSIGNED_MANAGER_NOT_FOUND";
+      error.statusCode = 404;
+      throw error;
+    }
+  }
+
+  return customerRow;
+}
+
+export async function createShipmentRecord({ ownerUserId, actorUserId, organizationId, tenantContext, shipment }) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createShipmentRecord")
+    : requireOrganizationScope(organizationId, "createShipmentRecord");
+  const client = await pool.connect();
+  const id = crypto.randomUUID();
+  const shipmentCode = String(shipment.shipmentCode || shipment.trackingNumber || "").trim();
+  const legacyPatch = cleanShipmentLegacyPatch(shipment);
+
+  try {
+    await client.query("BEGIN");
+    const customer = await validateShipmentMutationRelations(client, {
+      organizationId: scopedOrganizationId,
+      ownerUserId,
+      customerId: shipment.customerId || null,
+      assignedManagerId: shipment.assignedManagerId || null,
+    });
+    const result = await client.query(
+      `INSERT INTO shipments (
+         id, organization_id, owner_user_id, shipment_code, customer_id, customer_name, status,
+         origin, destination, estimated_delivery_at, assigned_manager_id, legacy_data, created_by_id, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, NOW())
+       RETURNING *`,
+      [
+        id,
+        scopedOrganizationId,
+        ownerUserId,
+        shipmentCode,
+        shipment.customerId || null,
+        shipment.customerName || customer?.company_name || customer?.contact_name || null,
+        shipment.status || "PENDING",
+        shipment.origin || null,
+        shipment.destination || null,
+        shipment.estimatedDelivery || null,
+        shipment.assignedManagerId || null,
+        JSON.stringify({
+          ...legacyPatch,
+          trackingNumber: shipmentCode,
+          customerId: shipment.customerId || undefined,
+          customerName: shipment.customerName || customer?.company_name || customer?.contact_name || undefined,
+        }),
+        actorUserId || ownerUserId,
+      ]
+    );
+    await client.query("COMMIT");
+    return toUiShipment(result.rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error?.code === "23505") {
+      error.statusCode = 409;
+      error.code = "SHIPMENT_CODE_EXISTS";
+      error.message = "Shipment tracking number already exists.";
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateShipmentOperationalFields(id, updates = {}, { organizationId, actorUserId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateShipmentOperationalFields");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query(
+      "SELECT * FROM shipments WHERE id = $1 AND organization_id = $2 FOR UPDATE",
+      [id, scopedOrganizationId]
+    );
+    const before = beforeResult.rows[0];
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const customer = await validateShipmentMutationRelations(client, {
+      organizationId: scopedOrganizationId,
+      customerId: updates.customerId || null,
+      assignedManagerId: updates.assignedManagerId || null,
+    });
+    const legacyPatch = cleanShipmentLegacyPatch(updates);
+    const nextLegacy = {
+      ...(before.legacy_data || {}),
+      ...legacyPatch,
+      ...(updates.trackingNumber !== undefined || updates.shipmentCode !== undefined
+        ? { trackingNumber: updates.shipmentCode || updates.trackingNumber || before.shipment_code }
+        : {}),
+      ...(updates.customerId !== undefined ? { customerId: updates.customerId || "" } : {}),
+      ...(updates.customerName !== undefined ? { customerName: updates.customerName || "" } : {}),
+    };
+
+    const columns = [];
+    const values = [id, scopedOrganizationId];
+    const addColumn = (column, value) => {
+      values.push(value);
+      columns.push(`${column} = $${values.length}`);
+    };
+
+    if (updates.trackingNumber !== undefined || updates.shipmentCode !== undefined) {
+      addColumn("shipment_code", updates.shipmentCode || updates.trackingNumber);
+    }
+    if (updates.customerId !== undefined) addColumn("customer_id", updates.customerId || null);
+    if (updates.customerName !== undefined || customer) {
+      addColumn("customer_name", updates.customerName || customer?.company_name || customer?.contact_name || null);
+    }
+    if (updates.status !== undefined) addColumn("status", updates.status);
+    if (updates.origin !== undefined) addColumn("origin", updates.origin || null);
+    if (updates.destination !== undefined) addColumn("destination", updates.destination || null);
+    if (updates.estimatedDelivery !== undefined) addColumn("estimated_delivery_at", updates.estimatedDelivery || null);
+    if (updates.assignedManagerId !== undefined) addColumn("assigned_manager_id", updates.assignedManagerId || null);
+    addColumn("legacy_data", JSON.stringify(nextLegacy));
+
+    const result = await client.query(
+      `UPDATE shipments
+       SET ${columns.join(", ")},
+           updated_at = NOW()
+       WHERE id = $1 AND organization_id = $2
+       RETURNING *`,
+      values
+    );
+    await client.query("COMMIT");
+    return {
+      before: toUiShipment(before),
+      after: toUiShipment(result.rows[0]),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error?.code === "23505") {
+      error.statusCode = 409;
+      error.code = "SHIPMENT_CODE_EXISTS";
+      error.message = "Shipment tracking number already exists.";
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function toUiDocument(row) {
@@ -1254,6 +1648,33 @@ function toUiDocument(row) {
     isArchived: Boolean(row.archived_at),
     version: row.version || 1,
   };
+}
+
+const documentStorageAuditKeys = new Set([
+  "storage_key",
+  "storage_provider",
+  "object_key",
+  "storage_bucket",
+  "storage_region",
+  "local_path",
+  "checksum",
+  "checksum_sha256",
+  "size_bytes",
+  "content_type",
+  "storage_migrated_at",
+  "storage_verified_at",
+  "storage_migration_status",
+  "storage_migration_error",
+]);
+
+function sanitizeDocumentAuditSnapshot(value) {
+  if (Array.isArray(value)) return value.map(sanitizeDocumentAuditSnapshot);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !documentStorageAuditKeys.has(key))
+      .map(([key, nested]) => [key, sanitizeDocumentAuditSnapshot(nested)])
+  );
 }
 
 function toUiTask(row) {
@@ -1626,42 +2047,90 @@ export async function listDocuments({ ownerUserId, shipmentId, customerId, organ
 
 export async function createDocumentRecord({
   ownerUserId,
+  organizationId,
+  tenantContext,
   title,
   type,
   fileName,
   mimeType,
   fileSize,
   storageKey,
+  storageProvider = "local",
+  objectKey = null,
+  storageBucket = null,
+  storageRegion = null,
+  localPath = null,
   checksum,
+  checksumSha256 = null,
+  sizeBytes = null,
+  contentType = null,
+  storageMigratedAt = null,
+  storageVerifiedAt = null,
+  storageMigrationStatus = "local",
+  storageMigrationError = null,
   uploadedById,
   uploadedByName,
   shipmentId,
   customerId,
   visibility = "internal",
 }) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createDocumentRecord")
+    : requireOrganizationScope(organizationId, "createDocumentRecord");
   const client = await pool.connect();
   const id = crypto.randomUUID();
   const safeVisibility = visibility === "customer_visible" ? "customer_visible" : "internal";
 
   try {
     await client.query("BEGIN");
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    if (owner.rows[0]?.organization_id !== scopedOrganizationId) {
+      await client.query("ROLLBACK");
+      const error = new Error("Document owner does not belong to the authenticated organization.");
+      error.code = "TENANT_SCOPE_REQUIRED";
+      error.statusCode = 403;
+      throw error;
+    }
     const result = await client.query(
       `INSERT INTO documents (
          id, organization_id, owner_user_id, title, file_name, mime_type, file_size, storage_key,
-         checksum, version, uploaded_by_id, uploaded_by_name, shipment_id, customer_id,
+         storage_provider, object_key, storage_bucket, storage_region, local_path,
+         checksum, checksum_sha256, size_bytes, content_type, storage_migrated_at,
+         storage_verified_at, storage_migration_status, storage_migration_error,
+         version, uploaded_by_id, uploaded_by_name, shipment_id, customer_id,
          visibility, legacy_data
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12, $13, $14::jsonb)
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8,
+         $9, $10, $11, $12, $13,
+         $14, $15, $16, $17, $18,
+         $19, $20, $21,
+         1, $22, $23, $24, $25,
+         $26, $27::jsonb
+       )
        RETURNING *`,
       [
         id,
+        scopedOrganizationId,
         ownerUserId,
         title,
         fileName,
         mimeType,
         fileSize,
         storageKey,
+        storageProvider || "local",
+        objectKey || null,
+        storageBucket || null,
+        storageRegion || null,
+        localPath || storageKey || null,
         checksum,
+        checksumSha256 || checksum || null,
+        sizeBytes === undefined ? null : sizeBytes,
+        contentType || mimeType || null,
+        storageMigratedAt || null,
+        storageVerifiedAt || null,
+        storageMigrationStatus || "local",
+        storageMigrationError || null,
         uploadedById || null,
         uploadedByName || null,
         shipmentId || null,
@@ -1673,11 +2142,38 @@ export async function createDocumentRecord({
 
     await client.query(
       `INSERT INTO document_versions (
-         id, organization_id, document_id, version, storage_key, file_name, uploaded_by_id
+         id, organization_id, document_id, version, storage_key, storage_provider,
+         object_key, storage_bucket, storage_region, local_path, checksum_sha256,
+         size_bytes, content_type, storage_migrated_at, storage_verified_at,
+         storage_migration_status, storage_migration_error, file_name, uploaded_by_id
        )
-       VALUES ($1, (SELECT organization_id FROM documents WHERE id = $2), $2, 1, $3, $4, $5)
+       VALUES (
+         $1, $2, $3, 1, $4, $5,
+         $6, $7, $8, $9, $10,
+         $11, $12, $13, $14,
+         $15, $16, $17, $18
+       )
        ON CONFLICT (document_id, version) DO NOTHING`,
-      [crypto.randomUUID(), id, storageKey, fileName, uploadedById || null]
+      [
+        crypto.randomUUID(),
+        scopedOrganizationId,
+        id,
+        storageKey,
+        storageProvider || "local",
+        objectKey || null,
+        storageBucket || null,
+        storageRegion || null,
+        localPath || storageKey || null,
+        checksumSha256 || checksum || null,
+        sizeBytes === undefined ? null : sizeBytes,
+        contentType || mimeType || null,
+        storageMigratedAt || null,
+        storageVerifiedAt || null,
+        storageMigrationStatus || "local",
+        storageMigrationError || null,
+        fileName,
+        uploadedById || null,
+      ]
     );
 
     await syncDocumentUserRecord(client, ownerUserId, result.rows[0]);
@@ -1709,7 +2205,19 @@ export async function replaceDocumentFileRecord({
   mimeType,
   fileSize,
   storageKey,
+  storageProvider = "local",
+  objectKey = null,
+  storageBucket = null,
+  storageRegion = null,
+  localPath = null,
   checksum,
+  checksumSha256 = null,
+  sizeBytes = null,
+  contentType = null,
+  storageMigratedAt = null,
+  storageVerifiedAt = null,
+  storageMigrationStatus = "local",
+  storageMigrationError = null,
   uploadedById,
   organizationId,
 }) {
@@ -1732,20 +2240,81 @@ export async function replaceDocumentFileRecord({
            mime_type = $3,
            file_size = $4,
            storage_key = $5,
-           checksum = $6,
-           version = $7,
+           storage_provider = $6,
+           object_key = $7,
+           storage_bucket = $8,
+           storage_region = $9,
+           local_path = $10,
+           checksum = $11,
+           checksum_sha256 = $12,
+           size_bytes = $13,
+           content_type = $14,
+           storage_migrated_at = $15,
+           storage_verified_at = $16,
+           storage_migration_status = $17,
+           storage_migration_error = $18,
+           version = $19,
            updated_at = NOW()
-       WHERE id = $1 AND organization_id = $8
+       WHERE id = $1 AND organization_id = $20
        RETURNING *`,
-      [documentId, fileName, mimeType, fileSize, storageKey, checksum, nextVersion, scopedOrganizationId]
+      [
+        documentId,
+        fileName,
+        mimeType,
+        fileSize,
+        storageKey,
+        storageProvider || "local",
+        objectKey || null,
+        storageBucket || null,
+        storageRegion || null,
+        localPath || storageKey || null,
+        checksum,
+        checksumSha256 || checksum || null,
+        sizeBytes === undefined ? null : sizeBytes,
+        contentType || mimeType || null,
+        storageMigratedAt || null,
+        storageVerifiedAt || null,
+        storageMigrationStatus || "local",
+        storageMigrationError || null,
+        nextVersion,
+        scopedOrganizationId,
+      ]
     );
 
     await client.query(
       `INSERT INTO document_versions (
-         id, organization_id, document_id, version, storage_key, file_name, uploaded_by_id
+         id, organization_id, document_id, version, storage_key, storage_provider,
+         object_key, storage_bucket, storage_region, local_path, checksum_sha256,
+         size_bytes, content_type, storage_migrated_at, storage_verified_at,
+         storage_migration_status, storage_migration_error, file_name, uploaded_by_id
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [crypto.randomUUID(), scopedOrganizationId, documentId, nextVersion, storageKey, fileName, uploadedById || null]
+       VALUES (
+         $1, $2, $3, $4, $5, $6,
+         $7, $8, $9, $10, $11,
+         $12, $13, $14, $15,
+         $16, $17, $18, $19
+       )`,
+      [
+        crypto.randomUUID(),
+        scopedOrganizationId,
+        documentId,
+        nextVersion,
+        storageKey,
+        storageProvider || "local",
+        objectKey || null,
+        storageBucket || null,
+        storageRegion || null,
+        localPath || storageKey || null,
+        checksumSha256 || checksum || null,
+        sizeBytes === undefined ? null : sizeBytes,
+        contentType || mimeType || null,
+        storageMigratedAt || null,
+        storageVerifiedAt || null,
+        storageMigrationStatus || "local",
+        storageMigrationError || null,
+        fileName,
+        uploadedById || null,
+      ]
     );
 
     await syncDocumentUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
@@ -1753,7 +2322,7 @@ export async function replaceDocumentFileRecord({
   });
 }
 
-export async function updateDocumentMetadata(documentId, updates = {}, { organizationId } = {}) {
+export async function updateDocumentMetadata(documentId, updates = {}, { organizationId, audit } = {}) {
   const safeVisibility = updates.visibility === "customer_visible" ? "customer_visible" : "internal";
   const client = await pool.connect();
   const scopedOrganizationId = requireOrganizationScope(organizationId, "updateDocumentMetadata");
@@ -1798,6 +2367,16 @@ export async function updateDocumentMetadata(documentId, updates = {}, { organiz
     );
 
     await syncDocumentUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? scopedOrganizationId,
+        before: sanitizeDocumentAuditSnapshot(before),
+        after: sanitizeDocumentAuditSnapshot(result.rows[0]),
+        queryable: client,
+        required: true,
+      });
+    }
     await client.query("COMMIT");
     return { before, after: result.rows[0] };
   } catch (error) {
@@ -1944,6 +2523,8 @@ export async function getTaskRecord(taskId, { organizationId } = {}) {
 
 export async function createTaskRecord({
   ownerUserId,
+  organizationId,
+  tenantContext,
   title,
   description,
   status,
@@ -1964,6 +2545,9 @@ export async function createTaskRecord({
   workflowBlockerId,
   blockerCode,
 }) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createTaskRecord")
+    : requireOrganizationScope(organizationId, "createTaskRecord");
   const client = await pool.connect();
   const id = crypto.randomUUID();
   const safeStatus = normalizeTaskStatus(status);
@@ -1972,7 +2556,13 @@ export async function createTaskRecord({
   try {
     await client.query("BEGIN");
     const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
-    requireOrganizationScope(owner.rows[0]?.organization_id, "createTaskRecord");
+    if (owner.rows[0]?.organization_id !== scopedOrganizationId) {
+      await client.query("ROLLBACK");
+      const error = new Error("Task owner does not belong to the authenticated organization.");
+      error.code = "TENANT_SCOPE_REQUIRED";
+      error.statusCode = 403;
+      throw error;
+    }
     const legacy = {
       deadline: deadline || "",
       assignedToUserId: assignedToUserId || "",
@@ -1995,12 +2585,13 @@ export async function createTaskRecord({
          source_id, shipment_id, customer_id, workflow_instance_id, workflow_step_code,
          workflow_blocker_id, blocker_code, legacy_data, completed_at, completed_by_user_id
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10,
-               CASE WHEN $7::text IS NULL THEN NULL ELSE NOW() END, $11, $12, $13, $14, $15, $16, $17, $18,
-               $19, $20, $21::jsonb, $22, $23)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+               CASE WHEN $8::text IS NULL THEN NULL ELSE NOW() END, $12, $13, $14, $15, $16, $17, $18, $19,
+               $20, $21, $22::jsonb, $23, $24)
        RETURNING *`,
       [
         id,
+        scopedOrganizationId,
         ownerUserId,
         String(title || "").trim(),
         description || null,
@@ -2499,7 +3090,7 @@ export async function listOrganizationMembers({ organizationId, includeInactive 
   }));
 }
 
-export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, task }) {
+export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, organizationId, tenantContext, task }) {
   const client = await pool.connect();
   const sourceType = task.workflowBlockerId
     ? "WORKFLOW_BLOCKER"
@@ -2509,12 +3100,21 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
         ? "SHIPMENT_STEP"
         : "SHIPMENT";
   const sourceId = task.workflowBlockerId || task.workflowStepCode || task.workflowInstanceId || stepId || shipmentId;
-  const organizationId = actorUser?.organizationId || actorUser?.organization_id || null;
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createShipmentTaskRecord")
+    : requireOrganizationScope(organizationId || actorUser?.organizationId || actorUser?.organization_id, "createShipmentTaskRecord");
+  const actorOrganizationId = actorUser?.organizationId || actorUser?.organization_id || null;
+  if (actorOrganizationId && actorOrganizationId !== scopedOrganizationId) {
+    const error = new Error("Task actor does not belong to the authenticated organization.");
+    error.code = "TENANT_SCOPE_REQUIRED";
+    error.statusCode = 403;
+    throw error;
+  }
 
   try {
     await client.query("BEGIN");
     const shipmentValues = [shipmentId];
-    const scopeFilter = shipmentScopeClause(shipmentValues, { organizationId, ownerUserId: actorUser?.id }, "");
+    const scopeFilter = shipmentScopeClause(shipmentValues, { organizationId: scopedOrganizationId, ownerUserId: actorUser?.id }, "");
     const shipmentResult = await client.query(
       `SELECT * FROM shipments WHERE id = $1 ${scopeFilter}`,
       shipmentValues
@@ -2528,10 +3128,10 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
     const existingResult = await client.query(
       `SELECT * FROM tasks
        WHERE shipment_id = $1 AND source_type = $2 AND source_id = $3
-         AND ($4::text IS NULL OR organization_id = $4)
+          AND ($4::text IS NULL OR organization_id = $4)
        ORDER BY created_at DESC
        LIMIT 1`,
-      [shipmentId, sourceType, sourceId, organizationId]
+      [shipmentId, sourceType, sourceId, scopedOrganizationId]
     );
     const existing = existingResult.rows[0] || null;
     const assignedToId = task.assignedToUserId || actorUser.id;
@@ -2595,7 +3195,7 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
             task.workflowBlockerId || existing.workflow_blocker_id || null,
             task.blockerCode || existing.blocker_code || null,
             JSON.stringify(legacy),
-            shipment.organization_id || actorUser.organizationId || actorUser.organization_id || null,
+            scopedOrganizationId,
           ]
         )
       : await client.query(
@@ -2609,7 +3209,7 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
            RETURNING *`,
           [
             crypto.randomUUID(),
-            shipment.organization_id || actorUser.organizationId || actorUser.organization_id || null,
+            scopedOrganizationId,
             shipment.owner_user_id || actorUser.id,
             title,
             task.description || null,
@@ -2838,22 +3438,32 @@ export async function getChequeRecord(id, { organizationId } = {}) {
   return result.rows[0] || null;
 }
 
-export async function createChequeRecord({ ownerUserId, actorUserId, cheque }) {
+export async function createChequeRecord({ ownerUserId, actorUserId, organizationId, tenantContext, cheque }) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createChequeRecord")
+    : requireOrganizationScope(organizationId, "createChequeRecord");
   const client = await pool.connect();
   const id = crypto.randomUUID();
   try {
     await client.query("BEGIN");
     const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
-    requireOrganizationScope(owner.rows[0]?.organization_id, "createChequeRecord");
+    if (owner.rows[0]?.organization_id !== scopedOrganizationId) {
+      await client.query("ROLLBACK");
+      const error = new Error("Cheque owner does not belong to the authenticated organization.");
+      error.code = "TENANT_SCOPE_REQUIRED";
+      error.statusCode = 403;
+      throw error;
+    }
     const result = await client.query(
       `INSERT INTO cheques (
          id, organization_id, owner_user_id, bank_name, cheque_number, amount, due_date, location,
          receiver, status, description, legacy_data, created_by_id, archived_at
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14)
        RETURNING *`,
       [
         id,
+        scopedOrganizationId,
         ownerUserId,
         String(cheque.bankName || "").trim(),
         String(cheque.chequeNumber || "").trim(),
@@ -2994,17 +3604,19 @@ export async function getComplianceMeetingRecord(id, { organizationId } = {}) {
   return result.rows[0] || null;
 }
 
-async function replaceMeetingDocuments(client, meetingId, requiredDocuments = []) {
-  await client.query("DELETE FROM meeting_required_documents WHERE meeting_id = $1", [meetingId]);
+async function replaceMeetingDocuments(client, meetingId, requiredDocuments = [], organizationId) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "replaceMeetingDocuments");
+  await client.query("DELETE FROM meeting_required_documents WHERE meeting_id = $1 AND organization_id = $2", [meetingId, scopedOrganizationId]);
   for (const doc of requiredDocuments) {
     const documentId = doc.id ? `${meetingId}:${doc.id}` : crypto.randomUUID();
     await client.query(
       `INSERT INTO meeting_required_documents (
          id, organization_id, meeting_id, name, required, completed, file_name, legacy_data
-       )
-       VALUES ($1, (SELECT organization_id FROM compliance_meetings WHERE id = $2), $2, $3, $4, $5, $6, $7::jsonb)`,
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
       [
         documentId,
+        scopedOrganizationId,
         meetingId,
         doc.name || "Document",
         doc.required !== false,
@@ -3016,23 +3628,33 @@ async function replaceMeetingDocuments(client, meetingId, requiredDocuments = []
   }
 }
 
-export async function createComplianceMeetingRecord({ ownerUserId, actorUser, meeting }) {
+export async function createComplianceMeetingRecord({ ownerUserId, actorUser, organizationId, tenantContext, meeting }) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createComplianceMeetingRecord")
+    : requireOrganizationScope(organizationId, "createComplianceMeetingRecord");
   const client = await pool.connect();
   const id = crypto.randomUUID();
   try {
     await client.query("BEGIN");
     const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
-    requireOrganizationScope(owner.rows[0]?.organization_id, "createComplianceMeetingRecord");
+    if (owner.rows[0]?.organization_id !== scopedOrganizationId) {
+      await client.query("ROLLBACK");
+      const error = new Error("Compliance meeting owner does not belong to the authenticated organization.");
+      error.code = "TENANT_SCOPE_REQUIRED";
+      error.statusCode = 403;
+      throw error;
+    }
     const result = await client.query(
       `INSERT INTO compliance_meetings (
          id, organization_id, owner_user_id, title, organization_name, meeting_at, location, status,
          assigned_to_id, assigned_to_name, description, outcome, next_action_items,
          reminder_sent, legacy_data, created_by_id
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16)
        RETURNING *`,
       [
         id,
+        scopedOrganizationId,
         ownerUserId,
         meeting.purpose || meeting.title || "Compliance meeting",
         meeting.departmentName || meeting.organizationName || null,
@@ -3049,7 +3671,7 @@ export async function createComplianceMeetingRecord({ ownerUserId, actorUser, me
         actorUser?.id || ownerUserId,
       ]
     );
-    await replaceMeetingDocuments(client, id, meeting.requiredDocuments || []);
+    await replaceMeetingDocuments(client, id, meeting.requiredDocuments || [], scopedOrganizationId);
     await syncMeetingUserRecord(client, ownerUserId, result.rows[0]);
     await client.query("COMMIT");
     return result.rows[0];
@@ -3112,7 +3734,7 @@ export async function updateComplianceMeetingRecord(id, updates = {}, { organiza
       ]
     );
     if (Array.isArray(updates.requiredDocuments)) {
-      await replaceMeetingDocuments(client, id, updates.requiredDocuments);
+      await replaceMeetingDocuments(client, id, updates.requiredDocuments, scopedOrganizationId);
     }
     await syncMeetingUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
     await client.query("COMMIT");
@@ -3161,9 +3783,10 @@ export async function archiveComplianceMeetingRecord(id, { organizationId } = {}
 
 export async function upsertMeetingRequiredDocument(meetingId, document = {}, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "upsertMeetingRequiredDocument");
   try {
     await client.query("BEGIN");
-    const meeting = await getComplianceMeetingRecord(meetingId, { organizationId });
+    const meeting = await getComplianceMeetingRecord(meetingId, { organizationId: scopedOrganizationId });
     if (!meeting) {
       await client.query("ROLLBACK");
       return null;
@@ -3185,7 +3808,7 @@ export async function upsertMeetingRequiredDocument(meetingId, document = {}, { 
        RETURNING *`,
       [
         id,
-        meeting.organization_id || organizationId || null,
+        scopedOrganizationId,
         meetingId,
         document.name || "Document",
         document.required !== false,
@@ -3946,6 +4569,30 @@ async function enqueueSmsDelivery(queryable, {
   return result.rows[0] || null;
 }
 
+function sanitizeSmsProviderResponse(value) {
+  if (!value || typeof value !== "object") return value || {};
+  if (Array.isArray(value)) return value.map((item) => sanitizeSmsProviderResponse(item));
+
+  const sensitiveKeys = new Set([
+    "body",
+    "code",
+    "message",
+    "messages",
+    "messageText",
+    "otp",
+    "text",
+  ]);
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !sensitiveKeys.has(key))
+      .map(([key, nested]) => [key, sanitizeSmsProviderResponse(nested)])
+  );
+}
+
+function smsProviderResponse(providerResult = {}) {
+  return sanitizeSmsProviderResponse(providerResult.raw || providerResult || {});
+}
+
 export async function recordImmediateSmsDelivery({
   organizationId,
   userId,
@@ -3964,7 +4611,7 @@ export async function recordImmediateSmsDelivery({
   const normalizedPhone = normalizeSmsPhone(recipientPhone);
   const safeStatus = ["sent", "failed", "skipped", "queued"].includes(status) ? status : "sent";
   const finalStatus = normalizedPhone ? safeStatus : "skipped";
-  const providerResponse = providerResult.raw || providerResult || {};
+  const providerResponse = smsProviderResponse(providerResult);
   const result = await pool.query(
     `INSERT INTO sms_deliveries (
        id, organization_id, user_id, recipient_type, recipient_name, recipient_phone, message, status, source_type, source_id,
@@ -4259,7 +4906,7 @@ export async function markSmsDeliverySent(deliveryId, providerResult = {}) {
          updated_at = NOW()
      WHERE id = $1
      RETURNING *`,
-    [deliveryId, providerResult.messageId || null, JSON.stringify(providerResult.raw || providerResult)]
+    [deliveryId, providerResult.messageId || null, JSON.stringify(smsProviderResponse(providerResult))]
   );
   return toUiSmsDelivery(result.rows[0]);
 }
@@ -4274,7 +4921,7 @@ export async function markSmsDeliverySkipped(deliveryId, reason, providerResult 
          updated_at = NOW()
      WHERE id = $1
      RETURNING *`,
-    [deliveryId, reason || "skipped", JSON.stringify(providerResult.raw || providerResult || {})]
+    [deliveryId, reason || "skipped", JSON.stringify(smsProviderResponse(providerResult))]
   );
   return toUiSmsDelivery(result.rows[0]);
 }
@@ -5627,11 +6274,16 @@ export async function voidBillingInvoice(invoiceId, { actorUserId } = {}) {
   }
 }
 
-export async function markBillingPaymentManually(paymentId, { actorUserId, status, note }) {
+export async function markBillingPaymentManually(paymentId, { actorUserId, status, note, audit }) {
   const client = await pool.connect();
   const nextStatus = status === "failed" ? "failed" : "paid";
   try {
     await client.query("BEGIN");
+    const before = (await client.query("SELECT * FROM billing_payments WHERE id = $1 FOR UPDATE", [paymentId])).rows[0];
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
     const result = await client.query(
       `UPDATE billing_payments
        SET status = $2,
@@ -5647,7 +6299,6 @@ export async function markBillingPaymentManually(paymentId, { actorUserId, statu
       [paymentId, nextStatus, note || null, actorUserId || null]
     );
     const payment = result.rows[0];
-    if (!payment) return null;
     if (nextStatus === "paid") {
       await closeInvoiceForPayment(client, payment);
       await client.query("UPDATE signup_requests SET status = 'pending_review', updated_at = NOW() WHERE id = $1", [payment.signup_request_id]);
@@ -5662,6 +6313,16 @@ export async function markBillingPaymentManually(paymentId, { actorUserId, statu
       summary: nextStatus === "paid" ? "Payment was manually marked paid." : "Payment was manually marked failed.",
       after: { paymentId, status: nextStatus, note: note || "" },
     });
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? payment.organization_id ?? null,
+        before,
+        after: payment,
+        queryable: client,
+        required: true,
+      });
+    }
     await client.query("COMMIT");
     return (await listBillingPayments({ organizationId: payment.organization_id })).find((item) => item.id === paymentId) || toUiPayment(payment);
   } catch (error) {
@@ -6254,13 +6915,22 @@ export async function getQuotationRecord(id, { organizationId } = {}) {
   return result.rows[0] || null;
 }
 
-export async function createQuotationRecord({ ownerUserId, actorUserId, quote }) {
+export async function createQuotationRecord({ ownerUserId, actorUserId, organizationId, tenantContext, quote }) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createQuotationRecord")
+    : requireOrganizationScope(organizationId, "createQuotationRecord");
   const client = await pool.connect();
   const id = quote.id || crypto.randomUUID();
   try {
     await client.query("BEGIN");
     const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
-    requireOrganizationScope(owner.rows[0]?.organization_id, "createQuotationRecord");
+    if (owner.rows[0]?.organization_id !== scopedOrganizationId) {
+      await client.query("ROLLBACK");
+      const error = new Error("Quotation owner does not belong to the authenticated organization.");
+      error.code = "TENANT_SCOPE_REQUIRED";
+      error.statusCode = 403;
+      throw error;
+    }
     const result = await client.query(
       `INSERT INTO quotations (
          id, organization_id, owner_user_id, quotation_number, customer_id, customer_name, customer_phone,
@@ -6269,11 +6939,12 @@ export async function createQuotationRecord({ ownerUserId, actorUserId, quote })
          toll_fees, insurance_percentage, profit_margin, total_price, valid_until,
          status, notes, legacy_data, created_by_id, archived_at, updated_at
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb,
-               $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25::jsonb, $26, $27, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb,
+               $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26::jsonb, $27, $28, NOW())
        RETURNING *`,
       [
         id,
+        scopedOrganizationId,
         ownerUserId,
         quote.quotationNumber || quote.id || id,
         quote.customerId || null,
@@ -6451,10 +7122,11 @@ export async function convertQuotationToShipment(id, actorUserId, { organization
          id, organization_id, owner_user_id, shipment_code, customer_id, customer_name, status,
          origin, destination, estimated_delivery_at, legacy_data, created_by_id, updated_at
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, 'PENDING', $6, $7, $8, $9::jsonb, $10, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, $8, $9, $10::jsonb, $11, NOW())
        RETURNING *`,
       [
         shipmentId,
+        scopedOrganizationId,
         quote.owner_user_id,
         shipmentCode,
         quote.customer_id,
@@ -6545,7 +7217,7 @@ export async function listArchiveRecords({ search = "", organizationId } = {}) {
     .sort((a, b) => new Date(b.archivedAt || b.createdAt).getTime() - new Date(a.archivedAt || a.createdAt).getTime());
 }
 
-export async function archiveEntityRecord(entityType, entityId, actorUserId, { organizationId } = {}) {
+export async function archiveEntityRecord(entityType, entityId, actorUserId, { organizationId, audit } = {}) {
   const config = archiveTables[entityType];
   if (!config) return null;
   const scopedOrganizationId = requireOrganizationScope(organizationId, "archiveEntityRecord");
@@ -6590,11 +7262,20 @@ export async function archiveEntityRecord(entityType, entityId, actorUserId, { o
     if (entityType === "document") {
       await syncDocumentUserRecord(client, row.owner_user_id, row);
     }
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? scopedOrganizationId,
+        after: entityType === "document" ? sanitizeDocumentAuditSnapshot(row) : row,
+        queryable: client,
+        required: true,
+      });
+    }
     return row;
   });
 }
 
-export async function restoreEntityRecord(entityType, entityId, { organizationId } = {}) {
+export async function restoreEntityRecord(entityType, entityId, { organizationId, audit } = {}) {
   const config = archiveTables[entityType];
   if (!config) return null;
   const scopedOrganizationId = requireOrganizationScope(organizationId, "restoreEntityRecord");
@@ -6626,11 +7307,20 @@ export async function restoreEntityRecord(entityType, entityId, { organizationId
     if (entityType === "document") {
       await syncDocumentUserRecord(client, row.owner_user_id, row);
     }
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? scopedOrganizationId,
+        after: entityType === "document" ? sanitizeDocumentAuditSnapshot(row) : row,
+        queryable: client,
+        required: true,
+      });
+    }
     return row;
   });
 }
 
-export async function deleteArchivedEntityRecord(entityType, entityId, { organizationId } = {}) {
+export async function deleteArchivedEntityRecord(entityType, entityId, { organizationId, audit } = {}) {
   const config = archiveTables[entityType];
   if (!config) return null;
   const scopedOrganizationId = requireOrganizationScope(organizationId, "deleteArchivedEntityRecord");
@@ -6662,6 +7352,15 @@ export async function deleteArchivedEntityRecord(entityType, entityId, { organiz
            AND organization_id = $2`,
         [entityId, scopedOrganizationId]
       );
+    }
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? scopedOrganizationId,
+        before: entityType === "document" ? sanitizeDocumentAuditSnapshot(row) : row,
+        queryable: client,
+        required: true,
+      });
     }
     await client.query("COMMIT");
     return row;
@@ -6920,40 +7619,271 @@ export async function removeChatThreadMember(threadId, userId) {
   await pool.query("DELETE FROM chat_thread_members WHERE thread_id = $1 AND user_id = $2", [threadId, userId]);
 }
 
+const AUDIT_REDACTED = "[redacted]";
+const AUDIT_MAX_DEPTH = 8;
+const AUDIT_MAX_ARRAY_ITEMS = 50;
+const AUDIT_MAX_OBJECT_KEYS = 80;
+const AUDIT_MAX_STRING_LENGTH = 1200;
+const AUDIT_MAX_JSON_LENGTH = 40000;
+
+function normalizeAuditKey(key = "") {
+  return String(key).replace(/[_\-\s]/g, "").toLowerCase();
+}
+
+function isAuthCodeKey(key, path = []) {
+  const normalized = normalizeAuditKey(key);
+  if (["smscode", "otpcode", "debugcode", "codehash", "codesalt"].includes(normalized)) return true;
+  if (normalized !== "code") return false;
+  return /auth|sms|otp|login|challenge|verification/i.test(path.join("."));
+}
+
+function isSensitiveAuditKey(key, path = []) {
+  const normalized = normalizeAuditKey(key);
+  if (isAuthCodeKey(key, path)) return true;
+  if (normalized === "path") return true;
+  return (
+    normalized.includes("password") ||
+    normalized.includes("token") ||
+    normalized.includes("tokenhash") ||
+    normalized.includes("session") ||
+    normalized.includes("cookie") ||
+    normalized.includes("authorization") ||
+    normalized.includes("authority") ||
+    normalized.includes("otp") ||
+    normalized.includes("secret") ||
+    normalized.includes("merchant") ||
+    normalized.includes("apikey") ||
+    normalized.includes("providerresponse") ||
+    normalized.includes("providerresult") ||
+    normalized.includes("storagekey") ||
+    normalized.includes("objectkey") ||
+    normalized.includes("storagebucket") ||
+    normalized.includes("storageregion") ||
+    normalized.includes("localpath") ||
+    normalized.includes("filepath") ||
+    normalized.includes("signedurl") ||
+    normalized.includes("signature") ||
+    normalized.includes("customeraccesstoken") ||
+    normalized.includes("trackingtoken")
+  );
+}
+
+function sanitizeAuditString(value) {
+  if (
+    /signature=|customer_access_token=|trackingToken=|logisticplus_session=|authorization:/i.test(value) ||
+    /\/api\/public\/track\/[A-Za-z0-9_-]{24,}/.test(value) ||
+    /\/track\/[A-Za-z0-9_-]{24,}/.test(value)
+  ) {
+    return AUDIT_REDACTED;
+  }
+  if (value.length > AUDIT_MAX_STRING_LENGTH) {
+    return `${value.slice(0, AUDIT_MAX_STRING_LENGTH)}...[truncated ${value.length - AUDIT_MAX_STRING_LENGTH} chars]`;
+  }
+  return value;
+}
+
+export function sanitizeAuditPayload(value, { depth = AUDIT_MAX_DEPTH, path = [], seen = new WeakSet() } = {}) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (Buffer.isBuffer(value)) return "[binary]";
+  if (value instanceof Error) {
+    return sanitizeAuditPayload({
+      name: value.name,
+      message: value.message,
+      code: value.code,
+      statusCode: value.statusCode,
+    }, { depth: depth - 1, path, seen });
+  }
+  if (typeof value === "string") return sanitizeAuditString(value);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value !== "object") return String(value);
+  if (depth <= 0) return "[max-depth]";
+  if (seen.has(value)) return "[circular]";
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    const result = value
+      .slice(0, AUDIT_MAX_ARRAY_ITEMS)
+      .map((item, index) => sanitizeAuditPayload(item, { depth: depth - 1, path: [...path, String(index)], seen }));
+    if (value.length > AUDIT_MAX_ARRAY_ITEMS) {
+      result.push(`[truncated ${value.length - AUDIT_MAX_ARRAY_ITEMS} items]`);
+    }
+    return result;
+  }
+
+  const entries = Object.entries(value).slice(0, AUDIT_MAX_OBJECT_KEYS);
+  const sanitized = {};
+  for (const [key, nestedValue] of entries) {
+    const nextPath = [...path, key];
+    sanitized[key] = isSensitiveAuditKey(key, path)
+      ? AUDIT_REDACTED
+      : sanitizeAuditPayload(nestedValue, { depth: depth - 1, path: nextPath, seen });
+  }
+  const entryCount = Object.keys(value).length;
+  if (entryCount > AUDIT_MAX_OBJECT_KEYS) {
+    sanitized.__truncatedKeys = entryCount - AUDIT_MAX_OBJECT_KEYS;
+  }
+  return sanitized;
+}
+
+function boundedAuditPayload(value, fallback = undefined) {
+  if (value === undefined) return fallback;
+  const sanitized = sanitizeAuditPayload(value);
+  const serialized = JSON.stringify(sanitized);
+  if (serialized.length <= AUDIT_MAX_JSON_LENGTH) return sanitized;
+  return {
+    truncated: true,
+    approximateBytes: serialized.length,
+    preview: serialized.slice(0, AUDIT_MAX_JSON_LENGTH),
+  };
+}
+
+function auditActorType({ actorType, actorUserId, action }) {
+  if (actorType) return actorType;
+  if (!actorUserId) return String(action || "").startsWith("public_") ? "public" : "system";
+  return String(action || "").startsWith("admin.") ? "platform_admin" : "user";
+}
+
+function auditRowToDto(row = {}) {
+  return {
+    id: row.id,
+    organizationId: row.organization_id || null,
+    actorUserId: row.actor_user_id || null,
+    actorType: row.actor_type,
+    eventType: row.event_type,
+    resourceType: row.resource_type,
+    resourceId: row.resource_id || null,
+    requestId: row.request_id || null,
+    ip: row.ip || null,
+    userAgent: row.user_agent || null,
+    before: boundedAuditPayload(row.before_json, null),
+    after: boundedAuditPayload(row.after_json, null),
+    metadata: boundedAuditPayload(row.metadata_json || {}, {}),
+    createdAt: row.created_at,
+  };
+}
+
 export async function auditLog({
   actorUserId,
   organizationId,
+  actorType,
   action,
+  eventType,
   entityType,
+  resourceType,
   entityId,
+  resourceId,
   summary,
   before,
   after,
+  metadata,
   requestContext,
+  queryable = pool,
+  required = false,
 }) {
-  const actorOrg = !organizationId && actorUserId ? await getOrganizationForUser(actorUserId) : null;
+  try {
+    const resolvedEventType = eventType || action;
+    const resolvedResourceType = resourceType || entityType || "unknown";
+    const resolvedResourceId = resourceId || entityId || null;
+    const actorOrg = !organizationId && actorUserId ? await getOrganizationForUser(actorUserId) : null;
+    const resolvedOrganizationId = organizationId || actorOrg?.id || null;
+    const safeBefore = boundedAuditPayload(before, null);
+    const safeAfter = boundedAuditPayload(after, null);
+    const safeMetadata = boundedAuditPayload({
+      ...(metadata || {}),
+      ...(summary ? { summary } : {}),
+    }, {});
+
+    const changeResult = await queryable.query(
+      `INSERT INTO change_logs (
+         id, organization_id, actor_user_id, action, entity_type, entity_id, summary,
+         before_json, after_json, ip_address, user_agent
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11)
+       RETURNING *`,
+      [
+        crypto.randomUUID(),
+        resolvedOrganizationId,
+        actorUserId || null,
+        resolvedEventType,
+        resolvedResourceType,
+        resolvedResourceId,
+        summary || resolvedEventType,
+        safeBefore === null ? null : JSON.stringify(safeBefore),
+        safeAfter === null ? null : JSON.stringify(safeAfter),
+        requestContext?.ip || null,
+        requestContext?.userAgent || null,
+      ]
+    );
+
+    await queryable.query(
+      `INSERT INTO audit_logs (
+         id, organization_id, actor_user_id, actor_type, event_type, resource_type,
+         resource_id, request_id, ip, user_agent, before_json, after_json, metadata_json
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb)`,
+      [
+        crypto.randomUUID(),
+        resolvedOrganizationId,
+        actorUserId || null,
+        auditActorType({ actorType, actorUserId, action: resolvedEventType }),
+        resolvedEventType,
+        resolvedResourceType,
+        resolvedResourceId,
+        requestContext?.requestId || null,
+        requestContext?.ip || null,
+        requestContext?.userAgent || null,
+        safeBefore === null ? null : JSON.stringify(safeBefore),
+        safeAfter === null ? null : JSON.stringify(safeAfter),
+        JSON.stringify(safeMetadata || {}),
+      ]
+    );
+
+    return changeResult.rows[0];
+  } catch (error) {
+    console.error("Audit log write failed:", error);
+    if (required) throw error;
+    // TODO(phase-5-audit): Migrate remaining route-level best-effort audit calls into transaction helpers where the mutation is high risk.
+    return null;
+  }
+}
+
+export async function listAuditLogs({ limit = 100, organizationId, actorUserId, eventType, resourceType, resourceId } = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 250);
+  const values = [];
+  const where = [];
+  if (organizationId !== undefined) {
+    values.push(organizationId);
+    where.push(`a.organization_id = $${values.length}`);
+  }
+  if (actorUserId) {
+    values.push(actorUserId);
+    where.push(`a.actor_user_id = $${values.length}`);
+  }
+  if (eventType) {
+    values.push(eventType);
+    where.push(`a.event_type = $${values.length}`);
+  }
+  if (resourceType) {
+    values.push(resourceType);
+    where.push(`a.resource_type = $${values.length}`);
+  }
+  if (resourceId) {
+    values.push(resourceId);
+    where.push(`a.resource_id = $${values.length}`);
+  }
+  values.push(safeLimit);
   const result = await pool.query(
-    `INSERT INTO change_logs (
-       id, organization_id, actor_user_id, action, entity_type, entity_id, summary,
-       before_json, after_json, ip_address, user_agent
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11)
-     RETURNING *`,
-    [
-      crypto.randomUUID(),
-      organizationId || actorOrg?.id || null,
-      actorUserId || null,
-      action,
-      entityType,
-      entityId || null,
-      summary,
-      before === undefined ? null : JSON.stringify(maskSensitive(before)),
-      after === undefined ? null : JSON.stringify(maskSensitive(after)),
-      requestContext?.ip || null,
-      requestContext?.userAgent || null,
-    ]
+    `SELECT a.*
+     FROM audit_logs a
+     ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+     ORDER BY a.created_at DESC
+     LIMIT $${values.length}`,
+    values
   );
-  return result.rows[0];
+  return result.rows.map(auditRowToDto);
 }
 
 export async function listChangeLogs({ limit = 100, organizationId } = {}) {
@@ -7021,10 +7951,10 @@ function shipmentScopeClause(values, { organizationId, ownerUserId } = {}, alias
   return "";
 }
 
-export async function getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId } = {}) {
+async function getShipmentCustomerAccessWithQueryable(queryable, shipmentId, { organizationId, ownerUserId } = {}) {
   const values = [shipmentId];
   const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "s");
-  const result = await pool.query(
+  const result = await queryable.query(
     `SELECT
        s.id,
        s.shipment_code,
@@ -7066,16 +7996,51 @@ export async function getShipmentCustomerAccess(shipmentId, { organizationId, ow
   };
 }
 
-export async function generateShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId, rotate = true } = {}) {
-  const before = await getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId });
-  if (!before) return null;
+export async function getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId } = {}) {
+  return getShipmentCustomerAccessWithQueryable(pool, shipmentId, { organizationId, ownerUserId });
+}
 
-  if (!rotate && before.token) {
-    const values = [shipmentId];
+export async function generateShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId, rotate = true, audit } = {}) {
+  return withTransaction(pool, async (client) => {
+    const before = await getShipmentCustomerAccessWithQueryable(client, shipmentId, { organizationId, ownerUserId });
+    if (!before) return null;
+
+    if (!rotate && before.token) {
+      const values = [shipmentId];
+      const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "");
+      const result = await client.query(
+        `UPDATE shipments
+         SET customer_access_enabled = TRUE,
+             updated_at = NOW()
+         WHERE id = $1
+           ${scopeFilter}
+         RETURNING id`,
+        values
+      );
+      if (!result.rowCount) return null;
+      const after = await getShipmentCustomerAccessWithQueryable(client, shipmentId, { organizationId, ownerUserId });
+      if (audit) {
+        await auditLog({
+          ...audit,
+          organizationId: audit.organizationId ?? organizationId ?? null,
+          before,
+          after,
+          queryable: client,
+          required: true,
+        });
+      }
+      return { token: before.token, before, after };
+    }
+
+    const token = createCustomerAccessToken();
+    const tokenHash = hashCustomerAccessToken(token);
+    const values = [shipmentId, token, tokenHash];
     const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "");
-    const result = await pool.query(
+    const result = await client.query(
       `UPDATE shipments
-       SET customer_access_enabled = TRUE,
+       SET customer_access_token = $2,
+           customer_access_token_hash = $3,
+           customer_access_enabled = TRUE,
            updated_at = NOW()
        WHERE id = $1
          ${scopeFilter}
@@ -7083,56 +8048,53 @@ export async function generateShipmentCustomerAccess(shipmentId, { organizationI
       values
     );
     if (!result.rowCount) return null;
-    return {
-      token: before.token,
-      before,
-      after: await getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId }),
-    };
-  }
 
-  const token = createCustomerAccessToken();
-  const tokenHash = hashCustomerAccessToken(token);
-  const values = [shipmentId, token, tokenHash];
-  const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "");
-  const result = await pool.query(
-    `UPDATE shipments
-     SET customer_access_token = $2,
-         customer_access_token_hash = $3,
-         customer_access_enabled = TRUE,
-         updated_at = NOW()
-     WHERE id = $1
-       ${scopeFilter}
-     RETURNING id`,
-    values
-  );
-  if (!result.rowCount) return null;
-
-  return {
-    token,
-    before,
-    after: await getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId }),
-  };
+    const after = await getShipmentCustomerAccessWithQueryable(client, shipmentId, { organizationId, ownerUserId });
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? organizationId ?? null,
+        before,
+        after,
+        queryable: client,
+        required: true,
+      });
+    }
+    return { token, before, after };
+  });
 }
 
-export async function disableShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId } = {}) {
-  const before = await getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId });
-  if (!before) return null;
+export async function disableShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId, audit } = {}) {
+  return withTransaction(pool, async (client) => {
+    const before = await getShipmentCustomerAccessWithQueryable(client, shipmentId, { organizationId, ownerUserId });
+    if (!before) return null;
 
-  const values = [shipmentId];
-  const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "");
-  await pool.query(
-    `UPDATE shipments
-     SET customer_access_enabled = FALSE,
-         updated_at = NOW()
-     WHERE id = $1
-       ${scopeFilter}`,
-    values
-  );
+    const values = [shipmentId];
+    const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "");
+    const result = await client.query(
+      `UPDATE shipments
+       SET customer_access_enabled = FALSE,
+           updated_at = NOW()
+       WHERE id = $1
+         ${scopeFilter}
+       RETURNING id`,
+      values
+    );
+    if (!result.rowCount) return null;
 
-  return {
-    before,
-    after: await getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId }),
-  };
+    const after = await getShipmentCustomerAccessWithQueryable(client, shipmentId, { organizationId, ownerUserId });
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? organizationId ?? null,
+        before,
+        after,
+        queryable: client,
+        required: true,
+      });
+    }
+    return { before, after };
+  });
 }
 
 async function queueCustomerShipmentUpdateSms(queryable, shipmentId, event, { organizationId } = {}) {
@@ -7222,21 +8184,25 @@ export async function getPublicTrackingByToken(token) {
   return getPublicTrackingByTokenFromRepository(pool, token);
 }
 
+export async function getPublicTrackingTokenAuditState(token) {
+  return getPublicTrackingTokenAuditStateFromRepository(pool, token);
+}
+
 export async function searchPublicTracking({ shipmentCode, verification }) {
   return searchPublicTrackingFromRepository(pool, { shipmentCode, verification });
 }
 
-export async function getPublicDocument(documentId) {
-  return getPublicDocumentFromRepository(pool, documentId);
+export async function getPublicDocument(documentId, access = {}) {
+  return getPublicDocumentFromRepository(pool, documentId, access);
 }
 
 export async function getPublicDocumentByTrackingToken(token, documentId) {
   return getPublicDocumentByTrackingTokenFromRepository(pool, token, documentId);
 }
 
-export async function updateDocumentVisibility(documentId, visibility, { organizationId } = {}) {
+export async function updateDocumentVisibility(documentId, visibility, { organizationId, audit } = {}) {
   const safeVisibility = visibility === "customer_visible" ? "customer_visible" : "internal";
-  return updateDocumentMetadata(documentId, { visibility: safeVisibility }, { organizationId });
+  return updateDocumentMetadata(documentId, { visibility: safeVisibility }, { organizationId, audit });
 }
 
 function maskSensitive(value) {

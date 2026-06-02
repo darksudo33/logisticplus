@@ -1,9 +1,8 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useMockStore } from "../store/useMockStore";
 import { Progress } from "@/components/ui/progress";
 import { Search, Ship, Filter, Plus, Eye, MoreHorizontal, Calendar, MapPin, Truck, Check, ListChecks, CheckCircle2, Clock, MoreVertical, Edit, ArrowUpDown, ArrowUp, ArrowDown, Activity, Archive, Trash2, Trash, UserPlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -38,7 +37,10 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { ShipmentStatus } from "../types";
+import { Customer, ShipmentStep, ShipmentStatus, Task } from "../types";
+import { apiGet } from "@/src/lib/api";
+import { useApiResource } from "@/src/lib/resourceState";
+import { shipmentApi } from "@/src/lib/shipmentApi";
 
 const StatusBadge = ({ status }: { status: string }) => {
   const styles: Record<string, string> = {
@@ -66,15 +68,13 @@ const StatusBadge = ({ status }: { status: string }) => {
 
 export default function Shipments() {
   const navigate = useNavigate();
-  const shipments = useMockStore(state => state.shipments);
-  const shipmentSteps = useMockStore(state => state.shipmentSteps);
-  const addShipment = useMockStore(state => state.addShipment);
-  const updateShipmentStatus = useMockStore(state => state.updateShipmentStatus);
-  const softDelete = useMockStore(state => state.softDelete);
-  const archiveShipment = useMockStore(state => state.archiveShipment);
-  const customers = useMockStore(state => state.customers);
-  const tasks = useMockStore(state => state.tasks);
-  const updateTaskStatus = useMockStore(state => state.updateTaskStatus);
+  const shipmentsResource = useApiResource(React.useCallback(() => shipmentApi.list(), []), []);
+  const customersResource = useApiResource(React.useCallback(() => apiGet<Customer[]>("/api/customers"), []), []);
+  const tasksResource = useApiResource(React.useCallback(() => apiGet<Task[]>("/api/tasks"), []), []);
+  const shipments = shipmentsResource.data;
+  const customers = customersResource.data;
+  const tasks = tasksResource.data;
+  const [shipmentSteps, setShipmentSteps] = useState<ShipmentStep[]>([]);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
@@ -94,15 +94,41 @@ export default function Shipments() {
     estimatedDelivery: "",
   });
 
-  const handleAddShipment = () => {
+  useEffect(() => {
+    let isMounted = true;
+    if (!shipments.length) {
+      setShipmentSteps([]);
+      return;
+    }
+
+    Promise.all(
+      shipments.map((shipment) =>
+        apiGet<ShipmentStep[]>(`/api/shipments/${encodeURIComponent(shipment.id)}/steps`).catch(() => [])
+      )
+    ).then((stepGroups) => {
+      if (isMounted) setShipmentSteps(stepGroups.flat());
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [shipments]);
+
+  const handleAddShipment = async () => {
     const customer = customers.find(c => c.id === newShipment.customerId);
-    addShipment({
+    try {
+      await shipmentApi.create({
       ...newShipment,
       customerName: customer?.name || "مشتری متفرقه",
       status: "PENDING",
-      createdAt: new Date().toLocaleDateString("fa-IR"),
       freeTimeDays: 7
     });
+      await shipmentsResource.refresh();
+      toast.success("محموله ثبت شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ثبت محموله ناموفق بود.");
+      return;
+    }
     setIsAddDialogOpen(false);
     setNewShipment({
       trackingNumber: "",
@@ -113,6 +139,26 @@ export default function Shipments() {
       destination: "",
       estimatedDelivery: "",
     });
+  };
+
+  const handleArchiveShipment = async (id: string) => {
+    try {
+      await shipmentApi.archive(id);
+      await shipmentsResource.refresh();
+      toast.success("محموله به بایگانی منتقل شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "بایگانی محموله ناموفق بود.");
+    }
+  };
+
+  const handleShipmentStatus = async (id: string, status: ShipmentStatus) => {
+    try {
+      await shipmentApi.updateOperationalFields(id, { status });
+      await shipmentsResource.refresh();
+      toast.success("وضعیت محموله بروزرسانی شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "بروزرسانی وضعیت ناموفق بود.");
+    }
   };
 
   const processedShipments = React.useMemo(() => {
@@ -270,7 +316,7 @@ export default function Shipments() {
               </div>
             </div>
             <DialogFooter>
-              <Button onClick={handleAddShipment} className="w-full bg-primary text-primary-foreground font-bold h-10">
+              <Button onClick={() => void handleAddShipment()} className="w-full bg-primary text-primary-foreground font-bold h-10">
                 ایجاد محموله
               </Button>
             </DialogFooter>
@@ -391,7 +437,7 @@ export default function Shipments() {
                           {(shipment.status === "DELIVERED" || shipment.status === "CLOSED") && (
                             <DropdownMenuItem 
                               className="text-xs cursor-pointer hover:bg-amber-500/10 text-amber-500 font-bold flex items-center gap-2 rounded-lg"
-                              onClick={() => { archiveShipment(shipment.id); toast.success("محموله به بایگانی منتقل شد."); }}
+                              onClick={() => void handleArchiveShipment(shipment.id)}
                             >
                               <Archive className="w-3.5 h-3.5" />
                               بایگانی محموله
@@ -416,7 +462,7 @@ export default function Shipments() {
                            <DropdownMenuItem 
                              key={status.value} 
                              className="text-xs cursor-pointer hover:bg-muted flex justify-between items-center rounded-lg"
-                             onClick={() => updateShipmentStatus(shipment.id, status.value as ShipmentStatus)}
+                             onClick={() => void handleShipmentStatus(shipment.id, status.value as ShipmentStatus)}
                            >
                              <span className="font-medium">{status.label}</span>
                              {shipment.status === status.value && <Check className="w-3 h-3 text-primary" />}
@@ -576,7 +622,7 @@ export default function Shipments() {
                                  {(shipment.status === "DELIVERED" || shipment.status === "CLOSED") && (
                                    <DropdownMenuItem 
                                      className="text-xs cursor-pointer hover:bg-amber-500/10 text-amber-500 font-bold flex items-center gap-2 rounded-lg"
-                                     onClick={() => { archiveShipment(shipment.id); toast.success("محموله به بایگانی منتقل شد."); }}
+                                     onClick={() => void handleArchiveShipment(shipment.id)}
                                    >
                                      <Archive className="w-3.5 h-3.5" />
                                      بایگانی محموله
@@ -608,7 +654,7 @@ export default function Shipments() {
                                    <DropdownMenuItem 
                                      key={status.value} 
                                      className="text-xs cursor-pointer hover:bg-muted flex justify-between items-center rounded-lg"
-                                     onClick={() => updateShipmentStatus(shipment.id, status.value as ShipmentStatus)}
+                                     onClick={() => void handleShipmentStatus(shipment.id, status.value as ShipmentStatus)}
                                    >
                                      <span className="font-medium">{status.label}</span>
                                      {shipment.status === status.value && <Check className="w-3 h-3 text-primary" />}
@@ -644,7 +690,7 @@ export default function Shipments() {
         onClose={() => setIsDeleteDialogOpen(false)}
         onConfirm={() => {
           if (shipmentToDelete) {
-            softDelete(shipmentToDelete, "SHIPMENT");
+            void handleArchiveShipment(shipmentToDelete);
             toast.message("محموله به سطل زباله منتقل شد", {
               description: "می‌توانید تا ۷ روز آینده آن را از بخش بایگانی بازیابی کنید.",
               icon: <Trash className="w-4 h-4 text-red-500" />

@@ -64,3 +64,47 @@ export function findClientTenantIdentifiers(req) {
   }
   return [...new Set(found)].sort();
 }
+
+function valuesForClientTenantIdentifier(value) {
+  if (Array.isArray(value)) return value.flatMap(valuesForClientTenantIdentifier);
+  if (value === undefined || value === null) return [];
+  return [String(value).trim()].filter(Boolean);
+}
+
+export function findConflictingClientTenantIdentifiers(req, tenantContext) {
+  const trustedOrganizationId = String(tenantContext?.organizationId || "").trim();
+  if (!trustedOrganizationId) return [];
+
+  const conflicts = [];
+  for (const source of [req?.body, req?.query, req?.params]) {
+    if (!source || typeof source !== "object") continue;
+    for (const key of Object.keys(source)) {
+      if (!CLIENT_TENANT_KEYS.has(key)) continue;
+      const values = valuesForClientTenantIdentifier(source[key]);
+      if (values.some((value) => value !== trustedOrganizationId)) conflicts.push(key);
+    }
+  }
+  return [...new Set(conflicts)].sort();
+}
+
+export function requireNoClientTenantScopeConflict(req, res, { createApiError, tenantContext } = {}) {
+  const conflicts = findConflictingClientTenantIdentifiers(req, tenantContext);
+  if (!conflicts.length) return true;
+
+  if (createApiError && res) {
+    createApiError(
+      res,
+      403,
+      "TENANT_SCOPE_CONFLICT",
+      "Client-supplied tenant scope does not match the authenticated organization.",
+      conflicts[0]
+    );
+    return false;
+  }
+
+  const error = new Error("Client-supplied tenant scope does not match the authenticated organization.");
+  error.code = "TENANT_SCOPE_CONFLICT";
+  error.statusCode = 403;
+  error.fields = conflicts;
+  throw error;
+}

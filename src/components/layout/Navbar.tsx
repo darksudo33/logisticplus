@@ -42,6 +42,10 @@ const sidebarItems = [
   { icon: MessageSquare, label: "چت", path: "/chat" },
 ];
 
+function hasPermission(user: any, permission: string) {
+  return Array.isArray(user?.permissions) && user.permissions.includes(permission);
+}
+
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
@@ -50,7 +54,7 @@ export function Sidebar() {
   const setCurrentUser = useMockStore(state => state.setCurrentUser);
 
   const menuItems = sidebarItems.filter(item => {
-    if ((item as any).platformOnly && currentUser?.email?.toLowerCase() !== "darksudo22@gmail.com") return false;
+    if ((item as any).platformOnly && !hasPermission(currentUser, "platform.admin")) return false;
     if ((item as any).ceoOnly && currentUser?.role !== "CEO") return false;
     return true;
   });
@@ -182,7 +186,7 @@ export function TopBar() {
   };
 
   const menuItems = sidebarItems.filter(item => {
-    if ((item as any).platformOnly && currentUser?.email?.toLowerCase() !== "darksudo22@gmail.com") return false;
+    if ((item as any).platformOnly && !hasPermission(currentUser, "platform.admin")) return false;
     if ((item as any).ceoOnly && currentUser?.role !== "CEO") return false;
     return true;
   });

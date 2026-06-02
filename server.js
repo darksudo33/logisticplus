@@ -30,6 +30,7 @@ import {
   createDocumentRecord,
   createChequeRecord,
   createComplianceMeetingRecord,
+  createShipmentRecord,
   createAppErrorLog,
   createQuotationRecord,
   createShipmentTaskRecord,
@@ -50,8 +51,10 @@ import {
   getPublicDocument,
   getPublicDocumentByTrackingToken,
   getPublicTrackingByToken,
+  getPublicTrackingTokenAuditState,
   getRecordsForUser,
   getSessionByToken,
+  getSessionAuditStateByToken,
   getShipmentCustomerAccess,
   getShipmentRecord,
   getTaskRecord,
@@ -68,6 +71,7 @@ import {
   getOrganizationSubscription,
   getQuotationRecord,
   getUserById,
+  getShipmentOperationalRecord,
   getUserByEmail,
   getUserByPhone,
   getUserPermissions,
@@ -76,6 +80,7 @@ import {
   listOrganizations,
   listAppUsers,
   listArchiveRecords,
+  listAuditLogs,
   listChangeLogs,
   listChatMessages,
   listChatThreadMemberIds,
@@ -116,7 +121,9 @@ import {
   removeChatThreadMember,
   requirePermission,
   renewOrganizationSubscription,
+  grantUserPermission,
   restoreEntityRecord,
+  revokeUserPermission,
   normalizeOperationalSearchQuery,
   searchOperationalRecords,
   searchPublicTracking,
@@ -133,6 +140,7 @@ import {
   updateCustomerRecord,
   updateMeetingRequiredDocument,
   updateQuotationRecord,
+  updateShipmentOperationalFields,
   updateShipmentPublicStatus,
   updateShipmentStepRecord,
   updateSmsTemplate,
@@ -161,6 +169,8 @@ import {
   documentParamsSchema,
   documentVisibilitySchema,
   organizationMembersQuerySchema,
+  shipmentCreateBodySchema,
+  shipmentOperationalFieldsBodySchema,
   shipmentParamsSchema,
   shipmentProgressBlockerBodySchema,
   shipmentProgressCurrentBodySchema,
@@ -183,7 +193,12 @@ import { registerShipmentProgressRoutes } from "./src/server/routes/shipment-pro
 import { registerUserRoutes } from "./src/server/routes/user-routes.js";
 import { startShipmentWorkflow as startShipmentWorkflowRecord } from "./src/server/repositories/shipment-progress.js";
 import { parseRequestValue } from "./src/server/validation.js";
-import { attachTenantContext, findClientTenantIdentifiers, requireTenantContext } from "./src/server/tenant-context.js";
+import {
+  attachTenantContext,
+  findClientTenantIdentifiers,
+  requireNoClientTenantScopeConflict,
+  requireTenantContext,
+} from "./src/server/tenant-context.js";
 import {
   clearRateLimit,
   consumeRateLimit,
@@ -202,6 +217,7 @@ const PHONE_LOGIN_REQUEST_IP_LIMIT = { limit: 10, windowMs: 60 * 60 * 1000 };
 const PHONE_LOGIN_VERIFY_LIMIT = { limit: 6, windowMs: 15 * 60 * 1000 };
 const DOCUMENT_DOWNLOAD_LIMIT = { limit: 60, windowMs: 10 * 60 * 1000 };
 const PUBLIC_DOCUMENT_DOWNLOAD_LIMIT = { limit: 30, windowMs: 10 * 60 * 1000 };
+const PUBLIC_TRACK_LOOKUP_LIMIT = { limit: 60, windowMs: 10 * 60 * 1000 };
 const PUBLIC_TRACK_SEARCH_LIMIT = { limit: 20, windowMs: 15 * 60 * 1000 };
 const ZARINPAL_MIN_AMOUNT_IRR = 10000;
 
@@ -234,33 +250,69 @@ function getSessionCookie(req) {
 }
 
 function setSessionCookie(res, token, expiresAt, { remember = false } = {}) {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  const expiry = remember ? `; Expires=${expiresAt.toUTCString()}` : "";
-  res.setHeader(
-    "Set-Cookie",
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/${expiry}${secure}`
-  );
+  const maxAgeSeconds = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
+  const parts = [
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    "Path=/",
+    `Max-Age=${maxAgeSeconds}`,
+  ];
+  if (remember) parts.push(`Expires=${expiresAt.toUTCString()}`);
+  if (process.env.NODE_ENV === "production") parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
 }
 
 function clearSessionCookie(res) {
-  res.setHeader(
-    "Set-Cookie",
-    `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`
-  );
+  const parts = [
+    `${SESSION_COOKIE}=`,
+    "HttpOnly",
+    "SameSite=Lax",
+    "Path=/",
+    "Max-Age=0",
+    "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+  ];
+  if (process.env.NODE_ENV === "production") parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
 }
 
 function requestContext(req) {
   return {
     ip: req.ip || req.socket?.remoteAddress,
     userAgent: req.headers["user-agent"],
+    requestId: req.headers["x-request-id"] || null,
   };
+}
+
+function auditIdentifierHash(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  return crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 24);
+}
+
+function phoneSuffix(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits ? digits.slice(-4) : "";
 }
 
 function wantsRemember(body = {}) {
   return body.remember === true || body.remember === "true";
 }
 
-function loginBlockForUser(user) {
+function hasPlatformAdminPermission(permissions = []) {
+  return permissions.includes("platform.admin");
+}
+
+async function isPlatformAdminUser(user) {
+  if (!user?.id) return false;
+  const permissions = user.permissions || await getUserPermissions(user.id);
+  user.permissions = permissions;
+  return hasPlatformAdminPermission(permissions);
+}
+
+async function loginBlockForUser(user) {
+  const isPlatformAdmin = await isPlatformAdminUser(user);
+
   if (user.status && user.status !== "active") {
     return {
       status: 403,
@@ -278,7 +330,7 @@ function loginBlockForUser(user) {
   }
 
   if (
-    String(user.email || "").toLowerCase() !== "darksudo22@gmail.com" &&
+    !isPlatformAdmin &&
     ["expired", "suspended", "cancelled", "rejected"].includes(user.subscription_status || "")
   ) {
     return {
@@ -322,13 +374,25 @@ function sendLoginBlock(res, block) {
   });
 }
 
-async function createAuthenticatedSessionResponse(req, res, user) {
+async function createAuthenticatedSessionResponse(req, res, user, { method = "password", auditMetadata = {} } = {}) {
   const remember = wantsRemember(req.body || {});
   const { password_hash, ...safeUser } = user;
+  const permissions = user.permissions || await getUserPermissions(user.id);
   const session = await createSession(user.id, { remember });
   setSessionCookie(res, session.token, session.expiresAt, { remember });
   const records = await getRecordsForUser(user.id);
-  res.json({ user: safeUser, records });
+  await auditLog({
+    actorUserId: user.id,
+    organizationId: user.organization_id || user.organizationId || null,
+    action: "auth.login_success",
+    entityType: "SESSION",
+    entityId: session.id,
+    summary: "User login succeeded.",
+    after: { remember, expiresAt: session.expiresAt, method },
+    metadata: { method, ...auditMetadata },
+    requestContext: requestContext(req),
+  });
+  res.json({ user: { ...safeUser, permissions }, records });
 }
 
 function normalizeContactRequestBody(body = {}) {
@@ -409,6 +473,54 @@ async function validateDocumentAssociations({ shipmentId, customerId, organizati
   }
 }
 
+const documentStorageResponseKeys = new Set([
+  "storage_key",
+  "storage_provider",
+  "object_key",
+  "storage_bucket",
+  "storage_region",
+  "local_path",
+  "checksum",
+  "checksum_sha256",
+  "size_bytes",
+  "content_type",
+  "storage_migrated_at",
+  "storage_verified_at",
+  "storage_migration_status",
+  "storage_migration_error",
+]);
+
+function sanitizeDocumentForApi(document) {
+  if (!document || typeof document !== "object" || Array.isArray(document)) return document;
+  const sanitized = {};
+  for (const [key, value] of Object.entries(document)) {
+    if (documentStorageResponseKeys.has(key)) continue;
+    sanitized[key] = value;
+  }
+  if (Array.isArray(document.versions)) {
+    sanitized.versions = document.versions.map(sanitizeDocumentForApi);
+  }
+  return sanitized;
+}
+
+function sanitizeDocumentEntityResponse(entityType, data) {
+  return entityType === "document" ? sanitizeDocumentForApi(data) : data;
+}
+
+function documentStorageAuditMetadata(persisted) {
+  return {
+    storageMode: persisted?.objectWrite?.attempted ? "object-capable" : "local",
+    migrationStatus: persisted?.storageMigrationStatus || "local",
+    objectWrite: {
+      attempted: Boolean(persisted?.objectWrite?.attempted),
+      verified: Boolean(persisted?.objectWrite?.verified),
+      failed: Boolean(persisted?.objectWrite?.failed),
+      required: Boolean(persisted?.objectWrite?.required),
+      provider: persisted?.objectWrite?.provider || null,
+    },
+  };
+}
+
 async function requestZarinpalPayment(req, payment) {
   const amount = normalizeZarinpalAmount(payment.amount_irr);
   const callbackUrl = `${appBaseUrl(req)}/api/billing/zarinpal/callback`;
@@ -474,8 +586,27 @@ async function getAuthenticatedSession(req) {
 }
 
 async function requireAuthenticatedUser(req, res) {
-  const session = await getAuthenticatedSession(req);
+  const sessionToken = getSessionCookie(req);
+  const session = await getSessionByToken(sessionToken);
   if (!session?.user) {
+    if (sessionToken) {
+      const sessionState = await getSessionAuditStateByToken(sessionToken).catch(() => null);
+      await auditLog({
+        actorUserId: sessionState?.userId || null,
+        organizationId: sessionState?.organizationId || null,
+        actorType: sessionState?.userId ? "user" : "public",
+        action: "auth.session_restore_rejected",
+        entityType: "SESSION",
+        entityId: sessionState?.sessionId || null,
+        summary: "Session restore was rejected.",
+        metadata: {
+          reason: sessionState?.reason || "unknown_session",
+          matched: Boolean(sessionState?.matched),
+          apiEndpoint: `${req.method} ${req.path}`,
+        },
+        requestContext: requestContext(req),
+      });
+    }
     createApiError(res, 401, "UNAUTHENTICATED", "Authentication is required.");
     return null;
   }
@@ -487,15 +618,15 @@ async function requireAuthenticatedUser(req, res) {
     createApiError(res, 403, "ORGANIZATION_INACTIVE", "Organization is not active yet.");
     return null;
   }
+  const permissions = await getUserPermissions(session.user.id);
+  session.user.permissions = permissions;
   if (
-    String(session.user.email || "").toLowerCase() !== "darksudo22@gmail.com" &&
+    !hasPlatformAdminPermission(permissions) &&
     ["expired", "suspended", "cancelled", "rejected"].includes(session.user.subscriptionStatus || "")
   ) {
     createApiError(res, 403, "SUBSCRIPTION_INACTIVE", "Subscription is not active.");
     return null;
   }
-  const permissions = await getUserPermissions(session.user.id);
-  session.user.permissions = permissions;
   const tenantContext = attachTenantContext(req, session.user, { permissions });
   if ((session.user.organizationId || session.user.organization_id) && !tenantContext) {
     createApiError(res, 403, "ORGANIZATION_MEMBERSHIP_REQUIRED", "Active organization membership is required.");
@@ -513,19 +644,52 @@ async function userHasPermission(user, permissionKey) {
 }
 
 function requireRequestTenant(req, res, operation) {
-  return requireTenantContext(req, res, { createApiError, operation });
+  const tenantContext = requireTenantContext(req, res, { createApiError, operation });
+  if (!tenantContext) return null;
+  if (!requireNoClientTenantScopeConflict(req, res, { createApiError, tenantContext })) return null;
+  return tenantContext;
+}
+
+async function requireAuthenticatedTenantUser(req, res, operation) {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return null;
+  const tenantContext = requireRequestTenant(req, res, operation);
+  if (!tenantContext) return null;
+  return { user, tenantContext, organizationId: tenantContext.organizationId };
 }
 
 async function requirePlatformAdmin(req, res) {
   const user = await requireAuthenticatedUser(req, res);
   if (!user) return null;
   try {
-    await requirePermission(user, "platform.admin");
+    await assertPlatformPermission(user);
     return user;
   } catch (error) {
+    await auditLog({
+      actorUserId: user.id,
+      organizationId: user.organizationId || user.organization_id || null,
+      action: "platform_admin.access_denied",
+      entityType: "PLATFORM_ADMIN",
+      entityId: user.id,
+      summary: "Platform admin access was denied.",
+      metadata: { apiEndpoint: `${req.method} ${req.path}` },
+      requestContext: requestContext(req),
+    });
     createApiError(res, 403, "FORBIDDEN", "Platform owner access is required.");
     return null;
   }
+}
+
+async function assertPlatformPermission(user, permissionKey = "platform.admin") {
+  const permissions = user.permissions || await getUserPermissions(user.id);
+  user.permissions = permissions;
+  if (!permissions.includes(permissionKey)) {
+    const error = new Error(`Missing permission: ${permissionKey}`);
+    error.statusCode = 403;
+    error.code = "FORBIDDEN";
+    throw error;
+  }
+  return user;
 }
 
 async function requireCompanyCeo(req, res) {
@@ -832,7 +996,17 @@ async function startServer() {
         ...PASSWORD_LOGIN_IP_LIMIT,
         message: loginLimitMessage,
       });
-      if (!ipAllowed) return;
+      if (!ipAllowed) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.login_rate_limited",
+          entityType: "AUTH",
+          summary: "Login was rate-limited by IP.",
+          metadata: { reason: "ip_limit", identifierHash: auditIdentifierHash(loginEmailKey) },
+          requestContext: requestContext(req),
+        });
+        return;
+      }
 
       const accountAllowed = await consumeRateLimit(req, res, "login-account", {
         ...PASSWORD_LOGIN_LIMIT,
@@ -840,30 +1014,80 @@ async function startServer() {
         message: loginLimitMessage,
         field: "email",
       });
-      if (!accountAllowed) return;
+      if (!accountAllowed) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.login_rate_limited",
+          entityType: "AUTH",
+          summary: "Login was rate-limited by account.",
+          metadata: { reason: "account_limit", identifierHash: auditIdentifierHash(loginEmailKey) },
+          requestContext: requestContext(req),
+        });
+        return;
+      }
 
       if (!email || !password) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.login_failed",
+          entityType: "AUTH",
+          summary: "Login failed validation.",
+          metadata: { reason: "missing_credentials", identifierHash: auditIdentifierHash(loginEmailKey) },
+          requestContext: requestContext(req),
+        });
         return createApiError(res, 400, "VALIDATION_ERROR", "Email and password are required.");
       }
 
       const user = await getUserByEmail(email);
       if (!user) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.login_failed",
+          entityType: "AUTH",
+          summary: "Login failed with invalid credentials.",
+          metadata: { reason: "unknown_user", identifierHash: auditIdentifierHash(loginEmailKey) },
+          requestContext: requestContext(req),
+        });
         return createApiError(res, 401, "INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
-      const loginBlock = loginBlockForUser(user);
+      const loginBlock = await loginBlockForUser(user);
       if (loginBlock) {
+        await auditLog({
+          actorUserId: user.id,
+          organizationId: user.organization_id || user.organizationId || null,
+          action: "auth.login_failed",
+          entityType: "AUTH",
+          entityId: user.id,
+          summary: "Login was blocked by account or subscription state.",
+          metadata: { reason: loginBlock.code },
+          requestContext: requestContext(req),
+        });
         return sendLoginBlock(res, loginBlock);
       }
 
+      // TODO(phase-3): add Argon2id verification/rehash while preserving bcrypt login compatibility.
       const passwordMatches = await bcrypt.compare(password, user.password_hash);
       if (!passwordMatches) {
+        await auditLog({
+          actorUserId: user.id,
+          organizationId: user.organization_id || user.organizationId || null,
+          action: "auth.login_failed",
+          entityType: "AUTH",
+          entityId: user.id,
+          summary: "Login failed with invalid credentials.",
+          metadata: { reason: "bad_password", identifierHash: auditIdentifierHash(loginEmailKey) },
+          requestContext: requestContext(req),
+        });
         return createApiError(res, 401, "INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
       await clearRateLimit(rateLimitKey(req, "login-ip"));
       await clearRateLimit(rateLimitKey(req, "login-account", loginEmailKey));
-      await createAuthenticatedSessionResponse(req, res, user);
+      await createAuthenticatedSessionResponse(req, res, user, {
+        method: "password",
+        auditMetadata: { identifierHash: auditIdentifierHash(loginEmailKey) },
+      });
     } catch (error) {
       console.error("Login failed:", error);
       createApiError(res, 500, "LOGIN_FAILED", "Login failed.");
@@ -881,7 +1105,17 @@ async function startServer() {
         message: "Too many SMS login code requests. Please try again later.",
         field: "phone",
       });
-      if (!ipAllowed) return;
+      if (!ipAllowed) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.sms_code_request_rate_limited",
+          entityType: "AUTH",
+          summary: "SMS login code request was rate-limited by IP.",
+          metadata: { reason: "ip_limit", phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
+        return;
+      }
 
       const cooldownAllowed = await consumeRateLimit(req, res, "phone-login-request-cooldown", {
         ...PHONE_LOGIN_REQUEST_COOLDOWN,
@@ -889,7 +1123,17 @@ async function startServer() {
         message: "Please wait before requesting another SMS login code.",
         field: "phone",
       });
-      if (!cooldownAllowed) return;
+      if (!cooldownAllowed) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.sms_code_request_rate_limited",
+          entityType: "AUTH",
+          summary: "SMS login code request was rate-limited by cooldown.",
+          metadata: { reason: "cooldown", phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
+        return;
+      }
 
       const allowed = await consumeRateLimit(req, res, "phone-login-request", {
         ...PHONE_LOGIN_REQUEST_LIMIT,
@@ -897,21 +1141,51 @@ async function startServer() {
         message: "Too many SMS login code requests for this phone number. Please try again later.",
         field: "phone",
       });
-      if (!allowed) return;
+      if (!allowed) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.sms_code_request_rate_limited",
+          entityType: "AUTH",
+          summary: "SMS login code request was rate-limited by phone.",
+          metadata: { reason: "phone_limit", phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
+        return;
+      }
 
       const user = await getUserByPhone(rawPhone);
       if (!user) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.sms_code_requested",
+          entityType: "AUTH",
+          summary: "SMS login code was requested for an unknown phone.",
+          metadata: { knownUser: false, phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
         return res.json({
           ok: true,
           data: {
-            codeSent: false,
+            codeSent: true,
             message: "If this phone belongs to an active user, a login code will be sent.",
           },
         });
       }
 
-      const loginBlock = loginBlockForUser(user);
-      if (loginBlock) return sendLoginBlock(res, loginBlock);
+      const loginBlock = await loginBlockForUser(user);
+      if (loginBlock) {
+        await auditLog({
+          actorUserId: user.id,
+          organizationId: user.organization_id || user.organizationId || null,
+          action: "auth.sms_code_request_blocked",
+          entityType: "AUTH",
+          entityId: user.id,
+          summary: "SMS login code request was blocked by account or subscription state.",
+          metadata: { reason: loginBlock.code, phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
+        return sendLoginBlock(res, loginBlock);
+      }
 
       const challenge = await createLoginSmsChallenge({
         userId: user.id,
@@ -944,6 +1218,21 @@ async function startServer() {
           },
           skipReason: providerResult.reason || "sms_provider_skipped",
         });
+        await auditLog({
+          actorUserId: user.id,
+          organizationId: user.organization_id || user.organizationId || null,
+          action: "auth.sms_code_requested",
+          entityType: "LOGIN_SMS_CHALLENGE",
+          entityId: challenge.id,
+          summary: "SMS login code was requested.",
+          metadata: {
+            phoneHash: auditIdentifierHash(rawPhone),
+            phoneLast4: phoneSuffix(rawPhone),
+            providerStatus: providerResult.skipped ? "skipped" : "sent",
+            skipReason: providerResult.reason || null,
+          },
+          requestContext: requestContext(req),
+        });
       } catch (sendError) {
         try {
           await recordImmediateSmsDelivery({
@@ -964,6 +1253,20 @@ async function startServer() {
           if (isMissingSmsSchemaError(logError)) throw logError;
           console.error("Phone login SMS failure log failed:", logError);
         }
+        await auditLog({
+          actorUserId: user.id,
+          organizationId: user.organization_id || user.organizationId || null,
+          action: "auth.sms_code_request_failed",
+          entityType: "LOGIN_SMS_CHALLENGE",
+          entityId: challenge.id,
+          summary: "SMS login code request failed.",
+          metadata: {
+            phoneHash: auditIdentifierHash(rawPhone),
+            phoneLast4: phoneSuffix(rawPhone),
+            errorCode: sendError.code || null,
+          },
+          requestContext: requestContext(req),
+        });
         throw sendError;
       }
 
@@ -1001,13 +1304,31 @@ async function startServer() {
         message: "Too many SMS code attempts. Please wait before trying again.",
         field: "code",
       });
-      if (!allowed) return;
+      if (!allowed) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.sms_verify_rate_limited",
+          entityType: "AUTH",
+          summary: "SMS login verification was rate-limited.",
+          metadata: { reason: "verify_limit", phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
+        return;
+      }
 
       const result = await verifyLoginSmsChallenge({ phone: rawPhone, code });
       if (!result.ok || !result.user) {
         if (result.reason === "too_many_attempts") {
           res.setHeader("Retry-After", "300");
         }
+        await auditLog({
+          actorType: "public",
+          action: "auth.sms_verify_failed",
+          entityType: "AUTH",
+          summary: "SMS login verification failed.",
+          metadata: { reason: result.reason || "invalid_code", phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
         return createApiError(
           res,
           result.reason === "too_many_attempts" ? 429 : 401,
@@ -1016,11 +1337,36 @@ async function startServer() {
         );
       }
 
-      const loginBlock = loginBlockForUser(result.user);
-      if (loginBlock) return sendLoginBlock(res, loginBlock);
+      const loginBlock = await loginBlockForUser(result.user);
+      if (loginBlock) {
+        await auditLog({
+          actorUserId: result.user.id,
+          organizationId: result.user.organization_id || result.user.organizationId || null,
+          action: "auth.sms_verify_failed",
+          entityType: "LOGIN_SMS_CHALLENGE",
+          entityId: result.challengeId,
+          summary: "SMS login verification was blocked by account or subscription state.",
+          metadata: { reason: loginBlock.code, phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
+        return sendLoginBlock(res, loginBlock);
+      }
 
       await clearRateLimit(rateLimitKey(req, "phone-login-verify", rawPhone));
-      await createAuthenticatedSessionResponse(req, res, result.user);
+      await auditLog({
+        actorUserId: result.user.id,
+        organizationId: result.user.organization_id || result.user.organizationId || null,
+        action: "auth.sms_verify_success",
+        entityType: "LOGIN_SMS_CHALLENGE",
+        entityId: result.challengeId,
+        summary: "SMS login verification succeeded.",
+        metadata: { phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+        requestContext: requestContext(req),
+      });
+      await createAuthenticatedSessionResponse(req, res, result.user, {
+        method: "sms",
+        auditMetadata: { challengeId: result.challengeId, phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+      });
     } catch (error) {
       console.error("Phone login verify failed:", error);
       createApiError(res, 500, "PHONE_LOGIN_VERIFY_FAILED", "Could not verify SMS login code.");
@@ -1041,7 +1387,21 @@ async function startServer() {
 
   app.post("/api/auth/logout", async (req, res) => {
     try {
-      await deleteSessionByToken(getSessionCookie(req));
+      const sessionToken = getSessionCookie(req);
+      const session = await getSessionByToken(sessionToken).catch(() => null);
+      await deleteSessionByToken(sessionToken);
+      if (session?.user) {
+        await auditLog({
+          actorUserId: session.user.id,
+          organizationId: session.user.organizationId || session.user.organization_id || null,
+          action: "auth.logout",
+          entityType: "SESSION",
+          entityId: session.sessionId,
+          summary: "User session was revoked by logout.",
+          metadata: { reason: "logout" },
+          requestContext: requestContext(req),
+        });
+      }
       clearSessionCookie(res);
       res.json({ ok: true, data: { loggedOut: true } });
     } catch (error) {
@@ -1158,15 +1518,18 @@ async function startServer() {
 
   app.get("/api/users/:userId/bootstrap", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "compatibility bootstrap API");
+      if (!tenantRequest) return;
+      const { user, tenantContext, organizationId } = tenantRequest;
       const targetUser = req.params.userId === user.id ? user : await getUserById(req.params.userId);
-      const sameOrganization = targetUser?.organizationId === user.organizationId;
+      const targetOrganizationId = targetUser?.organizationId || targetUser?.organization_id;
+      const sameOrganization = targetOrganizationId === organizationId;
       const canManageUsers = await userHasPermission(user, "users.manage");
       if (req.params.userId !== user.id && (!sameOrganization || !canManageUsers)) {
         return createApiError(res, 403, "FORBIDDEN", "You cannot load records for this user.");
       }
-      const records = await getRecordsForUser(req.params.userId);
+      const records = await getRecordsForUser(req.params.userId, { tenantContext });
+      if (!records) return createApiError(res, 404, "NOT_FOUND", "User records were not found.");
       res.json({ records });
     } catch (error) {
       console.error("Bootstrap failed:", error);
@@ -1176,15 +1539,18 @@ async function startServer() {
 
   app.put("/api/users/:userId/records", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "compatibility records API");
+      if (!tenantRequest) return;
+      const { user, tenantContext, organizationId } = tenantRequest;
       const targetUser = req.params.userId === user.id ? user : await getUserById(req.params.userId);
-      const sameOrganization = targetUser?.organizationId === user.organizationId;
+      const targetOrganizationId = targetUser?.organizationId || targetUser?.organization_id;
+      const sameOrganization = targetOrganizationId === organizationId;
       const canManageUsers = await userHasPermission(user, "users.manage");
       if (req.params.userId !== user.id && (!sameOrganization || !canManageUsers)) {
         return createApiError(res, 403, "FORBIDDEN", "You cannot save records for this user.");
       }
-      const result = await replaceRecordsForUser(req.params.userId, req.body?.records);
+      const result = await replaceRecordsForUser(req.params.userId, req.body?.records, { tenantContext });
+      if (!result) return createApiError(res, 404, "NOT_FOUND", "User records were not found.");
       await auditLog({
         actorUserId: user.id,
         action: "records.replace",
@@ -1207,11 +1573,12 @@ async function startServer() {
   for (const feature of ["shipments"]) {
     app.get(`/api/${feature}`, async (req, res) => {
       try {
-        const user = await requireAuthenticatedUser(req, res);
-        if (!user) return;
+        const tenantRequest = await requireAuthenticatedTenantUser(req, res, `${feature} list API`);
+        if (!tenantRequest) return;
+        const { user, organizationId } = tenantRequest;
         const config = getFeatureConfig(feature);
         await requirePermission(user, config.permission);
-        const data = await listFeatureRecords(feature, { organizationId: user.organizationId });
+        const data = await listFeatureRecords(feature, { organizationId });
         res.json({ ok: true, data });
       } catch (error) {
         if (error.statusCode === 403) {
@@ -1223,6 +1590,95 @@ async function startServer() {
     });
   }
 
+  app.post("/api/shipments", async (req, res) => {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment create API");
+      if (!tenantRequest) return;
+      const { user, tenantContext } = tenantRequest;
+      await requirePermission(user, "shipments.create");
+      const body = parseRequestValue(res, shipmentCreateBodySchema, req.body || {});
+      if (!body) return;
+      const data = await createShipmentRecord({
+        ownerUserId: user.id,
+        actorUserId: user.id,
+        tenantContext,
+        shipment: body,
+      });
+      await auditLog({
+        actorUserId: user.id,
+        action: "shipment.create",
+        entityType: "SHIPMENT",
+        entityId: data.id,
+        summary: "Shipment was created.",
+        after: data,
+        requestContext: requestContext(req),
+      });
+      res.status(201).json({ ok: true, data });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      if (error.statusCode === 404) return createApiError(res, 404, error.code || "NOT_FOUND", error.message);
+      if (error.statusCode === 409) return createApiError(res, 409, error.code || "CONFLICT", error.message, "trackingNumber");
+      console.error("Create shipment failed:", error);
+      createApiError(res, 500, "CREATE_SHIPMENT_FAILED", "Could not create shipment.");
+    }
+  });
+
+  app.get("/api/shipments/:id", async (req, res) => {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment get API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "shipments.view_all");
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const data = await getShipmentOperationalRecord(params.id, { organizationId });
+      if (!data) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
+      res.json({ ok: true, data });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      console.error("Get shipment failed:", error);
+      createApiError(res, 500, "GET_SHIPMENT_FAILED", "Could not load shipment.");
+    }
+  });
+
+  async function updateShipmentOperationalEndpoint(req, res) {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment operational update API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "shipments.update");
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, shipmentOperationalFieldsBodySchema, req.body || {});
+      if (!body) return;
+      const result = await updateShipmentOperationalFields(params.id, body, {
+        organizationId,
+        actorUserId: user.id,
+      });
+      if (!result) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
+      await auditLog({
+        actorUserId: user.id,
+        action: body.status && body.status !== result.before?.status ? "shipment.status.update" : "shipment.update",
+        entityType: "SHIPMENT",
+        entityId: params.id,
+        summary: "Shipment operational fields were updated.",
+        before: result.before,
+        after: result.after,
+        requestContext: requestContext(req),
+      });
+      res.json({ ok: true, data: result.after });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      if (error.statusCode === 404) return createApiError(res, 404, error.code || "NOT_FOUND", error.message);
+      if (error.statusCode === 409) return createApiError(res, 409, error.code || "CONFLICT", error.message, "trackingNumber");
+      console.error("Update shipment failed:", error);
+      createApiError(res, 500, "UPDATE_SHIPMENT_FAILED", "Could not update shipment.");
+    }
+  }
+
+  app.patch("/api/shipments/:id/operational-fields", updateShipmentOperationalEndpoint);
+  app.patch("/api/shipments/:id", updateShipmentOperationalEndpoint);
+
   app.get("/api/search", async (req, res) => {
     const startedAt = Date.now();
     const type = String(req.query.type || "all");
@@ -1231,8 +1687,9 @@ async function startServer() {
     const normalizedQuery = normalizeOperationalSearchQuery(req.query.q || "");
 
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "search API");
+      if (!tenantRequest) return;
+      const { user, tenantContext } = tenantRequest;
 
       if (!normalizedQuery) {
         return createApiError(res, 400, "SEARCH_QUERY_REQUIRED", "Search query is required.", "q");
@@ -1243,6 +1700,7 @@ async function startServer() {
 
       const data = await searchOperationalRecords({
         user,
+        tenantContext,
         q: normalizedQuery,
         type,
         limit,
@@ -1317,6 +1775,7 @@ async function startServer() {
     createApiError,
     createAppUserRecord,
     deleteAppUserRecord,
+    grantUserPermission,
     listAppUsers,
     listRoles,
     previewAppUserDeletion,
@@ -1326,6 +1785,7 @@ async function startServer() {
     requirePermission,
     requirePlatformAdmin,
     requireTenantContext: requireRequestTenant,
+    revokeUserPermission,
     updateAppUserRecord,
     updateUserPassword,
   });
@@ -1572,9 +2032,20 @@ async function startServer() {
     try {
       const user = await requirePlatformAdmin(req, res);
       if (!user) return;
-      const data = await markBillingPaymentManually(req.params.id, { actorUserId: user.id, status: "paid", note: req.body?.note });
+      const data = await markBillingPaymentManually(req.params.id, {
+        actorUserId: user.id,
+        status: "paid",
+        note: req.body?.note,
+        audit: {
+          actorUserId: user.id,
+          action: "billing.payment_manual_paid",
+          entityType: "billing_payment",
+          entityId: req.params.id,
+          summary: "Payment was manually marked paid.",
+          requestContext: requestContext(req),
+        },
+      });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Payment was not found.");
-      await auditLog({ actorUserId: user.id, action: "billing.payment_manual_paid", entityType: "billing_payment", entityId: req.params.id, summary: "Payment was manually marked paid.", after: data, requestContext: requestContext(req) });
       res.json({ ok: true, data });
     } catch (error) {
       createApiError(res, 500, "PAYMENT_MARK_PAID_FAILED", "Could not mark payment paid.");
@@ -1585,9 +2056,20 @@ async function startServer() {
     try {
       const user = await requirePlatformAdmin(req, res);
       if (!user) return;
-      const data = await markBillingPaymentManually(req.params.id, { actorUserId: user.id, status: "failed", note: req.body?.note });
+      const data = await markBillingPaymentManually(req.params.id, {
+        actorUserId: user.id,
+        status: "failed",
+        note: req.body?.note,
+        audit: {
+          actorUserId: user.id,
+          action: "billing.payment_manual_failed",
+          entityType: "billing_payment",
+          entityId: req.params.id,
+          summary: "Payment was manually marked failed.",
+          requestContext: requestContext(req),
+        },
+      });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Payment was not found.");
-      await auditLog({ actorUserId: user.id, action: "billing.payment_manual_failed", entityType: "billing_payment", entityId: req.params.id, summary: "Payment was manually marked failed.", after: data, requestContext: requestContext(req) });
       res.json({ ok: true, data });
     } catch (error) {
       createApiError(res, 500, "PAYMENT_MARK_FAILED_FAILED", "Could not mark payment failed.");
@@ -1922,10 +2404,11 @@ async function startServer() {
 
   app.get("/api/quotations", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "quotations list API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "quotations.manage");
-      const data = await listQuotations({ organizationId: user.organizationId, includeArchived: req.query.includeArchived === "true" });
+      const data = await listQuotations({ organizationId, includeArchived: req.query.includeArchived === "true" });
       res.json({ ok: true, data });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -1936,11 +2419,12 @@ async function startServer() {
 
   app.post("/api/quotations", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "quotation create API");
+      if (!tenantRequest) return;
+      const { user, tenantContext } = tenantRequest;
       await requirePermission(user, "quotations.manage");
       if (!req.body?.customerName) return createApiError(res, 400, "VALIDATION_FAILED", "Customer name is required.", "customerName");
-      const created = await createQuotationRecord({ ownerUserId: user.id, actorUserId: user.id, quote: req.body });
+      const created = await createQuotationRecord({ ownerUserId: user.id, actorUserId: user.id, tenantContext, quote: req.body });
       await auditLog({ actorUserId: user.id, action: "quotation.create", entityType: "quotation", entityId: created.id, summary: "Quotation was created.", after: created, requestContext: requestContext(req) });
       res.status(201).json({ ok: true, data: created });
     } catch (error) {
@@ -1953,10 +2437,11 @@ async function startServer() {
 
   app.get("/api/quotations/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "quotation get API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "quotations.manage");
-      const data = await getQuotationRecord(req.params.id, { organizationId: user.organizationId });
+      const data = await getQuotationRecord(req.params.id, { organizationId });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Quotation was not found.");
       res.json({ ok: true, data });
     } catch (error) {
@@ -1967,10 +2452,11 @@ async function startServer() {
 
   app.patch("/api/quotations/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "quotation update API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "quotations.manage");
-      const result = await updateQuotationRecord(req.params.id, req.body || {}, { organizationId: user.organizationId });
+      const result = await updateQuotationRecord(req.params.id, req.body || {}, { organizationId });
       if (!result.after) return createApiError(res, 404, "NOT_FOUND", "Quotation was not found.");
       await auditLog({ actorUserId: user.id, action: "quotation.update", entityType: "quotation", entityId: req.params.id, summary: "Quotation was updated.", before: result.before, after: result.after, requestContext: requestContext(req) });
       res.json({ ok: true, data: result.after });
@@ -1983,10 +2469,11 @@ async function startServer() {
   for (const [pathName, status] of Object.entries({ accept: "ACCEPTED", reject: "REJECTED", expire: "EXPIRED", archive: "ARCHIVED" })) {
     app.post(`/api/quotations/:id/${pathName}`, async (req, res) => {
       try {
-        const user = await requireAuthenticatedUser(req, res);
-        if (!user) return;
+        const tenantRequest = await requireAuthenticatedTenantUser(req, res, `quotation ${pathName} API`);
+        if (!tenantRequest) return;
+        const { user, organizationId } = tenantRequest;
         await requirePermission(user, "quotations.manage");
-        const result = await setQuotationStatus(req.params.id, status, req.body || {}, { organizationId: user.organizationId });
+        const result = await setQuotationStatus(req.params.id, status, req.body || {}, { organizationId });
         if (!result.after) return createApiError(res, 404, "NOT_FOUND", "Quotation was not found.");
         await auditLog({ actorUserId: user.id, action: `quotation.${pathName}`, entityType: "quotation", entityId: req.params.id, summary: `Quotation was ${pathName}ed.`, before: result.before, after: result.after, requestContext: requestContext(req) });
         res.json({ ok: true, data: result.after });
@@ -1999,10 +2486,11 @@ async function startServer() {
 
   app.post("/api/quotations/:id/convert-to-shipment", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "quotation convert API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "quotations.manage");
-      const result = await convertQuotationToShipment(req.params.id, user.id, { organizationId: user.organizationId });
+      const result = await convertQuotationToShipment(req.params.id, user.id, { organizationId });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Quotation was not found.");
       await auditLog({ actorUserId: user.id, action: "quotation.convert_to_shipment", entityType: "quotation", entityId: req.params.id, summary: "Quotation was converted to shipment.", after: result, requestContext: requestContext(req) });
       res.json({ ok: true, data: result });
@@ -2015,10 +2503,11 @@ async function startServer() {
 
   app.get("/api/archive", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "archive list API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "archive.view");
-      res.json({ ok: true, data: await listArchiveRecords({ organizationId: user.organizationId, search: req.query.search || "" }) });
+      res.json({ ok: true, data: await listArchiveRecords({ organizationId, search: req.query.search || "" }) });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       createApiError(res, 500, "ARCHIVE_LIST_FAILED", "Could not load archive.");
@@ -2027,10 +2516,11 @@ async function startServer() {
 
   app.get("/api/archive/search", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "archive search API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "archive.view");
-      res.json({ ok: true, data: await listArchiveRecords({ organizationId: user.organizationId, search: req.query.q || req.query.search || "" }) });
+      res.json({ ok: true, data: await listArchiveRecords({ organizationId, search: req.query.q || req.query.search || "" }) });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       createApiError(res, 500, "ARCHIVE_SEARCH_FAILED", "Could not search archive.");
@@ -2039,10 +2529,11 @@ async function startServer() {
 
   app.get("/api/archive/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "archive get API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "archive.view");
-      const data = (await listArchiveRecords({ organizationId: user.organizationId })).find((item) => item.id === req.params.id || item.entityId === req.params.id);
+      const data = (await listArchiveRecords({ organizationId })).find((item) => item.id === req.params.id || item.entityId === req.params.id);
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Archive record was not found.");
       res.json({ ok: true, data });
     } catch (error) {
@@ -2053,17 +2544,25 @@ async function startServer() {
 
   app.post("/api/archive/:entityType/:entityId", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "archive create API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "archive.view");
       const params = parseRequestValue(res, archiveEntityParamsSchema, req.params);
       if (!params) return;
       const data = await archiveEntityRecord(params.entityType, params.entityId, user.id, {
-        organizationId: user.organizationId,
+        organizationId,
+        audit: {
+          actorUserId: user.id,
+          action: "archive.create",
+          entityType: params.entityType,
+          entityId: params.entityId,
+          summary: "Record was archived.",
+          requestContext: requestContext(req),
+        },
       });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Record was not found.");
-      await auditLog({ actorUserId: user.id, action: "archive.create", entityType: params.entityType, entityId: params.entityId, summary: "Record was archived.", after: data, requestContext: requestContext(req) });
-      res.json({ ok: true, data });
+      res.json({ ok: true, data: sanitizeDocumentEntityResponse(params.entityType, data) });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       createApiError(res, 500, "ARCHIVE_FAILED", "Could not archive record.");
@@ -2072,17 +2571,25 @@ async function startServer() {
 
   app.post("/api/archive/:entityType/:entityId/restore", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "archive restore API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "archive.view");
       const params = parseRequestValue(res, archiveEntityParamsSchema, req.params);
       if (!params) return;
       const data = await restoreEntityRecord(params.entityType, params.entityId, {
-        organizationId: user.organizationId,
+        organizationId,
+        audit: {
+          actorUserId: user.id,
+          action: "archive.restore",
+          entityType: params.entityType,
+          entityId: params.entityId,
+          summary: "Record was restored.",
+          requestContext: requestContext(req),
+        },
       });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Record was not found.");
-      await auditLog({ actorUserId: user.id, action: "archive.restore", entityType: params.entityType, entityId: params.entityId, summary: "Record was restored.", after: data, requestContext: requestContext(req) });
-      res.json({ ok: true, data });
+      res.json({ ok: true, data: sanitizeDocumentEntityResponse(params.entityType, data) });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       createApiError(res, 500, "RESTORE_FAILED", "Could not restore record.");
@@ -2091,33 +2598,35 @@ async function startServer() {
 
   app.delete("/api/archive/:entityType/:entityId", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "archive delete API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "archive.view");
       const params = parseRequestValue(res, archiveEntityParamsSchema, req.params);
       if (!params) return;
       const documentStorageKeys =
         params.entityType === "document"
-          ? await listDocumentStorageKeysForCleanup(params.entityId, { organizationId: user.organizationId })
+          ? await listDocumentStorageKeysForCleanup(params.entityId, { organizationId })
           : [];
       const data = await deleteArchivedEntityRecord(params.entityType, params.entityId, {
-        organizationId: user.organizationId,
+        organizationId,
+        audit: {
+          actorUserId: user.id,
+          action: "archive.delete",
+          entityType: params.entityType,
+          entityId: params.entityId,
+          summary: "Archived record was permanently deleted.",
+          metadata: {
+            documentStorageCleanup: documentStorageKeys.length ? "deferred_after_db_commit" : "not_applicable",
+          },
+          requestContext: requestContext(req),
+        },
       });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Archived record was not found.");
-      let storageCleanup = null;
       if (documentStorageKeys.length) {
-        storageCleanup = await deleteStoredDocumentFiles(documentStorageKeys);
+        await deleteStoredDocumentFiles(documentStorageKeys);
       }
-      await auditLog({
-        actorUserId: user.id,
-        action: "archive.delete",
-        entityType: params.entityType,
-        entityId: params.entityId,
-        summary: "Archived record was permanently deleted.",
-        before: { ...data, storageCleanup },
-        requestContext: requestContext(req),
-      });
-      res.json({ ok: true, data });
+      res.json({ ok: true, data: sanitizeDocumentEntityResponse(params.entityType, data) });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       console.error("Archive delete failed:", error);
@@ -2222,8 +2731,9 @@ async function startServer() {
 
   app.get("/api/tasks", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "tasks list API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       const query = parseRequestValue(res, taskListQuerySchema, req.query || {});
       if (!query) return;
       const canViewAll = await userHasPermission(user, "tasks.view_all");
@@ -2233,8 +2743,8 @@ async function startServer() {
       }
       const data = await listTasks(
         canViewAll
-          ? {
-              organizationId: user.organizationId,
+            ? {
+              organizationId,
               includeAll: true,
               shipmentId: query.shipmentId,
               assignedToId: query.assignedTo === "me" ? user.id : undefined,
@@ -2243,8 +2753,8 @@ async function startServer() {
               blocked: query.blocked,
               overdue: query.overdue,
             }
-          : {
-              organizationId: user.organizationId,
+            : {
+              organizationId,
               participantUserId: user.id,
               includeAll: true,
               shipmentId: query.shipmentId,
@@ -2262,10 +2772,11 @@ async function startServer() {
 
   app.get("/api/tasks/my", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "my tasks API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "tasks.view_own");
-      const data = await listTasks({ organizationId: user.organizationId, assignedToId: user.id, includeAll: true });
+      const data = await listTasks({ organizationId, assignedToId: user.id, includeAll: true });
       res.json({ ok: true, data });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -2276,10 +2787,11 @@ async function startServer() {
 
   app.get("/api/tasks/team", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "team tasks API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "tasks.view_all");
-      const data = await listTasks({ organizationId: user.organizationId, includeAll: true });
+      const data = await listTasks({ organizationId, includeAll: true });
       res.json({ ok: true, data });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -2290,9 +2802,10 @@ async function startServer() {
 
   app.get("/api/tasks/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      const task = await getTaskRecord(req.params.id, { organizationId: user.organizationId });
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "task get API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const task = await getTaskRecord(req.params.id, { organizationId });
       if (!task) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
       if (!(await canAccessTask(user, task))) {
         return createApiError(res, 403, "FORBIDDEN", "You cannot view this task.");
@@ -2306,8 +2819,9 @@ async function startServer() {
 
   app.post("/api/tasks", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "task create API");
+      if (!tenantRequest) return;
+      const { user, tenantContext, organizationId } = tenantRequest;
       const body = req.body || {};
       const isWorkflowLinkedTask = Boolean(
         body.workflowInstanceId || body.workflowStepCode || body.workflowBlockerId || body.blockerCode
@@ -2326,11 +2840,11 @@ async function startServer() {
         await requirePermission(user, "tasks.assign");
       }
       const assignee = await getUserById(assignedToUserId);
-      if (!assignee || assignee.organization_id !== user.organizationId || assignee.status === "suspended") {
+      if (!assignee || assignee.organization_id !== organizationId || assignee.status === "suspended") {
         return createApiError(res, 404, "ASSIGNEE_NOT_FOUND", "Assignee was not found.");
       }
       if (body.shipmentId) {
-        const linkedShipment = await getShipmentRecord(body.shipmentId, { organizationId: user.organizationId });
+        const linkedShipment = await getShipmentRecord(body.shipmentId, { organizationId });
         if (!linkedShipment) {
           return createApiError(res, 404, "SHIPMENT_NOT_FOUND", "Linked shipment was not found.", "shipmentId");
         }
@@ -2345,7 +2859,7 @@ async function startServer() {
              AND organization_id = $2
              AND ($3::text IS NULL OR shipment_id = $3)
            LIMIT 1`,
-          [workflowInstanceId, user.organizationId, body.shipmentId || null]
+          [workflowInstanceId, organizationId, body.shipmentId || null]
         );
         currentWorkflow = submittedWorkflowResult.rows[0] || null;
         if (!currentWorkflow) workflowInstanceId = null;
@@ -2359,14 +2873,14 @@ async function startServer() {
                AND organization_id = $2
              ORDER BY updated_at DESC
              LIMIT 1`,
-            [body.shipmentId, user.organizationId]
+            [body.shipmentId, organizationId]
           );
           currentWorkflow = currentWorkflowResult.rows[0] || null;
         }
         if (!currentWorkflow) {
           const startedWorkflow = await startShipmentWorkflowRecord(pool, {
             shipmentId: body.shipmentId,
-            organizationId: user.organizationId,
+            organizationId,
             actorUserId: user.id,
             metadata: { source: "task.create" },
           });
@@ -2386,7 +2900,7 @@ async function startServer() {
              AND organization_id = $2
              AND ($3::text IS NULL OR shipment_id = $3)
           LIMIT 1`,
-          [body.workflowBlockerId, user.organizationId, body.shipmentId || null]
+          [body.workflowBlockerId, organizationId, body.shipmentId || null]
         );
         if (blockerResult.rows[0]) {
           workflowBlockerId = blockerResult.rows[0].id;
@@ -2403,7 +2917,7 @@ async function startServer() {
              ORDER BY updated_at DESC, created_at DESC
              LIMIT 1`,
             [
-              user.organizationId,
+              organizationId,
               body.shipmentId,
               body.blockerCode,
               body.workflowStepCode || null,
@@ -2426,7 +2940,7 @@ async function startServer() {
                RETURNING id`,
               [
                 body.workflowBlockerId,
-                user.organizationId,
+                organizationId,
                 workflowInstanceId,
                 body.shipmentId,
                 body.workflowStepCode || null,
@@ -2446,7 +2960,7 @@ async function startServer() {
                    AND organization_id = $2
                    AND shipment_id = $3
                  LIMIT 1`,
-                [body.workflowBlockerId, user.organizationId, body.shipmentId]
+                [body.workflowBlockerId, organizationId, body.shipmentId]
               );
               if (!recoveredVerification.rows[0]) {
                 return createApiError(res, 404, "BLOCKER_NOT_FOUND", "Workflow blocker was not found.", "workflowBlockerId");
@@ -2463,7 +2977,7 @@ async function startServer() {
                ON CONFLICT (id) DO NOTHING`,
               [
                 crypto.randomUUID(),
-                user.organizationId,
+                organizationId,
                 workflowInstanceId,
                 body.shipmentId,
                 body.workflowStepCode || null,
@@ -2481,6 +2995,7 @@ async function startServer() {
       }
       const task = await createTaskRecord({
         ownerUserId: user.id,
+        tenantContext,
         title,
         description: body.description,
         status: body.status,
@@ -2517,9 +3032,10 @@ async function startServer() {
 
   app.patch("/api/tasks/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      const before = await getTaskRecord(req.params.id, { organizationId: user.organizationId });
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "task update API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const before = await getTaskRecord(req.params.id, { organizationId });
       if (!before) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
       if (!(await canAccessTask(user, before))) {
         return createApiError(res, 403, "FORBIDDEN", "You cannot update this task.");
@@ -2527,12 +3043,12 @@ async function startServer() {
       if (req.body?.assignedToUserId && req.body.assignedToUserId !== before.assigned_to_id) {
         await requirePermission(user, "tasks.assign");
         const assignee = await getUserById(req.body.assignedToUserId);
-        if (!assignee || assignee.organization_id !== user.organizationId || assignee.status === "suspended") {
+        if (!assignee || assignee.organization_id !== organizationId || assignee.status === "suspended") {
           return createApiError(res, 404, "ASSIGNEE_NOT_FOUND", "Assignee was not found.", "assignedToUserId");
         }
         req.body.assignedToName = assignee.name;
       }
-      const result = await updateTaskRecord(req.params.id, { ...(req.body || {}), actorUserId: user.id }, { organizationId: user.organizationId });
+      const result = await updateTaskRecord(req.params.id, { ...(req.body || {}), actorUserId: user.id }, { organizationId });
       await auditLog({
         actorUserId: user.id,
         action: "task.update",
@@ -2553,13 +3069,14 @@ async function startServer() {
 
   app.patch("/api/tasks/:taskId/assign", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "task assign API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       const params = parseRequestValue(res, taskParamsSchema, req.params);
       if (!params) return;
       const body = parseRequestValue(res, taskAssignBodySchema, req.body || {});
       if (!body) return;
-      const before = await getTaskRecord(params.taskId, { organizationId: user.organizationId });
+      const before = await getTaskRecord(params.taskId, { organizationId });
       if (!before) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
       const canAssign = (await userHasPermission(user, "tasks.assign")) || before.owner_user_id === user.id || before.assigned_by_id === user.id;
       if (!canAssign) {
@@ -2573,7 +3090,7 @@ async function startServer() {
         priority: body.priority,
         assignmentNote: body.assignmentNote,
         status: body.status || "assigned",
-        organizationId: user.organizationId,
+        organizationId,
       });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
       if (result.invalidAssignee) return createApiError(res, 404, "ASSIGNEE_NOT_FOUND", "Assignee was not found.", "assignedToUserId");
@@ -2597,13 +3114,14 @@ async function startServer() {
 
   app.patch("/api/tasks/:taskId/status", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "task status API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       const params = parseRequestValue(res, taskParamsSchema, req.params);
       if (!params) return;
       const body = parseRequestValue(res, taskStatusBodySchema, req.body || {});
       if (!body) return;
-      const before = await getTaskRecord(params.taskId, { organizationId: user.organizationId });
+      const before = await getTaskRecord(params.taskId, { organizationId });
       if (!before) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
       if (!(await canAccessTask(user, before, "status"))) {
         return createApiError(res, 403, "FORBIDDEN", "You cannot update this task status.");
@@ -2612,7 +3130,7 @@ async function startServer() {
         status: body.status,
         note: body.note,
         actorUser: user,
-        organizationId: user.organizationId,
+        organizationId,
       });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
       await auditLog({
@@ -2634,16 +3152,17 @@ async function startServer() {
 
   app.get("/api/tasks/:taskId/events", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "task events API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       const params = parseRequestValue(res, taskParamsSchema, req.params);
       if (!params) return;
-      const task = await getTaskRecord(params.taskId, { organizationId: user.organizationId });
+      const task = await getTaskRecord(params.taskId, { organizationId });
       if (!task) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
       if (!(await canAccessTask(user, task))) {
         return createApiError(res, 403, "FORBIDDEN", "You cannot view this task.");
       }
-      const data = await listTaskEvents(params.taskId, { organizationId: user.organizationId });
+      const data = await listTaskEvents(params.taskId, { organizationId });
       res.json({ ok: true, data });
     } catch (error) {
       console.error("List task events failed:", error);
@@ -2653,9 +3172,10 @@ async function startServer() {
 
   async function updateTaskStatusEndpoint(req, res, status, action) {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      const before = await getTaskRecord(req.params.id, { organizationId: user.organizationId });
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, `${action} API`);
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const before = await getTaskRecord(req.params.id, { organizationId });
       if (!before) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
       if (!(await canAccessTask(user, before, "status"))) {
         return createApiError(res, 403, "FORBIDDEN", "You cannot update this task status.");
@@ -2663,7 +3183,7 @@ async function startServer() {
       const result = await updateTaskStatusRecord(req.params.id, {
         status,
         actorUser: user,
-        organizationId: user.organizationId,
+        organizationId,
       });
       await auditLog({
         actorUserId: user.id,
@@ -2694,11 +3214,12 @@ async function startServer() {
 
   app.get("/api/shipments/:id/steps", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment steps API");
+      if (!tenantRequest) return;
+      const { organizationId } = tenantRequest;
       const params = parseRequestValue(res, shipmentParamsSchema, req.params);
       if (!params) return;
-      const data = await listShipmentSteps(params.id, null, { organizationId: user.organizationId });
+      const data = await listShipmentSteps(params.id, null, { organizationId });
       res.json({ ok: true, data });
     } catch (error) {
       console.error("List shipment steps failed:", error);
@@ -2708,8 +3229,9 @@ async function startServer() {
 
   app.patch("/api/shipments/:id/steps/:stepId", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment step update API");
+      if (!tenantRequest) return;
+      const { user } = tenantRequest;
       await requirePermission(user, "shipment_steps.update");
       const params = parseRequestValue(res, shipmentStepParamsSchema, req.params);
       if (!params) return;
@@ -2740,8 +3262,9 @@ async function startServer() {
 
   app.post("/api/shipments/:id/tasks", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment task create API");
+      if (!tenantRequest) return;
+      const { user, tenantContext, organizationId } = tenantRequest;
       await requirePermission(user, "tasks.create");
       const params = parseRequestValue(res, shipmentParamsSchema, req.params);
       if (!params) return;
@@ -2752,7 +3275,7 @@ async function startServer() {
         await requirePermission(user, "tasks.assign");
       }
       const assignee = await getUserById(assignedToUserId);
-      if (!assignee || assignee.organization_id !== user.organizationId || assignee.status === "suspended") {
+      if (!assignee || assignee.organization_id !== organizationId || assignee.status === "suspended") {
         return createApiError(res, 404, "ASSIGNEE_NOT_FOUND", "Assignee was not found.", "assignedToUserId");
       }
       if (body.workflowInstanceId) {
@@ -2763,7 +3286,7 @@ async function startServer() {
              AND organization_id = $2
              AND shipment_id = $3
            LIMIT 1`,
-          [body.workflowInstanceId, user.organizationId, params.id]
+          [body.workflowInstanceId, organizationId, params.id]
         );
         if (!workflowResult.rows[0]) {
           return createApiError(res, 404, "WORKFLOW_NOT_FOUND", "Workflow instance was not found.", "workflowInstanceId");
@@ -2777,7 +3300,7 @@ async function startServer() {
              AND organization_id = $2
              AND shipment_id = $3
            LIMIT 1`,
-          [body.workflowBlockerId, user.organizationId, params.id]
+          [body.workflowBlockerId, organizationId, params.id]
         );
         if (!blockerResult.rows[0]) {
           return createApiError(res, 404, "BLOCKER_NOT_FOUND", "Workflow blocker was not found.", "workflowBlockerId");
@@ -2788,6 +3311,7 @@ async function startServer() {
         shipmentId: params.id,
         stepId: body.stepId,
         actorUser: user,
+        tenantContext,
         task: body,
       });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
@@ -2811,11 +3335,12 @@ async function startServer() {
 
   app.get("/api/cheques/due-soon", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "due cheques API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "cheques.manage");
       const data = await listDueSoonCheques({
-        organizationId: user.organizationId,
+        organizationId,
         ownerUserId: user.id,
         days: req.query.days || 7,
       });
@@ -2829,11 +3354,12 @@ async function startServer() {
 
   app.get("/api/cheques", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheques list API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "cheques.manage");
       const data = await listCheques({
-        organizationId: user.organizationId,
+        organizationId,
         ownerUserId: user.id,
         includeArchived: req.query.includeArchived === "true",
       });
@@ -2847,13 +3373,14 @@ async function startServer() {
 
   app.post("/api/cheques", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheque create API");
+      if (!tenantRequest) return;
+      const { user, tenantContext } = tenantRequest;
       await requirePermission(user, "cheques.manage");
       if (!req.body?.bankName || !req.body?.chequeNumber || Number(req.body?.amount || 0) <= 0) {
         return createApiError(res, 400, "VALIDATION_ERROR", "Bank, cheque number, and positive amount are required.");
       }
-      const data = await createChequeRecord({ ownerUserId: user.id, actorUserId: user.id, cheque: req.body });
+      const data = await createChequeRecord({ ownerUserId: user.id, actorUserId: user.id, tenantContext, cheque: req.body });
       await auditLog({
         actorUserId: user.id,
         action: "cheque.create",
@@ -2873,10 +3400,11 @@ async function startServer() {
 
   app.get("/api/cheques/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheque get API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "cheques.manage");
-      const data = await getChequeRecord(req.params.id, { organizationId: user.organizationId });
+      const data = await getChequeRecord(req.params.id, { organizationId });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Cheque was not found.");
       res.json({ ok: true, data });
     } catch (error) {
@@ -2888,10 +3416,11 @@ async function startServer() {
 
   app.patch("/api/cheques/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheque update API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "cheques.manage");
-      const result = await updateChequeRecord(req.params.id, req.body || {}, { organizationId: user.organizationId });
+      const result = await updateChequeRecord(req.params.id, req.body || {}, { organizationId });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Cheque was not found.");
       await auditLog({
         actorUserId: user.id,
@@ -2913,10 +3442,11 @@ async function startServer() {
 
   app.post("/api/cheques/:id/status", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheque status API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "cheques.manage");
-      const result = await updateChequeRecord(req.params.id, { status: req.body?.status }, { organizationId: user.organizationId });
+      const result = await updateChequeRecord(req.params.id, { status: req.body?.status }, { organizationId });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Cheque was not found.");
       await auditLog({
         actorUserId: user.id,
@@ -2938,10 +3468,11 @@ async function startServer() {
 
   app.post("/api/cheques/:id/archive", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheque archive API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "cheques.manage");
-      const result = await archiveChequeRecord(req.params.id, { organizationId: user.organizationId });
+      const result = await archiveChequeRecord(req.params.id, { organizationId });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Cheque was not found.");
       await auditLog({
         actorUserId: user.id,
@@ -2978,16 +3509,18 @@ async function startServer() {
 
   app.post("/api/compliance-meetings", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "compliance meeting create API");
+      if (!tenantRequest) return;
+      const { user, tenantContext } = tenantRequest;
       await requirePermission(user, "compliance.manage");
       if (!req.body?.dateTime || !req.body?.purpose) {
         return createApiError(res, 400, "VALIDATION_ERROR", "Meeting date/time and purpose are required.");
       }
-      const data = await createComplianceMeetingRecord({ ownerUserId: user.id, actorUser: user, meeting: req.body });
+      const data = await createComplianceMeetingRecord({ ownerUserId: user.id, actorUser: user, tenantContext, meeting: req.body });
       if (req.body?.assignedPersonId) {
         await createTaskRecord({
           ownerUserId: user.id,
+          tenantContext,
           title: `جلسه: ${req.body.purpose}`,
           description: `آماده‌سازی جلسه ${req.body.purpose}`,
           status: "TODO",
@@ -3245,11 +3778,12 @@ async function startServer() {
 
   app.get("/api/documents", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "documents list API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "documents.view_all");
       const data = await listDocuments({
-        organizationId: user.organizationId,
+        organizationId,
         includeArchived: req.query.includeArchived === "true",
       });
       res.json({ ok: true, data });
@@ -3264,8 +3798,9 @@ async function startServer() {
 
   app.post("/api/documents/upload", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "document upload API");
+      if (!tenantRequest) return;
+      const { user, tenantContext, organizationId } = tenantRequest;
       await requirePermission(user, "documents.upload");
       if (!(await consumeRateLimit(req, res, "document-upload", {
         limit: 20,
@@ -3279,10 +3814,10 @@ async function startServer() {
       await validateDocumentAssociations({
         shipmentId: metadata.shipmentId || null,
         customerId: metadata.customerId || null,
-        organizationId: user.organizationId,
+        organizationId,
       });
 
-      const persisted = await persistDocumentFile(req.file);
+      const persisted = await persistDocumentFile(req.file, { organizationId });
       if (persisted.error) {
         return createApiError(
           res,
@@ -3297,13 +3832,26 @@ async function startServer() {
       try {
         document = await createDocumentRecord({
           ownerUserId: user.id,
+          tenantContext,
           title: metadata.title || persisted.sanitizedName,
           type: metadata.type || "OTHER",
           fileName: persisted.sanitizedName,
           mimeType: persisted.mimeType,
           fileSize: persisted.fileSize,
           storageKey: persisted.storageKey,
+          storageProvider: persisted.storageProvider,
+          objectKey: persisted.objectKey,
+          storageBucket: persisted.storageBucket,
+          storageRegion: persisted.storageRegion,
+          localPath: persisted.localPath,
           checksum: persisted.checksum,
+          checksumSha256: persisted.checksumSha256,
+          sizeBytes: persisted.sizeBytes,
+          contentType: persisted.contentType,
+          storageMigratedAt: persisted.storageMigratedAt,
+          storageVerifiedAt: persisted.storageVerifiedAt,
+          storageMigrationStatus: persisted.storageMigrationStatus,
+          storageMigrationError: persisted.storageMigrationError,
           uploadedById: user.id,
           uploadedByName: user.name,
           shipmentId: metadata.shipmentId || null,
@@ -3326,10 +3874,11 @@ async function startServer() {
         entityId: document.id,
         summary: "Document was uploaded.",
         after: { id: document.id, title: document.title, fileName: document.file_name, shipmentId: document.shipment_id },
+        metadata: documentStorageAuditMetadata(persisted),
         requestContext: requestContext(req),
       });
 
-      res.json({ ok: true, data: document });
+      res.json({ ok: true, data: sanitizeDocumentForApi(document) });
     } catch (error) {
       if (error.statusCode === 403) {
         return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -3356,7 +3905,7 @@ async function startServer() {
       if (!data) {
         return createApiError(res, 404, "NOT_FOUND", "Document was not found.");
       }
-      res.json({ ok: true, data });
+      res.json({ ok: true, data: sanitizeDocumentForApi(data) });
     } catch (error) {
       if (error.statusCode === 403) {
         return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -3379,6 +3928,16 @@ async function startServer() {
       }))) return;
       const document = await getDocumentForDownload(params.id, { organizationId: user.organizationId });
       if (!document) {
+        await auditLog({
+          actorUserId: user.id,
+          organizationId: user.organizationId,
+          action: "document.download_denied",
+          entityType: "DOCUMENT",
+          entityId: params.id,
+          summary: "Internal document download was denied.",
+          metadata: { reason: "not_found_or_forbidden" },
+          requestContext: requestContext(req),
+        });
         return createApiError(res, 404, "NOT_FOUND", "Document was not found.");
       }
       await sendStoredDocument(res, document);
@@ -3425,11 +3984,11 @@ async function startServer() {
         entityType: "DOCUMENT",
         entityId: params.id,
         summary: "Document metadata was updated.",
-        before: result.before,
-        after: result.after,
+        before: sanitizeDocumentForApi(result.before),
+        after: sanitizeDocumentForApi(result.after),
         requestContext: requestContext(req),
       });
-      res.json({ ok: true, data: result.after });
+      res.json({ ok: true, data: sanitizeDocumentForApi(result.after) });
     } catch (error) {
       if (error.statusCode === 403) {
         return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -3456,7 +4015,7 @@ async function startServer() {
       }))) return;
       await uploadSingle(req, res);
 
-      const persisted = await persistDocumentFile(req.file);
+      const persisted = await persistDocumentFile(req.file, { organizationId: user.organizationId });
       if (persisted.error) {
         return createApiError(
           res,
@@ -3475,7 +4034,19 @@ async function startServer() {
           mimeType: persisted.mimeType,
           fileSize: persisted.fileSize,
           storageKey: persisted.storageKey,
+          storageProvider: persisted.storageProvider,
+          objectKey: persisted.objectKey,
+          storageBucket: persisted.storageBucket,
+          storageRegion: persisted.storageRegion,
+          localPath: persisted.localPath,
           checksum: persisted.checksum,
+          checksumSha256: persisted.checksumSha256,
+          sizeBytes: persisted.sizeBytes,
+          contentType: persisted.contentType,
+          storageMigratedAt: persisted.storageMigratedAt,
+          storageVerifiedAt: persisted.storageVerifiedAt,
+          storageMigrationStatus: persisted.storageMigrationStatus,
+          storageMigrationError: persisted.storageMigrationError,
           uploadedById: user.id,
           organizationId: user.organizationId,
         });
@@ -3495,9 +4066,10 @@ async function startServer() {
         summary: "Document file was replaced.",
         before: { id: result.before.id, version: result.before.version, fileName: result.before.file_name },
         after: { id: result.after.id, version: result.after.version, fileName: result.after.file_name },
+        metadata: documentStorageAuditMetadata(persisted),
         requestContext: requestContext(req),
       });
-      res.json({ ok: true, data: result.after });
+      res.json({ ok: true, data: sanitizeDocumentForApi(result.after) });
     } catch (error) {
       if (error.statusCode === 403) {
         return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -3530,11 +4102,11 @@ async function startServer() {
         entityType: "DOCUMENT",
         entityId: params.id,
         summary: "Document was archived.",
-        before: result.before,
-        after: result.after,
+        before: sanitizeDocumentForApi(result.before),
+        after: sanitizeDocumentForApi(result.after),
         requestContext: requestContext(req),
       });
-      res.json({ ok: true, data: result.after });
+      res.json({ ok: true, data: sanitizeDocumentForApi(result.after) });
     } catch (error) {
       if (error.statusCode === 403) {
         return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -3595,20 +4167,22 @@ async function startServer() {
       await requirePermission(user, "customer_access.manage");
       const params = parseRequestValue(res, shipmentParamsSchema, req.params);
       if (!params) return;
-      const result = await generateShipmentCustomerAccess(params.id, { organizationId: user.organizationId, ownerUserId: user.id, rotate: false });
+      const result = await generateShipmentCustomerAccess(params.id, {
+        organizationId: user.organizationId,
+        ownerUserId: user.id,
+        rotate: false,
+        audit: {
+          actorUserId: user.id,
+          action: "customer_access.generate",
+          entityType: "SHIPMENT",
+          entityId: params.id,
+          summary: "Customer tracking access was generated.",
+          requestContext: requestContext(req),
+        },
+      });
       if (!result) {
         return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       }
-      await auditLog({
-        actorUserId: user.id,
-        action: "customer_access.generate",
-        entityType: "SHIPMENT",
-        entityId: params.id,
-        summary: "Customer tracking access was generated.",
-        before: result.before,
-        after: result.after,
-        requestContext: requestContext(req),
-      });
       res.json({
         ok: true,
         data: {
@@ -3633,20 +4207,21 @@ async function startServer() {
       await requirePermission(user, "customer_access.manage");
       const params = parseRequestValue(res, shipmentParamsSchema, req.params);
       if (!params) return;
-      const result = await generateShipmentCustomerAccess(params.id, { organizationId: user.organizationId, ownerUserId: user.id });
+      const result = await generateShipmentCustomerAccess(params.id, {
+        organizationId: user.organizationId,
+        ownerUserId: user.id,
+        audit: {
+          actorUserId: user.id,
+          action: "customer_access.reset",
+          entityType: "SHIPMENT",
+          entityId: params.id,
+          summary: "Customer tracking access was reset.",
+          requestContext: requestContext(req),
+        },
+      });
       if (!result) {
         return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       }
-      await auditLog({
-        actorUserId: user.id,
-        action: "customer_access.reset",
-        entityType: "SHIPMENT",
-        entityId: params.id,
-        summary: "Customer tracking access was reset.",
-        before: result.before,
-        after: result.after,
-        requestContext: requestContext(req),
-      });
       res.json({
         ok: true,
         data: {
@@ -3671,20 +4246,21 @@ async function startServer() {
       await requirePermission(user, "customer_access.manage");
       const params = parseRequestValue(res, shipmentParamsSchema, req.params);
       if (!params) return;
-      const result = await disableShipmentCustomerAccess(params.id, { organizationId: user.organizationId, ownerUserId: user.id });
+      const result = await disableShipmentCustomerAccess(params.id, {
+        organizationId: user.organizationId,
+        ownerUserId: user.id,
+        audit: {
+          actorUserId: user.id,
+          action: "customer_access.disable",
+          entityType: "SHIPMENT",
+          entityId: params.id,
+          summary: "Customer tracking access was disabled.",
+          requestContext: requestContext(req),
+        },
+      });
       if (!result) {
         return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       }
-      await auditLog({
-        actorUserId: user.id,
-        action: "customer_access.disable",
-        entityType: "SHIPMENT",
-        entityId: params.id,
-        summary: "Customer tracking access was disabled.",
-        before: result.before,
-        after: result.after,
-        requestContext: requestContext(req),
-      });
       res.json({ ok: true, data: result.after });
     } catch (error) {
       if (error.statusCode === 403) {
@@ -3746,21 +4322,19 @@ async function startServer() {
       if (!body) return;
       const result = await updateDocumentVisibility(params.id, body.visibility, {
         organizationId: user.organizationId,
+        audit: {
+          actorUserId: user.id,
+          action: "document.visibility.update",
+          entityType: "DOCUMENT",
+          entityId: params.id,
+          summary: "Document customer visibility was updated.",
+          requestContext: requestContext(req),
+        },
       });
       if (!result) {
         return createApiError(res, 404, "NOT_FOUND", "Document was not found.");
       }
-      await auditLog({
-        actorUserId: user.id,
-        action: "document.visibility.update",
-        entityType: "DOCUMENT",
-        entityId: params.id,
-        summary: "Document customer visibility was updated.",
-        before: result.before,
-        after: result.after,
-        requestContext: requestContext(req),
-      });
-      res.json({ ok: true, data: result.after });
+      res.json({ ok: true, data: sanitizeDocumentForApi(result.after) });
     } catch (error) {
       if (error.statusCode === 403) {
         return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -3771,15 +4345,64 @@ async function startServer() {
   });
 
   registerPublicTrackingRoutes(app, {
+    auditLog,
     createApiError,
     consumeRateLimit,
     getPublicDocument,
     getPublicDocumentByTrackingToken,
     getPublicTrackingByToken,
+    getPublicTrackingTokenAuditState,
     publicDocumentDownloadLimit: PUBLIC_DOCUMENT_DOWNLOAD_LIMIT,
+    publicTrackLookupLimit: PUBLIC_TRACK_LOOKUP_LIMIT,
     publicTrackSearchLimit: PUBLIC_TRACK_SEARCH_LIMIT,
+    requestContext,
     searchPublicTracking,
     sendStoredDocument,
+  });
+
+  app.get("/api/audit-logs", async (req, res) => {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "audit log list API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "changes.view");
+      const data = await listAuditLogs({
+        organizationId,
+        limit: req.query.limit,
+        eventType: req.query.eventType || undefined,
+        resourceType: req.query.resourceType || undefined,
+        resourceId: req.query.resourceId || undefined,
+      });
+      res.json({ ok: true, data });
+    } catch (error) {
+      if (error.statusCode === 403) {
+        return createApiError(res, 403, "FORBIDDEN", error.message);
+      }
+      console.error("List audit logs failed:", error);
+      createApiError(res, 500, "LIST_AUDIT_LOGS_FAILED", "Could not load audit logs.");
+    }
+  });
+
+  app.get("/api/admin/audit-logs", async (req, res) => {
+    try {
+      const admin = await requirePlatformAdmin(req, res);
+      if (!admin) return;
+      const data = await listAuditLogs({
+        organizationId: req.query.organizationId === undefined ? undefined : String(req.query.organizationId || ""),
+        actorUserId: req.query.actorUserId || undefined,
+        eventType: req.query.eventType || undefined,
+        resourceType: req.query.resourceType || undefined,
+        resourceId: req.query.resourceId || undefined,
+        limit: req.query.limit,
+      });
+      res.json({ ok: true, data });
+    } catch (error) {
+      if (error.statusCode === 403) {
+        return createApiError(res, 403, "FORBIDDEN", error.message);
+      }
+      console.error("List platform audit logs failed:", error);
+      createApiError(res, 500, "LIST_PLATFORM_AUDIT_LOGS_FAILED", "Could not load platform audit logs.");
+    }
   });
 
   app.get("/api/changes", async (req, res) => {

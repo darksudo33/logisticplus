@@ -1902,7 +1902,8 @@ async function assertNoPlatformAdminAccess(client: any) {
      FROM app_users u
      LEFT JOIN roles r ON lower(r.name) = lower(u.role)
      LEFT JOIN role_permissions rp ON rp.role_id = r.id
-     LEFT JOIN permissions p ON p.id = rp.permission_id
+     LEFT JOIN user_permissions up ON up.user_id = u.id
+     LEFT JOIN permissions p ON p.id IN (rp.permission_id, up.permission_id)
      WHERE u.id = ANY($1::text[])`,
     [demoUsers.map((user) => user.id)]
   );

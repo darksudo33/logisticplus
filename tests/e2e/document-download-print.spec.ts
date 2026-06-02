@@ -125,7 +125,8 @@ test.describe.serial("document download, public access, archive, and print/expor
     const access = await readOk<any>(await owner.post("/api/shipments/s1/customer-access/generate"));
     const publicTrack = await readOk<any>(await publicContext.get(`/api/public/track/${encodeURIComponent(access.token)}`));
     expectPublicTrackingPayloadIsSafe(publicTrack);
-    expect(publicTrack.documents.some((document: any) => document.id === uploaded.id)).toBe(true);
+    const publicDocumentDto = publicTrack.documents.find((document: any) => document.id === uploaded.id);
+    expect(publicDocumentDto).toBeTruthy();
 
     const publicTrackDownload = await publicContext.get(
       `/api/public/track/${encodeURIComponent(access.token)}/documents/${encodeURIComponent(uploaded.id)}`
@@ -134,15 +135,18 @@ test.describe.serial("document download, public access, archive, and print/expor
     expect(publicTrackDownload.headers()["x-content-type-options"]).toBe("nosniff");
     expect(await publicTrackDownload.text()).toBe(marker);
 
-    const publicDirectDownload = await publicContext.get(`/api/public/documents/${encodeURIComponent(uploaded.id)}`);
-    expect(publicDirectDownload.status(), await publicDirectDownload.text()).toBe(200);
-    expect(await publicDirectDownload.text()).toBe(marker);
+    const signedPublicDownload = await publicContext.get(publicDocumentDto.downloadUrl);
+    expect(signedPublicDownload.status(), await signedPublicDownload.text()).toBe(200);
+    expect(await signedPublicDownload.text()).toBe(marker);
+
+    await expectUnavailable(await publicContext.get(`/api/public/documents/${encodeURIComponent(uploaded.id)}`));
 
     await readOk(await owner.post(`/api/documents/${encodeURIComponent(uploaded.id)}/archive`));
     await expectUnavailable(await owner.get(`/api/documents/${encodeURIComponent(uploaded.id)}/download`));
     await expectUnavailable(
       await publicContext.get(`/api/public/track/${encodeURIComponent(access.token)}/documents/${encodeURIComponent(uploaded.id)}`)
     );
+    await expectUnavailable(await publicContext.get(publicDocumentDto.downloadUrl));
     await readOk(await owner.post("/api/shipments/s1/customer-access/disable"));
 
     await readOk(await owner.post(`/api/archive/document/${encodeURIComponent(uploaded.id)}/restore`));

@@ -58,6 +58,7 @@ export function registerUserRoutes(
     createApiError,
     createAppUserRecord,
     deleteAppUserRecord,
+    grantUserPermission,
     listAppUsers,
     listRoles,
     previewAppUserDeletion,
@@ -66,6 +67,7 @@ export function registerUserRoutes(
     requireCompanyCeo,
     requirePermission,
     requirePlatformAdmin,
+    revokeUserPermission,
     updateAppUserRecord,
     updateUserPassword,
   }
@@ -463,6 +465,63 @@ export function registerUserRoutes(
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       if (error.statusCode === 409) return sendDeletionBlocker(res, { code: error.code, blockers: error.blockers });
       createApiError(res, 500, "ADMIN_USER_DELETE_FAILED", "Could not delete organization user.");
+    }
+  });
+
+  app.post("/api/admin/users/:id/platform-admin/grant", async (req, res) => {
+    try {
+      const admin = await requirePlatformAdmin(req, res);
+      if (!admin) return;
+      const params = parseRequestValue(res, userParamsSchema, req.params);
+      if (!params) return;
+      const result = await grantUserPermission(params.id, "platform.admin", {
+        grantedById: admin.id,
+        reason: "Granted by platform admin API",
+        audit: {
+          actorUserId: admin.id,
+          actorType: "platform_admin",
+          action: "permission.platform_admin.grant",
+          entityType: "USER_PERMISSION",
+          entityId: params.id,
+          summary: "platform.admin permission was granted.",
+          requestContext: requestContext(req),
+        },
+      });
+      if (!result) return createApiError(res, 404, "NOT_FOUND", "User was not found.");
+      res.json({ ok: true, data: { userId: params.id, permission: "platform.admin", granted: true } });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      if (error.statusCode === 404) return createApiError(res, 404, error.code || "NOT_FOUND", error.message);
+      createApiError(res, 500, "PLATFORM_ADMIN_GRANT_FAILED", "Could not grant platform admin permission.");
+    }
+  });
+
+  app.post("/api/admin/users/:id/platform-admin/revoke", async (req, res) => {
+    try {
+      const admin = await requirePlatformAdmin(req, res);
+      if (!admin) return;
+      const params = parseRequestValue(res, userParamsSchema, req.params);
+      if (!params) return;
+      if (params.id === admin.id) {
+        return createApiError(res, 400, "SELF_PLATFORM_ADMIN_REVOKE_BLOCKED", "You cannot revoke your own platform admin permission.");
+      }
+      const result = await revokeUserPermission(params.id, "platform.admin", {
+        audit: {
+          actorUserId: admin.id,
+          actorType: "platform_admin",
+          action: "permission.platform_admin.revoke",
+          entityType: "USER_PERMISSION",
+          entityId: params.id,
+          summary: "platform.admin permission was revoked.",
+          requestContext: requestContext(req),
+        },
+      });
+      if (!result) return createApiError(res, 404, "NOT_FOUND", "User was not found.");
+      res.json({ ok: true, data: { userId: params.id, permission: "platform.admin", granted: false } });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      if (error.statusCode === 404) return createApiError(res, 404, error.code || "NOT_FOUND", error.message);
+      createApiError(res, 500, "PLATFORM_ADMIN_REVOKE_FAILED", "Could not revoke platform admin permission.");
     }
   });
 }

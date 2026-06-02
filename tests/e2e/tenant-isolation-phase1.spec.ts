@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import {
   USER_PASSWORD,
   disposeContexts,
+  expectForbidden,
   expectUnavailable,
   loginApi,
   readOk,
@@ -28,7 +29,7 @@ async function createTenantOwner(owner: Awaited<ReturnType<typeof loginApi>>) {
 }
 
 test.describe.serial("phase 1 tenant isolation hardening", () => {
-  test("derives normal tenant scope from the session and ignores client organization ids", async () => {
+  test("derives normal tenant scope from the session and rejects conflicting client organization ids", async () => {
     const owner = await loginApi();
     const tenantInfo = await createTenantOwner(owner);
     const tenant = await loginApi(tenantInfo.tenantEmail, USER_PASSWORD);
@@ -40,20 +41,32 @@ test.describe.serial("phase 1 tenant isolation hardening", () => {
           name: "Phase 1 tenant scoped customer",
           company: "Phase 1 Tenant Customer Co",
           email: uniqueEmail("phase1-tenant-customer"),
-          organizationId: spoofedOwnerOrgId,
-          orgId: spoofedOwnerOrgId,
-          companyId: spoofedOwnerOrgId,
         },
       })
     );
     expect(createdTenantCustomer.organization_id).toBe(tenantInfo.organizationId);
     expect(createdTenantCustomer.organization_id).not.toBe(spoofedOwnerOrgId);
 
-    const spoofedTenantCustomers = await readOk<any[]>(
+    const spoofedCreate = await tenant.post("/api/customers", {
+      data: {
+        name: "Spoofed tenant customer",
+        company: "Spoofed Tenant Customer Co",
+        email: uniqueEmail("phase1-spoofed-tenant-customer"),
+        organizationId: spoofedOwnerOrgId,
+        orgId: spoofedOwnerOrgId,
+        companyId: spoofedOwnerOrgId,
+      },
+    });
+    await expectForbidden(spoofedCreate);
+    const spoofedCreatePayload = await spoofedCreate.json();
+    expect(spoofedCreatePayload.error?.code).toBe("TENANT_SCOPE_CONFLICT");
+
+    const spoofedCustomersResponse =
       await tenant.get(`/api/customers?organizationId=${encodeURIComponent(spoofedOwnerOrgId)}`)
-    );
-    expect(spoofedTenantCustomers.some((customer) => customer.id === "c1")).toBe(false);
-    expect(spoofedTenantCustomers.some((customer) => customer.id === createdTenantCustomer.id)).toBe(true);
+    ;
+    await expectForbidden(spoofedCustomersResponse);
+    const spoofedCustomersPayload = await spoofedCustomersResponse.json();
+    expect(spoofedCustomersPayload.error?.code).toBe("TENANT_SCOPE_CONFLICT");
 
     const ownerCustomers = await readOk<any[]>(await owner.get("/api/customers"));
     expect(ownerCustomers.some((customer) => customer.id === createdTenantCustomer.id)).toBe(false);
@@ -64,15 +77,19 @@ test.describe.serial("phase 1 tenant isolation hardening", () => {
     await expectUnavailable(await tenant.get("/api/documents/doc1"));
     await expectUnavailable(await tenant.get("/api/tasks/t1"));
 
-    const spoofedTasks = await readOk<any[]>(
+    const spoofedTasks =
       await tenant.get(`/api/tasks?organizationId=${encodeURIComponent(spoofedOwnerOrgId)}`)
-    );
-    expect(spoofedTasks.some((task) => task.id === "t1")).toBe(false);
+    ;
+    await expectForbidden(spoofedTasks);
+    const spoofedTasksPayload = await spoofedTasks.json();
+    expect(spoofedTasksPayload.error?.code).toBe("TENANT_SCOPE_CONFLICT");
 
-    const spoofedDocuments = await readOk<any[]>(
+    const spoofedDocuments =
       await tenant.get(`/api/documents?organizationId=${encodeURIComponent(spoofedOwnerOrgId)}`)
-    );
-    expect(spoofedDocuments.some((document) => document.id === "doc1")).toBe(false);
+    ;
+    await expectForbidden(spoofedDocuments);
+    const spoofedDocumentsPayload = await spoofedDocuments.json();
+    expect(spoofedDocumentsPayload.error?.code).toBe("TENANT_SCOPE_CONFLICT");
 
     const adminOrg = await readOk<any>(
       await owner.get(`/api/admin/organizations/${encodeURIComponent(tenantInfo.organizationId)}`)

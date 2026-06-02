@@ -28,6 +28,7 @@ export interface User {
   organizationStatus?: string;
   organizationPlanId?: string;
   lastSeenAt?: string;
+  permissions?: string[];
 }
 
 export interface Customer {

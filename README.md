@@ -90,6 +90,8 @@ Default local owner login if `SEED_USER_PASSWORD` is not changed:
 
 Set `SEED_USER_PASSWORD` before running `npm run db:seed` for any real environment. The default password is only a local development convenience.
 
+`npm run seed:production-admin` is the fresh-production path for a new Liara database. It reads `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD`, `INITIAL_ADMIN_NAME`, `INITIAL_ORG_NAME`, and optional `INITIAL_ADMIN_PHONE`, then creates or reuses the first real admin user and organization without importing demo or legacy records. See [docs/deployment/fresh-production-admin-bootstrap.md](/C:/Users/Ahmadreza/Documents/logisticplus/docs/deployment/fresh-production-admin-bootstrap.md).
+
 ## Environment Variables
 
 See [.env.example](/C:/Users/Ahmadreza/Documents/logisticplus/.env.example) for the authoritative local template.
@@ -99,6 +101,11 @@ Important variables:
 - `DATABASE_URL`: PostgreSQL connection used by the API, seed script, bridge script, and data layer.
 - `POSTGRES_ADMIN_URL`: maintenance database connection used by the seed script to create the target database.
 - `SEED_USER_PASSWORD`: password assigned to the seeded owner user.
+- `INITIAL_ADMIN_EMAIL`: first real production admin email for `npm run seed:production-admin`.
+- `INITIAL_ADMIN_PASSWORD`: first real production admin password; must be strong and is never printed.
+- `INITIAL_ADMIN_NAME`: first real production admin display name.
+- `INITIAL_ORG_NAME`: first real production organization name.
+- `INITIAL_ADMIN_PHONE`: optional phone for the first real production admin.
 - `SEED_USER_ID`: owner user id used by the bridge script; defaults to `u1`.
 - `SEED_ORGANIZATION_ID`: default organization id used by the bridge script.
 - `APP_PUBLIC_URL`: public base URL used for generated links and Zarinpal callbacks.
@@ -161,6 +168,10 @@ npm run preview
 npm run db:schema
 npm run db:seed
 npm run db:bridge
+npm run seed:production-admin -- --dry-run
+npm run seed:production-admin
+npm run seed:production-admin:test
+npm run documents:storage:smoke
 npm run test:e2e:setup
 npm run test:e2e
 npm run smoke:production-config
@@ -175,13 +186,17 @@ Command notes:
 - `npm run build` runs the production Vite build.
 - `npm run preview` previews the Vite build only and may not represent the full Express API behavior.
 - `npm run db:schema` applies `db/schema.sql` to the current `DATABASE_URL` without seeding records.
+- `npm run seed:production-admin` bootstraps the first real production admin/org from `INITIAL_ADMIN_*` env vars without importing demo data.
+- `npm run seed:production-admin -- --dry-run` exercises the same bootstrap transaction and rolls it back.
+- `npm run seed:production-admin:test` verifies the bootstrap script against a disposable PostgreSQL test database.
+- `npm run documents:storage:smoke` writes, verifies, reads, and deletes a tiny object-storage probe using configured object-storage env vars.
 - `npm run test:e2e:setup` drops/recreates only `TEST_DATABASE_URL`, then runs `db:seed` and `db:bridge` against it.
 - `npm run test:e2e` runs the Playwright security regression suite against `TEST_PORT`.
 - `npm run test:e2e:headed` runs the same suite with a visible browser.
 - `npm run smoke:production-config` confirms production startup checks fail loudly when Liara disk/Zarinpal config is missing.
 - `npm run smoke:staging` validates a deployed Liara staging app when `STAGING_PUBLIC_URL` is set.
 - `npm run sms:prod-smoke -- precheck|prepare|run-worker|report` is a guarded Liara production SMS smoke utility; `run-worker` refuses live sending until the SMS.ir key rotation guard is satisfied.
-- `npm run deploy` runs `liara deploy` for the production `logisticplus` app and requires Liara CLI authentication/configuration.
+- `npm run deploy` runs `liara deploy` and requires Liara CLI authentication plus the correct fresh app selected or passed with `--app`.
 - `npm run deploy:staging` deploys with `liara.staging.json`, app `logisticplus-staging`, and disk mount `logisticplus-documents-staging:storage/documents`.
 
 Production start:
@@ -215,15 +230,27 @@ Login supports password auth and phone SMS codes for users with a valid phone nu
 
 ## Deployment Notes
 
-[liara.json](/C:/Users/Ahmadreza/Documents/logisticplus/liara.json) targets the production Liara app `logisticplus` on port `3000`, mounts the `logisticplus-documents` disk at `storage/documents`, and runs `npm run build` during build. [liara.staging.json](/C:/Users/Ahmadreza/Documents/logisticplus/liara.staging.json) targets a separate staging app named `logisticplus-staging` with the staging document disk mounted at `storage/documents`.
+[liara.json](/C:/Users/Ahmadreza/Documents/logisticplus/liara.json) is a generic Liara NodeJS config on port `3000`; it intentionally does not commit an app name, disk mount, database URL, object-storage bucket, or secret. Pass the fresh app name at deploy time with `liara deploy --app <LIARA_APP_NAME>` or select the app in the Liara CLI before running `liara deploy`. [liara.staging.json](/C:/Users/Ahmadreza/Documents/logisticplus/liara.staging.json) still targets the separate staging app named `logisticplus-staging`.
 
 For production, configure at minimum:
 
 - `DATABASE_URL`
 - `NODE_ENV=production`
 - `APP_PUBLIC_URL`
+- `SESSION_SECRET`
+- optional `COOKIE_DOMAIN`
 - `DOCUMENT_STORAGE_DIR`
 - `DOCUMENT_MAX_BYTES`
+- `DOCUMENT_STORAGE_MODE=object`
+- `OBJECT_STORAGE_ENABLED=true`
+- `OBJECT_STORAGE_PROVIDER=s3`
+- `S3_ENDPOINT`
+- `S3_REGION=default`
+- `S3_ACCESS_KEY_ID`
+- `S3_SECRET_ACCESS_KEY`
+- `S3_DOCUMENT_BUCKET`
+- `S3_FORCE_PATH_STYLE=true`
+- `DOCUMENT_STORAGE_DUAL_WRITE_REQUIRED=true`
 - `RATE_LIMIT_STORE=postgres`
 - `TRUST_PROXY=true`
 - `ZARINPAL_SANDBOX=false`
@@ -231,25 +258,36 @@ For production, configure at minimum:
 - `ZARINPAL_TIMEOUT_MS`
 - `SMS_DRY_RUN=true`
 - `SMS_WORKER_ENABLED=false`
+- `INITIAL_ADMIN_EMAIL`
+- `INITIAL_ADMIN_PASSWORD`
+- `INITIAL_ADMIN_NAME`
+- `INITIAL_ORG_NAME`
+- optional `INITIAL_ADMIN_PHONE`
 
-The current document storage adapter is local filesystem storage. On Liara, use a persistent disk mounted at `storage/documents`; the default platform filesystem is not durable for runtime uploads. Startup checks verify that `DOCUMENT_STORAGE_DIR` exists, is writable, and can read/delete a probe file before the server accepts traffic in production.
+Fresh Liara production should use private Liara Object Storage for new documents. Document downloads must continue through app authorization routes; do not make the bucket public.
 
 ### Liara Launch Checklist
 
-1. Create or select the Node.js app in Liara and keep `liara.json` pointed at app `logisticplus`, port `3000`, and disk `logisticplus-documents:storage/documents`.
+1. Create or select the Node.js app in Liara and keep `liara.json` as a NodeJS app on port `3000`.
 2. Create a Liara PostgreSQL database and set `DATABASE_URL` in app environment variables.
-3. Create a Liara disk and mount it to `storage/documents` for uploaded documents.
-4. Set production env vars: `NODE_ENV=production`, `APP_PUBLIC_URL=https://<your-domain>`, `DOCUMENT_STORAGE_DIR=storage/documents`, `RATE_LIMIT_STORE=postgres`, `TRUST_PROXY=true`, `ZARINPAL_SANDBOX=false`, the live `ZARINPAL_MERCHANT_ID`, and `SMS_DRY_RUN=true` for the first SMS rollout.
-5. Run `npm run build`, then deploy with `npm run deploy` or the Liara Console flow.
-6. After deploy, smoke check `/api/health`, login, upload/download a private document, expose one customer-visible document through a tracking token, and run one controlled live Zarinpal payment.
+3. Create a private Liara Object Storage bucket for documents.
+4. Set production env vars: `NODE_ENV=production`, `APP_PUBLIC_URL=https://<your-domain>`, `SESSION_SECRET`, `DOCUMENT_STORAGE_MODE=object`, `OBJECT_STORAGE_ENABLED=true`, Liara S3-compatible object-storage vars, `RATE_LIMIT_STORE=postgres`, `TRUST_PROXY=true`, `ZARINPAL_SANDBOX=false`, the live `ZARINPAL_MERCHANT_ID` when payments are ready, `SMS_DRY_RUN=true` for the first SMS rollout, and all required `INITIAL_ADMIN_*` vars.
+5. Run local preflight from [docs/deployment/liara-fresh-deploy-runbook.md](/C:/Users/Ahmadreza/Documents/logisticplus/docs/deployment/liara-fresh-deploy-runbook.md).
+6. Deploy with `liara deploy --app <LIARA_APP_NAME>` or the Liara Console flow.
+7. Run migrations in Liara shell: `liara shell --app <LIARA_APP_NAME> --command "npm run db:migrate"`.
+8. Dry-run the first admin bootstrap: `liara shell --app <LIARA_APP_NAME> --command "npm run seed:production-admin -- --dry-run"`.
+9. Run the first admin bootstrap: `liara shell --app <LIARA_APP_NAME> --command "npm run seed:production-admin"`.
+10. Smoke object storage: `liara shell --app <LIARA_APP_NAME> --command "npm run documents:storage:smoke"`.
+11. Login as the initial admin, verify `/admin`, verify `/dashboard`, then create real users and operational organization data manually.
+12. After deploy, smoke check `/api/health`, upload/download a private document, expose one customer-visible document through a tracking token, and run one controlled live Zarinpal payment when credentials are ready.
 
 For live SMS rollout, rotate the SMS.ir API key first, then set `SMS_ENABLED=true`, `SMS_DRY_RUN=false`, and either `SMSIR_LINE_NUMBER` or `SMSIR_USE_DEFAULT_LINE=true`. Use `npm run sms:prod-smoke -- precheck`, `prepare`, `run-worker`, and `report` in order for a controlled production send.
 
-Production data cleanup utility:
+Production data cleanup utility, not part of the fresh deployment path:
 
 ```powershell
-liara shell --app logisticplus --command "node scripts/clean-liara-production-data.mjs --counts"
-liara shell --app logisticplus --command "node scripts/clean-liara-production-data.mjs --apply"
+liara shell --app <LIARA_APP_NAME> --command "node scripts/clean-liara-production-data.mjs --counts"
+liara shell --app <LIARA_APP_NAME> --command "node scripts/clean-liara-production-data.mjs --apply"
 ```
 
 Run a Liara database backup before `--apply`. The utility preserves the owner user, default organization, membership, subscription, plans, roles, and permissions, then clears operational/test records and sessions.

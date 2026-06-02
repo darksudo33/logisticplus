@@ -14,14 +14,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useMockStore } from "@/src/store/useMockStore";
-import { ShipmentStatus } from "@/src/types";
+import { shipmentApi } from "@/src/lib/shipmentApi";
+import { Shipment, ShipmentStatus } from "@/src/types";
+import { toast } from "sonner";
 
 export function ShipmentEdit() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { shipments, updateShipment } = useMockStore();
-  const shipment = shipments.find(s => s.id === id);
+  const [shipment, setShipment] = useState<Shipment | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   const [formData, setFormData] = useState({
     trackingNumber: "",
@@ -34,18 +35,37 @@ export function ShipmentEdit() {
   });
 
   useEffect(() => {
-    if (shipment) {
+    let isMounted = true;
+    if (!id) return;
+    setIsLoading(true);
+    shipmentApi.get(id)
+      .then((loaded) => {
+        if (!isMounted) return;
+        setShipment(loaded);
       setFormData({
-        trackingNumber: shipment.trackingNumber,
-        containerNumber: shipment.containerNumber,
-        origin: shipment.origin,
-        destination: shipment.destination,
-        status: shipment.status,
-        estimatedDelivery: shipment.estimatedDelivery,
-        freeTimeDays: shipment.freeTimeDays
+          trackingNumber: loaded.trackingNumber,
+          containerNumber: loaded.containerNumber,
+          origin: loaded.origin,
+          destination: loaded.destination,
+          status: loaded.status,
+          estimatedDelivery: loaded.estimatedDelivery,
+          freeTimeDays: loaded.freeTimeDays
       });
-    }
-  }, [shipment]);
+      })
+      .catch((error) => {
+        toast.error(error instanceof Error ? error.message : "بارگذاری محموله ناموفق بود.");
+      })
+      .finally(() => {
+        if (isMounted) setIsLoading(false);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [id]);
+
+  if (isLoading) {
+    return <div className="app-page text-sm text-muted-foreground">در حال بارگذاری...</div>;
+  }
 
   if (!shipment) {
     return (
@@ -59,10 +79,20 @@ export function ShipmentEdit() {
     );
   }
 
+  const saveShipment = async () => {
+    try {
+      const updated = await shipmentApi.updateOperationalFields(shipment.id, formData);
+      setShipment(updated);
+      toast.success("محموله بروزرسانی شد.");
+      navigate(`/shipments/${shipment.id}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ذخیره محموله ناموفق بود.");
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    updateShipment(shipment.id, formData);
-    navigate(`/shipments/${shipment.id}`);
+    void saveShipment();
   };
 
   const statusOptions: { value: ShipmentStatus; label: string }[] = [
@@ -91,7 +121,7 @@ export function ShipmentEdit() {
             <X className="w-3.5 h-3.5 ml-2" />
             انصراف
           </Button>
-          <Button className="flex-1 sm:flex-none h-10 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-bold px-4 rounded-xl" onClick={handleSubmit}>
+          <Button className="flex-1 sm:flex-none h-10 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-bold px-4 rounded-xl" onClick={() => void saveShipment()}>
             <Save className="w-3.5 h-3.5 ml-2" />
             ذخیره
           </Button>

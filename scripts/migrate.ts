@@ -44,7 +44,7 @@ async function loadMigrations() {
   return Promise.all(
     names.map(async (name) => {
       const filePath = path.join(migrationsDir, name);
-      const sql = await fs.readFile(filePath, "utf8");
+      const sql = (await fs.readFile(filePath, "utf8")).replace(/^\uFEFF/, "");
       return {
         id: name.replace(/\.sql$/, ""),
         name,

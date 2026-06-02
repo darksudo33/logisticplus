@@ -1,13 +1,30 @@
 import crypto from "node:crypto";
-import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import multer from "multer";
 import { createApiError } from "./db.js";
+import {
+  deleteLocalObject,
+  documentLocalStorageInfo,
+  ensureLocalStorageRoot,
+  isPathInside,
+  resolveLocalStoragePath,
+} from "./storage/local-storage.js";
+import {
+  cleanupStoredDocumentWrite,
+  formatFileSize,
+  readDocumentObject,
+  storeDocumentBuffer,
+} from "./storage/document-storage-service.js";
+import {
+  documentStorageConfigInfo,
+  resolveDocumentStorageConfig,
+  validateObjectStorageConfig,
+} from "./storage/storage-config.js";
 
 const DOCUMENT_STORAGE_DIR =
   process.env.DOCUMENT_STORAGE_DIR || path.join(process.cwd(), "storage", "documents");
-const DOCUMENT_STORAGE_ROOT = path.resolve(DOCUMENT_STORAGE_DIR);
+const DOCUMENT_STORAGE_ROOT = documentLocalStorageInfo().root;
 const DOCUMENT_MAX_BYTES = Number(process.env.DOCUMENT_MAX_BYTES || 25 * 1024 * 1024);
 
 const upload = multer({
@@ -91,25 +108,8 @@ function validateDocumentFile(file) {
   return { ok: true };
 }
 
-function formatFileSize(bytes = 0) {
-  const size = Number(bytes) || 0;
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function isPathInside(root, target) {
-  const relative = path.relative(path.resolve(root), path.resolve(target));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 function resolveStoredDocumentPath(storageKey) {
-  if (!storageKey || path.isAbsolute(storageKey) || path.basename(storageKey) !== storageKey) {
-    return null;
-  }
-  const filePath = path.resolve(DOCUMENT_STORAGE_ROOT, storageKey);
-  if (!isPathInside(DOCUMENT_STORAGE_ROOT, filePath)) return null;
-  return filePath;
+  return resolveLocalStoragePath(storageKey);
 }
 
 function asciiFallbackFileName(fileName = "document") {
@@ -126,26 +126,7 @@ function asciiFallbackFileName(fileName = "document") {
 }
 
 async function ensureDocumentStorageRoot() {
-  if (!isPathInside(process.cwd(), DOCUMENT_STORAGE_ROOT) && !path.isAbsolute(DOCUMENT_STORAGE_DIR)) {
-    throw new Error(`DOCUMENT_STORAGE_DIR resolves outside the project: ${DOCUMENT_STORAGE_ROOT}`);
-  }
-
-  if (!isProduction()) {
-    await fs.mkdir(DOCUMENT_STORAGE_ROOT, { recursive: true });
-    return;
-  }
-
-  let stat;
-  try {
-    stat = await fs.stat(DOCUMENT_STORAGE_ROOT);
-  } catch {
-    throw new Error(
-      `DOCUMENT_STORAGE_DIR does not exist in production: ${DOCUMENT_STORAGE_ROOT}. Mount the Liara disk before starting.`
-    );
-  }
-  if (!stat.isDirectory()) {
-    throw new Error(`DOCUMENT_STORAGE_DIR must be a directory: ${DOCUMENT_STORAGE_ROOT}`);
-  }
+  await ensureLocalStorageRoot();
 }
 
 export function documentStorageInfo() {
@@ -153,10 +134,21 @@ export function documentStorageInfo() {
     directory: DOCUMENT_STORAGE_DIR,
     root: DOCUMENT_STORAGE_ROOT,
     maxBytes: DOCUMENT_MAX_BYTES,
+    objectStorage: documentStorageConfigInfo(),
   };
 }
 
 export async function verifyDocumentStorage() {
+  const config = resolveDocumentStorageConfig();
+  const objectErrors = validateObjectStorageConfig(config);
+  if (objectErrors.length) {
+    throw new Error(objectErrors.join(" "));
+  }
+
+  if (config.mode === "object") {
+    return;
+  }
+
   await ensureDocumentStorageRoot();
 
   const probeName = `.storage-probe-${process.pid}-${Date.now()}-${crypto.randomUUID()}.tmp`;
@@ -177,36 +169,49 @@ export async function verifyDocumentStorage() {
   }
 }
 
-export async function persistDocumentFile(file) {
+export async function persistDocumentFile(file, options = {}) {
   const validation = validateDocumentFile(file);
   if (!validation.ok) return { error: validation };
 
   await ensureDocumentStorageRoot();
   const sanitizedName = sanitizeFileName(file.originalname);
-  const ext = path.extname(sanitizedName);
-  const id = crypto.randomUUID();
-  const storageKey = `${id}${ext}`;
-  const destination = path.resolve(DOCUMENT_STORAGE_ROOT, storageKey);
-  if (!isPathInside(DOCUMENT_STORAGE_ROOT, destination)) {
-    return { error: documentValidationError("INVALID_STORAGE_PATH", "Stored file path is invalid.", 400) };
+  let stored;
+  try {
+    stored = await storeDocumentBuffer({
+      buffer: file.buffer,
+      fileName: sanitizedName,
+      contentType: file.mimetype || "application/octet-stream",
+      organizationId: options.organizationId,
+    });
+  } catch {
+    return { error: documentValidationError("STORAGE_WRITE_FAILED", "Document storage write failed.", 500) };
   }
-  const checksum = crypto.createHash("sha256").update(file.buffer).digest("hex");
-  await fs.writeFile(destination, file.buffer, { flag: "wx" });
 
   return {
     sanitizedName,
-    storageKey,
-    checksum,
+    storageKey: stored.storageKey,
+    objectKey: stored.objectKey,
+    storageProvider: stored.storageProvider,
+    storageBucket: stored.objectBucket,
+    storageRegion: stored.objectRegion,
+    localPath: stored.localPath,
+    checksum: stored.checksum,
+    checksumSha256: stored.checksumSha256,
     mimeType: file.mimetype || "application/octet-stream",
+    contentType: stored.contentType,
     fileSize: formatFileSize(file.size),
-    absolutePath: destination,
+    sizeBytes: stored.sizeBytes,
+    storageMigratedAt: stored.storageMigratedAt,
+    storageVerifiedAt: stored.storageVerifiedAt,
+    storageMigrationStatus: stored.storageMigrationStatus,
+    storageMigrationError: stored.storageMigrationError,
+    objectWrite: stored.objectWrite,
+    absolutePath: stored.storageKey ? resolveStoredDocumentPath(stored.storageKey) : null,
   };
 }
 
 export async function cleanupPersistedDocument(persisted) {
-  if (!persisted?.absolutePath) return;
-  if (!isPathInside(DOCUMENT_STORAGE_ROOT, persisted.absolutePath)) return;
-  await fs.unlink(persisted.absolutePath).catch(() => {});
+  await cleanupStoredDocumentWrite(persisted);
 }
 
 export async function deleteStoredDocumentFiles(storageKeys = []) {
@@ -220,8 +225,10 @@ export async function deleteStoredDocumentFiles(storageKeys = []) {
       continue;
     }
     try {
-      await fs.unlink(filePath);
-      result.deleted.push(storageKey);
+      const deleted = await deleteLocalObject(storageKey);
+      if (deleted?.deleted) result.deleted.push(storageKey);
+      else if (deleted?.reason === "missing") result.missing.push(storageKey);
+      else result.skipped.push(storageKey);
     } catch (error) {
       if (error?.code === "ENOENT") {
         result.missing.push(storageKey);
@@ -235,29 +242,22 @@ export async function deleteStoredDocumentFiles(storageKeys = []) {
 }
 
 export async function sendStoredDocument(res, document) {
-  const filePath = resolveStoredDocumentPath(document?.storage_key);
-  if (!filePath) {
-    return createApiError(res, 404, "FILE_NOT_FOUND", "Stored file was not found.");
-  }
-  let stat;
-  try {
-    stat = await fs.stat(filePath);
-  } catch {
-    return createApiError(res, 404, "FILE_NOT_FOUND", "Stored file was not found.");
-  }
-  if (!stat.isFile()) {
+  const stored = await readDocumentObject(document);
+  if (!stored?.stream) {
     return createApiError(res, 404, "FILE_NOT_FOUND", "Stored file was not found.");
   }
   const fileName = document.file_name || document.title || "document";
   const fallbackName = asciiFallbackFileName(fileName);
-  res.setHeader("Content-Type", document.mime_type || "application/octet-stream");
-  res.setHeader("Content-Length", String(stat.size));
+  res.setHeader("Content-Type", stored.contentType || document.mime_type || "application/octet-stream");
+  if (stored.contentLength !== null && stored.contentLength !== undefined) {
+    res.setHeader("Content-Length", String(stored.contentLength));
+  }
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader(
     "Content-Disposition",
     `attachment; filename="${fallbackName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`
   );
-  createReadStream(filePath).on("error", () => res.end()).pipe(res);
+  stored.stream.on("error", () => res.end()).pipe(res);
 }
 
 export function uploadSingle(req, res) {

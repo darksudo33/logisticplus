@@ -35,6 +35,11 @@ const COLLECTION_KEYS = [
   "defaultSteps",
 ] as const;
 
+// Compatibility bridge only: collections migrated to canonical APIs must not be
+// persisted back through /api/users/:id/records, or stale frontend state can
+// overwrite the canonical tables.
+const CANONICAL_API_COLLECTIONS = new Set<string>(["shipments"]);
+
 const normalizeUser = (user: LoginUser | null): User | null => {
   if (!user) return null;
   const { password_hash, is_online, ...rest } = user;
@@ -194,7 +199,39 @@ export const useMockStore = create<MockStore>((set) => ({
     if (!user) return;
 
     useMockStore.setState({ isHydratingFromDatabase: true });
-    const response = await fetch(`/api/users/${user.id}/bootstrap`);
+    const authResponse = await fetch("/api/auth/me");
+    if (!authResponse.ok) {
+      if (authResponse.status === 401 || authResponse.status === 403) {
+        persistCurrentUser(null);
+        useMockStore.setState({
+          currentUser: null,
+          hasHydratedFromDatabase: false,
+          isHydratingFromDatabase: false,
+        });
+      } else {
+        useMockStore.setState({ isHydratingFromDatabase: false });
+      }
+      throw new Error("Could not restore current session.");
+    }
+
+    const authPayload = await authResponse.json();
+    const restoredUser = normalizeUser({
+      ...authPayload.data?.user,
+      permissions: authPayload.data?.permissions || authPayload.data?.user?.permissions || [],
+    });
+    if (!restoredUser) {
+      persistCurrentUser(null);
+      useMockStore.setState({
+        currentUser: null,
+        hasHydratedFromDatabase: false,
+        isHydratingFromDatabase: false,
+      });
+      throw new Error("Could not restore current session.");
+    }
+    persistCurrentUser(restoredUser);
+    useMockStore.setState({ currentUser: restoredUser });
+
+    const response = await fetch(`/api/users/${restoredUser.id}/bootstrap`);
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
         persistCurrentUser(null);
@@ -882,6 +919,7 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 const buildDatabasePayload = (state: MockStore) => {
   return COLLECTION_KEYS.reduce((records, key) => {
+    if (CANONICAL_API_COLLECTIONS.has(key)) return records;
     records[key] = (state as any)[key] || [];
     return records;
   }, {} as Record<string, any[]>);

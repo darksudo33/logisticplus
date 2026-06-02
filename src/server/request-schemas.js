@@ -60,6 +60,15 @@ export const publicDocumentParamsSchema = z.object({
   id: requiredId,
 });
 
+export const publicDocumentQuerySchema = z.object({
+  shipmentCode: z.preprocess(firstQueryValue, optionalTrimmedText(120)),
+  expires: z.preprocess(firstQueryValue, optionalTrimmedText(32)),
+  signature: z.preprocess(
+    firstQueryValue,
+    z.string().trim().min(20).max(256).regex(/^[A-Za-z0-9_-]+$/).optional()
+  ),
+});
+
 export const publicTrackSearchBodySchema = z.object({
   shipmentCode: z.string().trim().min(1, "Shipment code is required.").max(120),
   verification: z.string().trim().min(1, "Verification value is required.").max(200),
@@ -117,6 +126,50 @@ export const customerUpdateBodySchema = customerMutationBaseSchema;
 export const shipmentParamsSchema = z.object({
   id: requiredId,
 });
+
+const shipmentStatus = z.enum(["PENDING", "BOOKED", "IN_TRANSIT", "ARRIVED", "CUSTOMS", "CLEARED", "DELIVERED", "CLOSED"]);
+const optionalNonNegativeNumber = z.preprocess((value) => {
+  if (value === "" || value === undefined || value === null) return undefined;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : value;
+}, z.number().min(0).optional());
+
+const shipmentOperationalFieldsBaseSchema = z.object({
+  trackingNumber: optionalTrimmedText(120),
+  shipmentCode: optionalTrimmedText(120),
+  containerNumber: optionalTrimmedText(120),
+  containerCount: optionalNonNegativeNumber,
+  grossWeightKg: optionalNonNegativeNumber,
+  weight: optionalNonNegativeNumber,
+  customerId: optionalId,
+  customerName: optionalTrimmedText(180),
+  origin: optionalTrimmedText(180),
+  destination: optionalTrimmedText(180),
+  status: shipmentStatus.optional(),
+  estimatedDelivery: optionalTrimmedText(80),
+  actualDelivery: optionalTrimmedText(80),
+  freeTimeDays: optionalNonNegativeNumber,
+  notes: optionalTrimmedText(4000),
+  customsDeclarationNumber: optionalTrimmedText(120),
+  customsStatus: optionalTrimmedText(120),
+  importPermitNumber: optionalTrimmedText(120),
+  assignedManagerId: optionalId,
+}).strict();
+
+export const shipmentCreateBodySchema = shipmentOperationalFieldsBaseSchema.refine(
+  (value) => value.trackingNumber || value.shipmentCode,
+  {
+    message: "Shipment tracking number is required.",
+    path: ["trackingNumber"],
+  }
+);
+
+export const shipmentOperationalFieldsBodySchema = shipmentOperationalFieldsBaseSchema.refine(
+  (value) => Object.values(value).some((item) => item !== undefined),
+  {
+    message: "At least one shipment field is required.",
+  }
+);
 
 export const shipmentStepParamsSchema = shipmentParamsSchema.extend({
   stepId: requiredId,

@@ -291,14 +291,26 @@ CREATE TABLE IF NOT EXISTS role_permissions (
   PRIMARY KEY (role_id, permission_id)
 );
 
+CREATE TABLE IF NOT EXISTS user_permissions (
+  user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  permission_id TEXT NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+  granted_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, permission_id)
+);
+
 CREATE TABLE IF NOT EXISTS app_sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
   token_hash TEXT NOT NULL UNIQUE,
   expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE IF EXISTS app_sessions ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS login_sms_challenges (
   id TEXT PRIMARY KEY,
@@ -687,7 +699,19 @@ CREATE TABLE IF NOT EXISTS documents (
   mime_type TEXT,
   file_size TEXT,
   storage_key TEXT,
+  storage_provider TEXT NOT NULL DEFAULT 'local',
+  object_key TEXT,
+  storage_bucket TEXT,
+  storage_region TEXT,
+  local_path TEXT,
   checksum TEXT,
+  checksum_sha256 TEXT,
+  size_bytes BIGINT,
+  content_type TEXT,
+  storage_migrated_at TIMESTAMPTZ,
+  storage_verified_at TIMESTAMPTZ,
+  storage_migration_status TEXT NOT NULL DEFAULT 'local',
+  storage_migration_error TEXT,
   version INTEGER NOT NULL DEFAULT 1,
   uploaded_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
   uploaded_by_name TEXT,
@@ -709,6 +733,18 @@ CREATE TABLE IF NOT EXISTS document_versions (
   document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   version INTEGER NOT NULL,
   storage_key TEXT,
+  storage_provider TEXT NOT NULL DEFAULT 'local',
+  object_key TEXT,
+  storage_bucket TEXT,
+  storage_region TEXT,
+  local_path TEXT,
+  checksum_sha256 TEXT,
+  size_bytes BIGINT,
+  content_type TEXT,
+  storage_migrated_at TIMESTAMPTZ,
+  storage_verified_at TIMESTAMPTZ,
+  storage_migration_status TEXT NOT NULL DEFAULT 'local',
+  storage_migration_error TEXT,
   file_name TEXT,
   uploaded_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -787,8 +823,61 @@ CREATE TABLE IF NOT EXISTS change_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
+  actor_user_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  actor_type TEXT NOT NULL DEFAULT 'system',
+  event_type TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT,
+  request_id TEXT,
+  ip TEXT,
+  user_agent TEXT,
+  before_json JSONB,
+  after_json JSONB,
+  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE OR REPLACE FUNCTION prevent_audit_logs_mutation()
+RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'audit_logs is append-only';
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_trigger
+    WHERE tgname = 'audit_logs_prevent_update'
+      AND tgrelid = 'audit_logs'::regclass
+  ) THEN
+    CREATE TRIGGER audit_logs_prevent_update
+    BEFORE UPDATE ON audit_logs
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_audit_logs_mutation();
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_trigger
+    WHERE tgname = 'audit_logs_prevent_delete'
+      AND tgrelid = 'audit_logs'::regclass
+  ) THEN
+    CREATE TRIGGER audit_logs_prevent_delete
+    BEFORE DELETE ON audit_logs
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_audit_logs_mutation();
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS app_sessions_user_idx ON app_sessions (user_id);
 CREATE INDEX IF NOT EXISTS app_sessions_token_hash_idx ON app_sessions (token_hash);
+CREATE INDEX IF NOT EXISTS app_sessions_active_token_hash_idx ON app_sessions (token_hash) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS user_permissions_permission_idx ON user_permissions (permission_id);
 CREATE INDEX IF NOT EXISTS login_sms_challenges_phone_idx ON login_sms_challenges (phone, created_at DESC);
 CREATE INDEX IF NOT EXISTS login_sms_challenges_user_idx ON login_sms_challenges (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS rate_limit_buckets_reset_at_idx ON rate_limit_buckets (reset_at);
@@ -877,7 +966,11 @@ CREATE INDEX IF NOT EXISTS documents_customer_id_idx ON documents (customer_id);
 CREATE INDEX IF NOT EXISTS documents_org_updated_idx ON documents (organization_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS documents_org_title_idx ON documents (organization_id, title);
 CREATE INDEX IF NOT EXISTS documents_org_file_name_idx ON documents (organization_id, file_name);
+CREATE INDEX IF NOT EXISTS documents_storage_migration_status_idx ON documents (storage_migration_status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS documents_object_key_idx ON documents (object_key) WHERE object_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS document_versions_document_created_idx ON document_versions (document_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS document_versions_storage_migration_status_idx ON document_versions (storage_migration_status, created_at DESC);
+CREATE INDEX IF NOT EXISTS document_versions_object_key_idx ON document_versions (object_key) WHERE object_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS sms_deliveries_status_idx ON sms_deliveries (status, next_attempt_at, created_at);
 CREATE INDEX IF NOT EXISTS sms_deliveries_org_idx ON sms_deliveries (organization_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS sms_deliveries_source_idx ON sms_deliveries (source_type, source_id);
@@ -885,6 +978,11 @@ CREATE INDEX IF NOT EXISTS sms_deliveries_recipient_idx ON sms_deliveries (organ
 CREATE INDEX IF NOT EXISTS change_logs_entity_idx ON change_logs (entity_type, entity_id);
 CREATE INDEX IF NOT EXISTS change_logs_created_at_idx ON change_logs (created_at DESC);
 CREATE INDEX IF NOT EXISTS change_logs_organization_idx ON change_logs (organization_id);
+CREATE INDEX IF NOT EXISTS audit_logs_organization_idx ON audit_logs (organization_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_logs_actor_user_idx ON audit_logs (actor_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_logs_event_type_idx ON audit_logs (event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_logs_resource_idx ON audit_logs (resource_type, resource_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_logs_created_at_idx ON audit_logs (created_at DESC);
 CREATE INDEX IF NOT EXISTS app_users_org_id_idx ON app_users (organization_id, id);
 CREATE INDEX IF NOT EXISTS customers_org_id_idx ON customers (organization_id, id);
 CREATE INDEX IF NOT EXISTS shipments_org_id_idx ON shipments (organization_id, id);

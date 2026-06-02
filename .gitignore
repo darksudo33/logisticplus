@@ -5,6 +5,7 @@ coverage/
 playwright-report/
 test-results/
 storage/test-documents/
+storage/test-object-documents/
 storage/documents/
 backups/
 .DS_Store

@@ -63,6 +63,7 @@ function collectUnsafeKeys(value: unknown, path = ""): string[] {
     /cheque/i,
     /compliance/i,
     /internal/i,
+    /private/i,
     /^task/i,
   ];
 
@@ -91,15 +92,55 @@ export function expectPublicTrackingPayloadIsSafe(data: any) {
   ]);
   expect(Array.isArray(data.steps)).toBe(true);
   expect(Array.isArray(data.documents)).toBe(true);
+  for (const document of data.documents) {
+    expect(Object.keys(document).sort()).toEqual([
+      "createdAt",
+      "downloadUrl",
+      "fileName",
+      "fileSize",
+      "id",
+      "title",
+    ]);
+    expect(document.downloadUrl).toContain("/api/public/documents/");
+    expect(document.downloadUrl).not.toContain("/api/public/track/");
+  }
   expect(Object.keys(data.company).sort()).toEqual(["contactText", "name"]);
   expect(collectUnsafeKeys(data)).toEqual([]);
 
   const serialized = JSON.stringify(data).toLowerCase();
   for (const forbidden of [
+    "organizationid",
     "owner_user_id",
     "organization_id",
     "legacy_data",
     "customer_access_token",
+    "trackingtoken",
+    "tokenhash",
+    "sessiontoken",
+    "storagekey",
+    "storage_key",
+    "objectkey",
+    "object_key",
+    "storageprovider",
+    "storage_provider",
+    "storagebucket",
+    "storage_bucket",
+    "storageregion",
+    "storage_region",
+    "localpath",
+    "local_path",
+    "filepath",
+    "file_path",
+    "bucket",
+    "region",
+    "signedurl",
+    "signed_url",
+    "internalnotes",
+    "privatenotes",
+    "payment",
+    "invoice",
+    "receipt",
+    "sms",
     "password_hash",
     "audit",
     "cheques",

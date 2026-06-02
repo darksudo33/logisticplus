@@ -1,6 +1,8 @@
-import { expect, test } from "@playwright/test";
+import { expect, request as requestFactory, test } from "@playwright/test";
+import crypto from "node:crypto";
 import pg from "pg";
 import {
+  BASE_URL,
   OWNER_EMAIL,
   OWNER_PASSWORD,
   USER_PASSWORD,
@@ -29,6 +31,47 @@ async function resetRateLimitBuckets() {
   }
 }
 
+async function dbQuery(sql: string, params: any[] = []) {
+  const client = new Client({ connectionString: testDatabaseUrl });
+  await client.connect();
+  try {
+    return await client.query(sql, params);
+  } finally {
+    await client.end();
+  }
+}
+
+async function grantPlatformAdminPermission(userId: string, grantedById = "u1") {
+  await dbQuery(
+    `INSERT INTO user_permissions (user_id, permission_id, granted_by_id, reason)
+     SELECT $1, id, $2, 'Playwright explicit platform.admin grant'
+     FROM permissions
+     WHERE key = 'platform.admin'
+     ON CONFLICT (user_id, permission_id) DO NOTHING`,
+    [userId, grantedById]
+  );
+}
+
+async function createRawSession(userId: string, { expiresAt, revokedAt = null }: { expiresAt: Date; revokedAt?: Date | null }) {
+  const token = crypto.randomBytes(32).toString("base64url");
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  await dbQuery(
+    `INSERT INTO app_sessions (id, user_id, token_hash, expires_at, revoked_at)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [crypto.randomUUID(), userId, tokenHash, expiresAt, revokedAt]
+  );
+  return token;
+}
+
+async function contextWithSessionToken(token: string) {
+  return requestFactory.newContext({
+    baseURL: BASE_URL,
+    extraHTTPHeaders: {
+      Cookie: `logisticplus_session=${encodeURIComponent(token)}`,
+    },
+  });
+}
+
 async function createTenantOwner(owner: Awaited<ReturnType<typeof loginApi>>) {
   const tenantEmail = uniqueEmail("e2e-owner");
   const companyName = `E2E Tenant ${Date.now()}`;
@@ -47,7 +90,7 @@ async function createTenantOwner(owner: Awaited<ReturnType<typeof loginApi>>) {
     })
   );
 
-  return { tenantEmail, companyName, organizationId: data.organizationId };
+  return { tenantEmail, companyName, organizationId: data.organizationId, ownerUserId: data.ownerUserId };
 }
 
 async function createCompanyUser(owner: Awaited<ReturnType<typeof loginApi>>, role: string, prefix: string) {
@@ -130,6 +173,8 @@ test.describe.serial("security regression harness", () => {
     expect(auth.payload.ok).toBe(true);
     expect(auth.payload.data.user.email).toBe(OWNER_EMAIL);
     expect(auth.payload.data.permissions).toContain("platform.admin");
+    const ownerHash = await dbQuery("SELECT password_hash FROM app_users WHERE id = 'u1'");
+    expect(ownerHash.rows[0]?.password_hash).toMatch(/^\$2[aby]\$/);
   });
 
   test("blocks non-admin company users from company management and platform admin APIs", async () => {
@@ -153,6 +198,35 @@ test.describe.serial("security regression harness", () => {
     await readOk(await employee.get("/api/archive"));
 
     await disposeContexts(owner, employee);
+  });
+
+  test("requires explicit platform.admin grants for platform admin APIs", async () => {
+    const publicContext = await apiContext();
+    await expectForbidden(await publicContext.get("/api/admin/overview"));
+
+    const owner = await loginApi();
+    const ownerAuth = await readOk<any>(await owner.get("/api/auth/me"));
+    expect(ownerAuth.permissions).toContain("platform.admin");
+    const ownerGrant = await dbQuery(
+      `SELECT COUNT(*)::int AS count
+       FROM user_permissions up
+       JOIN permissions p ON p.id = up.permission_id
+       WHERE up.user_id = 'u1'
+         AND p.key = 'platform.admin'`
+    );
+    expect(Number(ownerGrant.rows[0]?.count || 0)).toBeGreaterThan(0);
+    await readOk(await owner.get("/api/admin/overview"));
+
+    const tenantInfo = await createTenantOwner(owner);
+    const tenant = await loginApi(tenantInfo.tenantEmail, USER_PASSWORD);
+    await expectForbidden(await tenant.get("/api/admin/overview"));
+
+    await grantPlatformAdminPermission(tenantInfo.ownerUserId);
+    const tenantAuth = await readOk<any>(await tenant.get("/api/auth/me"));
+    expect(tenantAuth.permissions).toContain("platform.admin");
+    await readOk(await tenant.get("/api/admin/overview"));
+
+    await disposeContexts(publicContext, owner, tenant);
   });
 
   test("keeps manually created companies isolated from the seed organization", async () => {
@@ -342,6 +416,21 @@ test.describe.serial("security regression harness", () => {
     const afterLogout = await owner.get("/api/auth/me");
     expect(afterLogout.status(), await afterLogout.text()).toBe(401);
 
+    const expiredContext = await contextWithSessionToken(
+      await createRawSession("u1", { expiresAt: new Date(Date.now() - 60_000) })
+    );
+    const expiredRestore = await expiredContext.get("/api/auth/me");
+    expect(expiredRestore.status(), await expiredRestore.text()).toBe(401);
+
+    const revokedContext = await contextWithSessionToken(
+      await createRawSession("u1", {
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+        revokedAt: new Date(),
+      })
+    );
+    const revokedRestore = await revokedContext.get("/api/auth/me");
+    expect(revokedRestore.status(), await revokedRestore.text()).toBe(401);
+
     const publicContext = await apiContext();
     const badEmail = uniqueEmail("bad-login");
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -349,6 +438,9 @@ test.describe.serial("security regression harness", () => {
         data: { email: badEmail, password: "wrong-password" },
       });
       expect(response.status(), await response.text()).toBe(401);
+      const payload = await response.json();
+      expect(payload.error.code).toBe("INVALID_CREDENTIALS");
+      expect(payload.error.message).toBe("Invalid email or password.");
     }
     const limited = await publicContext.post("/api/auth/login", {
       data: { email: badEmail, password: "wrong-password" },
@@ -358,7 +450,7 @@ test.describe.serial("security regression harness", () => {
     expect(payload.error.code).toBe("RATE_LIMITED");
     expect(limited.headers()["retry-after"]).toBeTruthy();
 
-    await disposeContexts(owner, publicContext);
+    await disposeContexts(owner, expiredContext, revokedContext, publicContext);
   });
 
   test("supports remember-me cookies and phone SMS login", async () => {
@@ -367,14 +459,24 @@ test.describe.serial("security regression harness", () => {
       data: { email: OWNER_EMAIL, password: OWNER_PASSWORD, remember: true },
     });
     expect(rememberedLogin.status(), await rememberedLogin.text()).toBeLessThan(400);
-    expect(rememberedLogin.headers()["set-cookie"]).toContain("Expires=");
+    const rememberedCookie = rememberedLogin.headers()["set-cookie"] || "";
+    expect(rememberedCookie).toContain("HttpOnly");
+    expect(rememberedCookie).toContain("SameSite=Lax");
+    expect(rememberedCookie).toContain("Path=/");
+    expect(rememberedCookie).toContain("Max-Age=");
+    expect(rememberedCookie).toContain("Expires=");
 
     const sessionOnlyContext = await apiContext();
     const sessionOnlyLogin = await sessionOnlyContext.post("/api/auth/login", {
       data: { email: OWNER_EMAIL, password: OWNER_PASSWORD, remember: false },
     });
     expect(sessionOnlyLogin.status(), await sessionOnlyLogin.text()).toBeLessThan(400);
-    expect(sessionOnlyLogin.headers()["set-cookie"]).not.toContain("Expires=");
+    const sessionOnlyCookie = sessionOnlyLogin.headers()["set-cookie"] || "";
+    expect(sessionOnlyCookie).toContain("HttpOnly");
+    expect(sessionOnlyCookie).toContain("SameSite=Lax");
+    expect(sessionOnlyCookie).toContain("Path=/");
+    expect(sessionOnlyCookie).toContain("Max-Age=");
+    expect(sessionOnlyCookie).not.toContain("Expires=");
 
     const phoneContext = await apiContext();
     const requested = await readOk<any>(
@@ -688,6 +790,16 @@ test.describe.serial("security regression harness", () => {
         visibility: "customer_visible",
       })
     );
+    const internalDocument = await readOk<any>(
+      await uploadDocument(owner, {
+        name: "tracking-internal.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("internal tracking document"),
+      }, {
+        shipmentId: "s1",
+        visibility: "internal",
+      })
+    );
 
     const access = await readOk<{ token: string }>(
       await owner.post("/api/shipments/s1/customer-access/generate")
@@ -704,17 +816,42 @@ test.describe.serial("security regression harness", () => {
       await publicContext.get(`/api/public/track/${encodeURIComponent(access.token)}`)
     );
     expect(byToken.shipment.code).toBe("LS-9801");
-    expect(byToken.documents.some((document: any) => document.id === visibleDocument.id)).toBe(true);
+    const visiblePublicDocument = byToken.documents.find((document: any) => document.id === visibleDocument.id);
+    expect(visiblePublicDocument).toBeTruthy();
+    expect(byToken.documents.some((document: any) => document.id === internalDocument.id)).toBe(false);
     expectPublicTrackingPayloadIsSafe(byToken);
 
-    const publicDocument = await publicContext.get(`/api/public/documents/${encodeURIComponent(visibleDocument.id)}`);
+    const publicDocument = await publicContext.get(visiblePublicDocument.downloadUrl);
     expect(publicDocument.status(), await publicDocument.text()).toBeLessThan(400);
     expect(publicDocument.headers()["x-content-type-options"]).toBe("nosniff");
+    await expectUnavailable(await publicContext.get(`/api/public/documents/${encodeURIComponent(visibleDocument.id)}`));
+    await expectUnavailable(
+      await publicContext.get(`/api/public/track/${encodeURIComponent(access.token)}/documents/${encodeURIComponent(internalDocument.id)}`)
+    );
 
     const tokenDocument = await publicContext.get(
       `/api/public/track/${encodeURIComponent(access.token)}/documents/${encodeURIComponent(visibleDocument.id)}`
     );
     expect(tokenDocument.status(), await tokenDocument.text()).toBeLessThan(400);
+
+    const tenantInfo = await createTenantOwner(owner);
+    const tenantShipmentId = crypto.randomUUID();
+    const tenantDocumentId = crypto.randomUUID();
+    await dbQuery(
+      `INSERT INTO shipments (id, organization_id, owner_user_id, shipment_code, customer_name, status, origin, destination)
+       VALUES ($1, $2, $3, $4, 'Tenant customer', 'IN_TRANSIT', 'Tehran', 'Dubai')`,
+      [tenantShipmentId, tenantInfo.organizationId, tenantInfo.ownerUserId, `TENANT-${Date.now()}`]
+    );
+    await dbQuery(
+      `INSERT INTO documents (
+         id, organization_id, owner_user_id, title, file_name, mime_type, file_size, shipment_id, visibility
+       )
+       VALUES ($1, $2, $3, 'Tenant public document', 'tenant-public.txt', 'text/plain', '1 B', $4, 'customer_visible')`,
+      [tenantDocumentId, tenantInfo.organizationId, tenantInfo.ownerUserId, tenantShipmentId]
+    );
+    await expectUnavailable(
+      await publicContext.get(`/api/public/track/${encodeURIComponent(access.token)}/documents/${encodeURIComponent(tenantDocumentId)}`)
+    );
 
     const resetAccess = await readOk<{ token: string }>(
       await owner.post("/api/shipments/s1/customer-access/reset")
@@ -737,6 +874,18 @@ test.describe.serial("security regression harness", () => {
     );
     expect(bySearch.shipment.code).toBe("LS-9801");
     expectPublicTrackingPayloadIsSafe(bySearch);
+    const searchedPublicDocument = bySearch.documents.find((document: any) => document.id === visibleDocument.id);
+    expect(searchedPublicDocument?.downloadUrl).toContain("/api/public/documents/");
+    const searchDocumentDownload = await publicContext.get(searchedPublicDocument.downloadUrl);
+    expect(searchDocumentDownload.status(), await searchDocumentDownload.text()).toBeLessThan(400);
+
+    const wrongVerification = await publicContext.post("/api/public/track/search", {
+      data: {
+        shipmentCode: "LS-9801",
+        verification: "not-the-customer@example.test",
+      },
+    });
+    await expectUnavailable(wrongVerification);
 
     const invalidSearch = await publicContext.post("/api/public/track/search", {
       data: { shipmentCode: "", verification: "" },
