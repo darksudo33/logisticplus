@@ -84,7 +84,7 @@ function StepStatusIcon({ status, blocked }: { status: string; blocked: boolean 
   return <ChevronDown className="h-4 w-4" />;
 }
 
-type IranImportProgressTimelineProps = {
+type ShipmentWorkflowTimelineProps = {
   progress: ShipmentWorkflowProgress | null | undefined;
   isLoading?: boolean;
   onStart: () => void | Promise<void>;
@@ -97,7 +97,7 @@ type IranImportProgressTimelineProps = {
   onAssignTask: (context: { step?: ShipmentWorkflowStep; blocker?: ShipmentWorkflowBlocker }) => void;
 };
 
-export function IranImportProgressTimeline({
+export function ShipmentWorkflowTimeline({
   progress,
   isLoading = false,
   onStart,
@@ -108,7 +108,7 @@ export function IranImportProgressTimeline({
   onAddBlocker,
   onResolveBlocker,
   onAssignTask,
-}: IranImportProgressTimelineProps) {
+}: ShipmentWorkflowTimelineProps) {
   const workflow = progress?.workflow;
   const visibleGroups = React.useMemo(() => progress ? groupVisibleSteps(progress) : [], [progress]);
   const hiddenSteps = React.useMemo(() => progress?.steps.filter((step) => !step.isVisible) || [], [progress]);
@@ -116,7 +116,12 @@ export function IranImportProgressTimeline({
   const total = progress?.summary?.totalStepsCount || 0;
   const percent = total ? Math.round((completed / total) * 100) : 0;
   const currentStep = progress?.steps.find((step) => step.code === workflow?.currentStepCode);
-  const routePending = Boolean(workflow && !workflow.customsRoute && isRouteStep(workflow.currentStepCode));
+  const workflowTitleFa = progress?.definition?.titleFa || "گردش کار محموله";
+  const hasIranCustomsRouteRule = Boolean(
+    progress?.definition?.routeVisibilityRule === "iran_customs_route_v1"
+      || progress?.definition?.steps.some((step) => step.visibilityRule?.type === "iran_customs_route_v1")
+  );
+  const routePending = Boolean(hasIranCustomsRouteRule && workflow && !workflow.customsRoute && isRouteStep(workflow.currentStepCode));
   const phaseSummaries = React.useMemo(() => {
     return visibleGroups.map((phase) => {
       const openBlockers = phase.steps.reduce(
@@ -202,9 +207,9 @@ export function IranImportProgressTimeline({
       <Card className="rounded-2xl border-primary/10 bg-card shadow-sm">
         <CardContent className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">
           <div className="space-y-1">
-            <p className="text-sm font-black text-foreground">گردش کار واردات ایران</p>
+            <p className="text-sm font-black text-foreground">{workflowTitleFa}</p>
             <p className="text-xs font-medium leading-6 text-muted-foreground">
-              برای این محموله هنوز مسیر ثبت سفارش تا خروج از گمرک شروع نشده است.
+              گردش کار این محموله هنوز شروع نشده است.
             </p>
           </div>
           <Button data-testid="workflow-start" onClick={onStart} disabled={isLoading} className="h-10 gap-2 rounded-xl px-5 font-black shadow-sm shadow-primary/10">
@@ -223,7 +228,7 @@ export function IranImportProgressTimeline({
           <div>
             <CardTitle className="flex items-center gap-2 text-lg font-black md:text-xl">
               <Route className="h-5 w-5 text-primary" />
-              مسیر واردات ایران
+              {workflowTitleFa}
             </CardTitle>
             <p className="mt-1 text-xs font-bold leading-6 text-muted-foreground">
               {currentStep ? `${currentStep.labelFa} / ${currentStep.labelEn}` : "مرحله فعال انتخاب نشده است"}

@@ -8,6 +8,11 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { pricingPlans } from "../src/lib/pricing.ts";
 import { DEFAULT_SHIPMENT_FORM_TEMPLATE_DEFINITIONS } from "../src/shared/shipment-form-fields.js";
+import {
+  IR_IMPORT_CUSTOMS_PHASES,
+  IR_IMPORT_CUSTOMS_STEPS,
+  IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
+} from "../src/shared/iran-import-customs-workflow.js";
 import { DEFAULT_SMS_TEMPLATES } from "../src/server/sms-templates.js";
 
 const { Client } = pg;
@@ -29,6 +34,7 @@ const permissionKeys = [
   "shipments.update",
   "shipments.archive",
   "shipment_forms.manage",
+  "shipment_workflows.manage",
   "shipment_steps.update",
   "customers.view",
   "customers.create",
@@ -84,7 +90,7 @@ const companyOperationalPermissions = [
 
 const rolePermissions = {
   CEO: permissionKeys,
-  MANAGER: permissionKeys.filter((key) => !["users.promote", "chat.media.view", "chat.media.delete"].includes(key)),
+  MANAGER: permissionKeys.filter((key) => !["users.promote", "chat.media.view", "chat.media.delete", "shipment_workflows.manage"].includes(key)),
   OPERATIONS: ["dashboard.view", ...companyOperationalPermissions],
   CUSTOMER_SERVICE: ["dashboard.view", ...companyOperationalPermissions],
   FINANCE: ["dashboard.view", "cheques.manage", ...companyOperationalPermissions],
@@ -298,6 +304,22 @@ function shipmentTemplateFieldId(typeCode: string, fieldKey: string) {
   return `${shipmentTemplateId(typeCode)}-field-${fieldKey}`;
 }
 
+const importWorkflowShipmentTypes = [
+  "IMPORT_LENJ",
+  "IMPORT_SEA_CONTAINER",
+  "IMPORT_SEA_BULK",
+  "IMPORT_AIR_CARGO",
+  "IMPORT_LAND_TRUCK",
+];
+
+function workflowTemplatePhaseId(phaseKey: string) {
+  return `swt-ir-import-customs-v1-phase-${phaseKey}`;
+}
+
+function workflowTemplateStepId(stepKey: string) {
+  return `swts-ir-import-customs-v1-${stepKey.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
 async function seedShipmentFormTemplates(client: Client) {
   for (const template of DEFAULT_SHIPMENT_FORM_TEMPLATE_DEFINITIONS) {
     const templateId = shipmentTemplateId(template.shipmentTypeCode);
@@ -400,6 +422,122 @@ async function seedShipmentFormTemplates(client: Client) {
         );
       }
     }
+  }
+}
+
+async function seedShipmentWorkflowTemplates(client: Client) {
+  await client.query(
+    `INSERT INTO shipment_workflow_templates (
+       id, organization_id, code, shipment_direction, transport_mode, shipment_type_hint,
+       title_fa, title_en, description, is_system, is_active, version, published_at,
+       created_at, updated_at
+     )
+     VALUES (
+       'swt-ir-import-customs-v1', NULL, $1, 'import', 'sea', 'IMPORT_SEA_CONTAINER',
+       'گردش کار واردات و ترخیص ایران', 'Iran import customs workflow',
+       'Controlled system workflow for Iran import customs operations.', TRUE, TRUE, 1, NOW(),
+       NOW(), NOW()
+     )
+     ON CONFLICT (id) DO UPDATE SET
+       code = EXCLUDED.code,
+       shipment_direction = EXCLUDED.shipment_direction,
+       transport_mode = EXCLUDED.transport_mode,
+       shipment_type_hint = EXCLUDED.shipment_type_hint,
+       title_fa = EXCLUDED.title_fa,
+       title_en = EXCLUDED.title_en,
+       description = EXCLUDED.description,
+       is_system = TRUE,
+       is_active = TRUE,
+       archived_at = NULL,
+       updated_at = NOW()`,
+    [IR_IMPORT_CUSTOMS_WORKFLOW_KEY]
+  );
+
+  for (const [index, phase] of IR_IMPORT_CUSTOMS_PHASES.entries()) {
+    await client.query(
+      `INSERT INTO shipment_workflow_template_phases (
+         id, template_id, phase_key, label_fa, label_en, sort_order, is_visible, created_at, updated_at
+       )
+       VALUES ($1, 'swt-ir-import-customs-v1', $2, $3, $4, $5, TRUE, NOW(), NOW())
+       ON CONFLICT (template_id, phase_key) DO UPDATE SET
+         label_fa = EXCLUDED.label_fa,
+         label_en = EXCLUDED.label_en,
+         sort_order = EXCLUDED.sort_order,
+         is_visible = TRUE,
+         updated_at = NOW()`,
+      [
+        workflowTemplatePhaseId(phase.id),
+        phase.id,
+        phase.labelFa,
+        phase.labelEn,
+        index + 1,
+      ]
+    );
+  }
+
+  for (const step of IR_IMPORT_CUSTOMS_STEPS) {
+    await client.query(
+      `INSERT INTO shipment_workflow_template_steps (
+         id, template_id, phase_id, phase_key, step_key, label_fa, label_en, public_label,
+         sort_order, is_required, is_visible, is_customer_visible, role_suggestion,
+         expected_duration_hours, task_policy_json, expected_documents_json,
+         expected_form_fields_json, next_step_rules_json, visibility_rule_json, created_at, updated_at
+       )
+       VALUES (
+         $1, 'swt-ir-import-customs-v1', $2, $3, $4, $5, $6, $7,
+         $8, TRUE, TRUE, TRUE, NULL, NULL, '{"mode":"suggested"}'::jsonb, '[]'::jsonb,
+         '[]'::jsonb, '{}'::jsonb, $9::jsonb, NOW(), NOW()
+       )
+       ON CONFLICT (id) DO UPDATE SET
+         phase_id = EXCLUDED.phase_id,
+         phase_key = EXCLUDED.phase_key,
+         label_fa = EXCLUDED.label_fa,
+         label_en = EXCLUDED.label_en,
+         public_label = EXCLUDED.public_label,
+         sort_order = EXCLUDED.sort_order,
+         is_required = TRUE,
+         is_visible = TRUE,
+         is_customer_visible = TRUE,
+         task_policy_json = EXCLUDED.task_policy_json,
+         expected_documents_json = EXCLUDED.expected_documents_json,
+         expected_form_fields_json = EXCLUDED.expected_form_fields_json,
+         next_step_rules_json = EXCLUDED.next_step_rules_json,
+         visibility_rule_json = EXCLUDED.visibility_rule_json,
+         archived_at = NULL,
+         updated_at = NOW()`,
+      [
+        workflowTemplateStepId(step.code),
+        workflowTemplatePhaseId(step.phaseId),
+        step.phaseId,
+        step.code,
+        step.labelFa,
+        step.labelEn,
+        step.phaseId === "customs_route" ? "پرونده در حال بررسی گمرکی است" : step.labelFa,
+        step.order,
+        JSON.stringify(step.phaseId === "customs_route" ? { type: "iran_customs_route_v1" } : {}),
+      ]
+    );
+  }
+
+  for (const typeCode of importWorkflowShipmentTypes) {
+    await client.query(
+      `INSERT INTO shipment_type_workflow_templates (
+         id, organization_id, shipment_type_code, workflow_template_id,
+         workflow_template_code, workflow_template_version, created_at, updated_at
+       )
+       VALUES ($1, NULL, $2, 'swt-ir-import-customs-v1', $3, 1, NOW(), NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         workflow_template_id = EXCLUDED.workflow_template_id,
+         workflow_template_code = EXCLUDED.workflow_template_code,
+         workflow_template_version = EXCLUDED.workflow_template_version,
+         archived_at = NULL,
+         updated_at = NOW()`,
+      [
+        `stwt-global-${typeCode}`,
+        typeCode,
+        IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
+      ]
+    );
   }
 }
 
@@ -839,6 +977,7 @@ async function bridge() {
     await seedSaasFoundation(client);
     await seedRolesAndPermissions(client);
     await seedShipmentFormTemplates(client);
+    await seedShipmentWorkflowTemplates(client);
 
     const users = await getCollection(client, "users");
     const customers = await getCollection(client, "customers");

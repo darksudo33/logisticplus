@@ -553,6 +553,100 @@ export const shipmentFormTemplateFieldUpdateBodySchema = z.object({
   { message: "At least one field update is required." }
 );
 
+export const shipmentWorkflowTemplateParamsSchema = z.object({
+  id: requiredId,
+});
+
+export const shipmentWorkflowTemplateStepParamsSchema = shipmentWorkflowTemplateParamsSchema.extend({
+  stepId: requiredId,
+});
+
+export const shipmentTypeWorkflowTemplateParamsSchema = z.object({
+  shipmentTypeCode,
+});
+
+export const shipmentWorkflowTemplateListQuerySchema = z.object({
+  shipmentTypeCode: z.preprocess(firstQueryValue, shipmentTypeCode.optional()),
+}).strict();
+
+const workflowTemplateJsonArray = z.array(z.unknown()).max(80);
+
+export const shipmentWorkflowTemplateCreateBodySchema = z.object({
+  sourceTemplateId: optionalId,
+  code: optionalTrimmedText(120),
+  shipmentTypeCode: shipmentTypeCode.optional(),
+  shipmentDirection: shipmentDirection.optional(),
+  transportMode: shipmentTransportMode.optional(),
+  titleFa: z.string().trim().min(1).max(180),
+  titleEn: optionalTrimmedText(180),
+  description: optionalTrimmedText(1000),
+  isActive: z.boolean().optional(),
+}).strict();
+
+export const shipmentWorkflowTemplateUpdateBodySchema = z.object({
+  titleFa: optionalTrimmedText(180),
+  titleEn: optionalTrimmedText(180),
+  description: optionalTrimmedText(1000),
+  isActive: z.boolean().optional(),
+}).strict().refine(
+  (value) => Object.values(value).some((item) => item !== undefined),
+  { message: "At least one workflow template field is required." }
+);
+
+export const shipmentWorkflowTemplatePublishBodySchema = z.object({
+  shipmentTypeCode: shipmentTypeCode.optional(),
+  titleFa: optionalTrimmedText(180),
+  titleEn: optionalTrimmedText(180),
+  description: optionalTrimmedText(1000),
+}).strict();
+
+export const shipmentWorkflowTemplateStepCreateBodySchema = z.object({
+  phaseId: optionalId,
+  phaseKey: optionalTrimmedText(80),
+  stepKey: z.string().trim().min(1).max(32).regex(/^[A-Za-z0-9_-]+$/, "Step key must be ASCII."),
+  labelFa: z.string().trim().min(1).max(240),
+  labelEn: optionalTrimmedText(240),
+  publicLabel: optionalTrimmedText(240),
+  sortOrder: optionalNonNegativeNumber,
+  isRequired: z.boolean().optional(),
+  isVisible: z.boolean().optional(),
+  isCustomerVisible: z.boolean().optional(),
+  roleSuggestion: optionalTrimmedText(120),
+  expectedDurationHours: optionalNonNegativeNumber,
+  taskPolicy: z.record(z.unknown()).optional(),
+  expectedDocuments: workflowTemplateJsonArray.optional(),
+  expectedFormFields: workflowTemplateJsonArray.optional(),
+  nextStepRules: z.record(z.unknown()).optional(),
+}).strict().refine(
+  (value) => Boolean(value.phaseId || value.phaseKey),
+  { path: ["phaseId"], message: "A workflow phase is required." }
+);
+
+export const shipmentWorkflowTemplateStepUpdateBodySchema = z.object({
+  phaseId: optionalId,
+  phaseKey: optionalTrimmedText(80),
+  labelFa: optionalTrimmedText(240),
+  labelEn: optionalTrimmedText(240),
+  publicLabel: optionalTrimmedText(240),
+  sortOrder: optionalNonNegativeNumber,
+  isRequired: z.boolean().optional(),
+  isVisible: z.boolean().optional(),
+  isCustomerVisible: z.boolean().optional(),
+  roleSuggestion: optionalTrimmedText(120),
+  expectedDurationHours: optionalNonNegativeNumber,
+  taskPolicy: z.record(z.unknown()).optional(),
+  expectedDocuments: workflowTemplateJsonArray.optional(),
+  expectedFormFields: workflowTemplateJsonArray.optional(),
+  nextStepRules: z.record(z.unknown()).optional(),
+}).strict().refine(
+  (value) => Object.values(value).some((item) => item !== undefined),
+  { message: "At least one workflow step field is required." }
+);
+
+export const shipmentTypeWorkflowTemplateBodySchema = z.object({
+  templateId: requiredId,
+}).strict();
+
 export const shipmentPublicStatusBodySchema = z.object({
   publicLabel: z.string().trim().min(1, "Public status label is required.").max(180),
   publicDescription: optionalTrimmedText(1000),

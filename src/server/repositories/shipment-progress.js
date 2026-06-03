@@ -5,26 +5,91 @@ import {
   IR_IMPORT_CUSTOMS_STEPS,
   IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
   getIranImportBlocker,
-  getIranImportPhase,
-  getIranImportStep,
   isValidIranImportBlockerCode,
   isValidIranImportRoute,
-  isValidIranImportStepCode,
   isVisibleForCustomsRoute,
-  publicLabelForStep,
-  publicPhaseForStep,
   safePublicBlockerMessage,
 } from "../../shared/iran-import-customs-workflow.js";
+import {
+  getActiveShipmentWorkflowTemplateForShipment,
+  getWorkflowDefinitionForInstance,
+  getWorkflowDefinitionForShipment,
+  normalizeWorkflowDefinition,
+  workflowDefinitionFromTemplate,
+} from "./shipment-workflow-templates.js";
 import { requireOrganizationScope } from "../tenant-scope.js";
 import { withTransaction } from "../transaction.js";
 
-const TERMINAL_STEP_CODE = "066";
+function fallbackWorkflowDefinition() {
+  return normalizeWorkflowDefinition({
+    key: IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
+    code: IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
+    version: 1,
+    titleFa: "فرآیند واردات و ترخیص ایران",
+    titleEn: "Iran import customs progression",
+    phases: IR_IMPORT_CUSTOMS_PHASES,
+    steps: IR_IMPORT_CUSTOMS_STEPS.map((step) => ({
+      ...step,
+      phaseKey: step.phaseId,
+      stepKey: step.code,
+      publicLabel: step.phaseId === "customs_route" ? "پرونده در حال بررسی گمرکی است" : step.labelFa,
+      isRequired: true,
+      isVisible: true,
+      isCustomerVisible: true,
+      visibilityRule: step.phaseId === "customs_route" ? { type: "iran_customs_route_v1" } : {},
+    })),
+    blockers: IR_IMPORT_CUSTOMS_BLOCKERS,
+    routeVisibilityRule: "iran_customs_route_v1",
+  });
+}
+
+function stepByCode(definition, code) {
+  return (definition?.steps || []).find((step) => step.code === String(code || "") || step.stepKey === String(code || "")) || null;
+}
+
+function phaseById(definition, id) {
+  return (definition?.phases || []).find((phase) => phase.id === String(id || "") || phase.phaseKey === String(id || "")) || null;
+}
+
+function blockerByCode(definition, code) {
+  return (definition?.blockers || IR_IMPORT_CUSTOMS_BLOCKERS).find((blocker) => blocker.code === String(code || "")) || null;
+}
+
+function isValidWorkflowStepCode(definition, code) {
+  return Boolean(stepByCode(definition, code));
+}
+
+function isVisibleForWorkflowRoute(step, customsRoute) {
+  if (step?.visibilityRule?.type === "iran_customs_route_v1") {
+    return isVisibleForCustomsRoute(step.code, customsRoute);
+  }
+  return step?.isVisible !== false;
+}
+
+function publicLabelForWorkflowStep(definition, stepCode) {
+  const step = stepByCode(definition, stepCode);
+  return step?.publicLabel || step?.labelFa || "وضعیت محموله به‌روزرسانی شد";
+}
+
+function publicPhaseForWorkflowStep(definition, stepCode) {
+  const step = stepByCode(definition, stepCode);
+  const phase = step ? phaseById(definition, step.phaseId || step.phaseKey) : null;
+  return phase?.labelFa || "پیگیری محموله";
+}
+
+function terminalStepCode(definition) {
+  const ordered = [...(definition?.steps || [])].sort((a, b) => a.order - b.order);
+  return ordered[ordered.length - 1]?.code || "066";
+}
 
 function normalizeInstance(row) {
   if (!row) return null;
   return {
     id: row.id,
     workflowKey: row.workflow_key,
+    workflowTemplateId: row.workflow_template_id || null,
+    workflowTemplateCode: row.workflow_template_code || null,
+    workflowTemplateVersion: row.workflow_template_version || null,
     status: row.status,
     shipmentId: row.shipment_id,
     currentStepCode: row.current_step_code,
@@ -38,17 +103,25 @@ function normalizeInstance(row) {
   };
 }
 
-function normalizeStep(row) {
-  const definition = getIranImportStep(row.step_code);
-  const phase = definition ? getIranImportPhase(definition.phaseId) : null;
+function normalizeStep(row, definition) {
+  const stepDefinition = stepByCode(definition, row.step_code);
+  const phase = stepDefinition ? phaseById(definition, stepDefinition.phaseId || stepDefinition.phaseKey) : null;
   return {
     code: row.step_code,
-    phaseId: definition?.phaseId || null,
+    phaseId: stepDefinition?.phaseId || stepDefinition?.phaseKey || null,
     phaseLabelFa: phase?.labelFa || "",
     phaseLabelEn: phase?.labelEn || "",
-    labelFa: definition?.labelFa || row.step_code,
-    labelEn: definition?.labelEn || row.step_code,
-    order: definition?.order || 0,
+    labelFa: stepDefinition?.labelFa || row.step_code,
+    labelEn: stepDefinition?.labelEn || row.step_code,
+    publicLabel: stepDefinition?.publicLabel || stepDefinition?.labelFa || row.step_code,
+    isRequired: stepDefinition?.isRequired !== false,
+    isCustomerVisible: stepDefinition?.isCustomerVisible !== false,
+    roleSuggestion: stepDefinition?.roleSuggestion || "",
+    expectedDurationHours: stepDefinition?.expectedDurationHours ?? null,
+    taskPolicy: stepDefinition?.taskPolicy || {},
+    expectedDocuments: stepDefinition?.expectedDocuments || [],
+    expectedFormFields: stepDefinition?.expectedFormFields || [],
+    order: stepDefinition?.order || 0,
     status: row.status,
     isVisible: row.is_visible !== false,
     isExceptional: Boolean(row.is_exceptional),
@@ -62,16 +135,16 @@ function normalizeStep(row) {
   };
 }
 
-function normalizeBlocker(row) {
-  const definition = getIranImportBlocker(row.blocker_code);
+function normalizeBlocker(row, definition) {
+  const blockerDefinition = blockerByCode(definition, row.blocker_code) || getIranImportBlocker(row.blocker_code);
   return {
     id: row.id,
     workflowInstanceId: row.workflow_instance_id,
     shipmentId: row.shipment_id,
     stepCode: row.step_code || null,
     blockerCode: row.blocker_code,
-    labelFa: definition?.labelFa || row.blocker_code,
-    labelEn: definition?.labelEn || row.blocker_code,
+    labelFa: blockerDefinition?.labelFa || row.blocker_code,
+    labelEn: blockerDefinition?.labelEn || row.blocker_code,
     status: row.status,
     internalNote: row.internal_note || "",
     publicNote: row.public_note || "",
@@ -103,17 +176,8 @@ function normalizeEvent(row) {
   };
 }
 
-function workflowDefinition() {
-  return {
-    key: IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
-    phases: IR_IMPORT_CUSTOMS_PHASES,
-    steps: IR_IMPORT_CUSTOMS_STEPS,
-    blockers: IR_IMPORT_CUSTOMS_BLOCKERS,
-  };
-}
-
 function nextVisibleStepCode(steps, currentCode) {
-  const current = getIranImportStep(currentCode);
+  const current = steps.find((step) => step.code === currentCode);
   if (!current) return currentCode;
   const next = steps
     .filter((step) => step.isVisible && step.status !== "completed" && step.status !== "skipped")
@@ -122,8 +186,8 @@ function nextVisibleStepCode(steps, currentCode) {
   return next?.code || currentCode;
 }
 
-function progressSummary(steps, currentStepCode, blockers) {
-  const publicSteps = steps.filter((step) => step.isVisible);
+function progressSummary(steps, currentStepCode, blockers, definition) {
+  const publicSteps = steps.filter((step) => step.isVisible && step.isCustomerVisible !== false);
   const completed = publicSteps.filter((step) => step.status === "completed").length;
   const currentStep =
     steps.find((step) => step.code === currentStepCode) ||
@@ -136,8 +200,8 @@ function progressSummary(steps, currentStepCode, blockers) {
     currentStepCode: currentStep?.code || null,
     currentLabelFa: currentStep?.labelFa || "",
     currentLabelEn: currentStep?.labelEn || "",
-    currentPublicPhase: currentStep ? publicPhaseForStep(currentStep.code) : "",
-    currentPublicLabel: currentStep ? publicLabelForStep(currentStep.code) : "",
+    currentPublicPhase: currentStep ? publicPhaseForWorkflowStep(definition, currentStep.code) : "",
+    currentPublicLabel: currentStep ? publicLabelForWorkflowStep(definition, currentStep.code) : "",
     completedStepsCount: completed,
     totalStepsCount: publicSteps.length,
     openBlockersCount: openBlockers.length,
@@ -147,7 +211,8 @@ function progressSummary(steps, currentStepCode, blockers) {
 
 async function getShipment(queryable, shipmentId, organizationId, { lock = false } = {}) {
   const result = await queryable.query(
-    `SELECT id, organization_id, owner_user_id, assigned_manager_id, shipment_code
+    `SELECT id, organization_id, owner_user_id, assigned_manager_id, shipment_code,
+            shipment_type_code, shipment_direction, transport_mode
      FROM shipments
      WHERE id = $1 AND organization_id = $2
      ${lock ? "FOR UPDATE" : ""}
@@ -163,34 +228,52 @@ async function getInstance(queryable, shipmentId, organizationId) {
      FROM shipment_workflow_instances
      WHERE shipment_id = $1
        AND organization_id = $2
-       AND workflow_key = $3
+       AND status <> 'cancelled'
+     ORDER BY created_at DESC
      LIMIT 1`,
-    [shipmentId, organizationId, IR_IMPORT_CUSTOMS_WORKFLOW_KEY]
+    [shipmentId, organizationId]
   );
   return result.rows[0] || null;
 }
 
 async function createWorkflowInstance(queryable, { shipmentId, organizationId, actorUserId, metadata = {} } = {}) {
+  const activeTemplate = await getActiveShipmentWorkflowTemplateForShipment(queryable, {
+    organizationId,
+    shipmentId,
+  });
+  if (!activeTemplate) return null;
+  if (!activeTemplate.template && activeTemplate.shipment?.shipmentDirection !== "import") return null;
+  const definition = activeTemplate?.template
+    ? workflowDefinitionFromTemplate(activeTemplate.template)
+    : fallbackWorkflowDefinition();
+  if (!definition?.steps?.length) return null;
+  const firstStep = [...definition.steps].sort((a, b) => a.order - b.order)[0];
   const instanceId = crypto.randomUUID();
   const instanceResult = await queryable.query(
     `INSERT INTO shipment_workflow_instances (
-       id, organization_id, shipment_id, workflow_key, status, current_step_code,
-       started_by_user_id, metadata
+       id, organization_id, shipment_id, workflow_key, workflow_template_id,
+       workflow_template_code, workflow_template_version, workflow_definition_snapshot_json,
+       status, current_step_code, started_by_user_id, metadata
      )
-     VALUES ($1, $2, $3, $4, 'active', '001', $5, $6::jsonb)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'active', $9, $10, $11::jsonb)
      RETURNING *`,
     [
       instanceId,
       organizationId,
       shipmentId,
-      IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
+      definition.code || definition.key || IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
+      definition.templateId || activeTemplate?.template?.id || null,
+      definition.code || definition.key || IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
+      definition.version || activeTemplate?.template?.version || 1,
+      JSON.stringify(definition),
+      firstStep.code,
       actorUserId || null,
       JSON.stringify(metadata || {}),
     ]
   );
   const instance = instanceResult.rows[0];
 
-  for (const step of IR_IMPORT_CUSTOMS_STEPS) {
+  for (const step of definition.steps) {
     await queryable.query(
       `INSERT INTO shipment_workflow_step_states (
          workflow_instance_id, organization_id, shipment_id, step_code, status, is_visible
@@ -201,17 +284,17 @@ async function createWorkflowInstance(queryable, { shipmentId, organizationId, a
         organizationId,
         shipmentId,
         step.code,
-        step.code === "001" ? "active" : "pending",
-        isVisibleForCustomsRoute(step.code, null),
+        step.code === firstStep.code ? "active" : "pending",
+        isVisibleForWorkflowRoute(step, null),
       ]
     );
   }
 
   await insertEvent(queryable, instance, {
     eventType: "workflow.started",
-    stepCode: "001",
+    stepCode: firstStep.code,
     actorUserId,
-    metadata,
+    metadata: { ...metadata, workflowTemplateCode: definition.code, workflowTemplateVersion: definition.version },
   });
   return instance;
 }
@@ -251,7 +334,7 @@ async function insertEvent(queryable, instance, {
   );
 }
 
-async function writePublicProjection(queryable, instance, { stepCode, publicNote, actorUserId }) {
+async function writePublicProjection(queryable, instance, definition, { stepCode, publicNote, actorUserId }) {
   const trimmed = String(publicNote || "").trim();
   if (!trimmed) return;
   await queryable.query(
@@ -263,7 +346,7 @@ async function writePublicProjection(queryable, instance, { stepCode, publicNote
       crypto.randomUUID(),
       instance.organization_id,
       instance.shipment_id,
-      publicLabelForStep(stepCode),
+      publicLabelForWorkflowStep(definition, stepCode),
       trimmed,
       actorUserId || null,
     ]
@@ -275,17 +358,25 @@ async function buildProgressPayload(queryable, shipmentId, organizationId) {
   if (!shipment) return null;
   const instance = await getInstance(queryable, shipmentId, organizationId);
   if (!instance) {
+    const definition = await getWorkflowDefinitionForShipment(queryable, {
+      organizationId,
+      shipmentId,
+    });
     return {
-      definition: workflowDefinition(),
+      definition,
       shipmentId,
       workflow: null,
-      phases: IR_IMPORT_CUSTOMS_PHASES,
+      phases: definition?.phases || [],
       steps: [],
       blockers: [],
       history: [],
       summary: null,
     };
   }
+  const definition = await getWorkflowDefinitionForInstance(queryable, {
+    organizationId,
+    instance,
+  }) || fallbackWorkflowDefinition();
 
   const stepsResult = await queryable.query(
     `SELECT *
@@ -312,21 +403,21 @@ async function buildProgressPayload(queryable, shipmentId, organizationId) {
   );
 
   const normalizedSteps = stepsResult.rows
-    .map(normalizeStep)
+    .map((row) => normalizeStep(row, definition))
     .sort((a, b) => a.order - b.order);
-  const blockers = blockersResult.rows.map(normalizeBlocker);
+  const blockers = blockersResult.rows.map((row) => normalizeBlocker(row, definition));
   return {
-    definition: workflowDefinition(),
+    definition,
     shipmentId,
     workflow: normalizeInstance(instance),
-    phases: IR_IMPORT_CUSTOMS_PHASES,
+    phases: definition.phases || [],
     steps: normalizedSteps.map((step) => ({
       ...step,
       blockers: blockers.filter((blocker) => blocker.stepCode === step.code),
     })),
     blockers,
     history: eventsResult.rows.map(normalizeEvent),
-    summary: progressSummary(normalizedSteps, instance.current_step_code, blockers),
+    summary: progressSummary(normalizedSteps, instance.current_step_code, blockers, definition),
   };
 }
 
@@ -344,12 +435,13 @@ export async function startShipmentWorkflow(pool, { shipmentId, organizationId, 
     const existing = await getInstance(client, shipmentId, scopedOrganizationId);
     if (existing) return buildProgressPayload(client, shipmentId, scopedOrganizationId);
 
-    await createWorkflowInstance(client, {
+    const created = await createWorkflowInstance(client, {
       shipmentId,
       organizationId: scopedOrganizationId,
       actorUserId,
       metadata,
     });
+    if (!created) return { noWorkflowTemplate: true };
     return buildProgressPayload(client, shipmentId, scopedOrganizationId);
   });
 }
@@ -371,8 +463,6 @@ export async function updateShipmentWorkflowCurrent(pool, {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "updateShipmentWorkflowCurrent");
   return withTransaction(pool, async (client) => {
     let instance = await getInstance(client, shipmentId, scopedOrganizationId);
-    const code = String(stepCode || instance?.current_step_code || "001");
-    if (!isValidIranImportStepCode(code)) return { invalidStep: true };
     if (customsRoute && !isValidIranImportRoute(customsRoute)) return { invalidRoute: true };
     if (!instance) {
       const shipment = await getShipment(client, shipmentId, scopedOrganizationId, { lock: true });
@@ -383,7 +473,15 @@ export async function updateShipmentWorkflowCurrent(pool, {
         actorUserId,
         metadata: { autoStartedBy: "progress_mutation", ...metadata },
       });
+      if (!instance) return { noWorkflowTemplate: true };
     }
+    const definition = await getWorkflowDefinitionForInstance(client, {
+      organizationId: scopedOrganizationId,
+      instance,
+    }) || fallbackWorkflowDefinition();
+    const firstStepCode = [...(definition.steps || [])].sort((a, b) => a.order - b.order)[0]?.code || "001";
+    const code = String(stepCode || instance?.current_step_code || firstStepCode);
+    if (!isValidWorkflowStepCode(definition, code)) return { invalidStep: true };
 
     const nextRoute = customsRoute || instance.customs_route || null;
     if (customsRoute) {
@@ -393,7 +491,7 @@ export async function updateShipmentWorkflowCurrent(pool, {
          WHERE id = $1 AND organization_id = $2`,
         [instance.id, scopedOrganizationId, customsRoute]
       );
-      for (const step of IR_IMPORT_CUSTOMS_STEPS) {
+      for (const step of definition.steps || []) {
         await client.query(
           `UPDATE shipment_workflow_step_states
            SET is_visible = CASE WHEN is_exceptional THEN TRUE ELSE $4 END,
@@ -401,7 +499,7 @@ export async function updateShipmentWorkflowCurrent(pool, {
            WHERE workflow_instance_id = $1
              AND organization_id = $2
              AND step_code = $3`,
-          [instance.id, scopedOrganizationId, step.code, isVisibleForCustomsRoute(step.code, customsRoute)]
+          [instance.id, scopedOrganizationId, step.code, isVisibleForWorkflowRoute(step, customsRoute)]
         );
       }
     }
@@ -483,14 +581,14 @@ export async function updateShipmentWorkflowCurrent(pool, {
        WHERE workflow_instance_id = $1 AND organization_id = $2`,
       [instance.id, scopedOrganizationId]
     );
-    const normalizedSteps = stepsResult.rows.map(normalizeStep);
+    const normalizedSteps = stepsResult.rows.map((row) => normalizeStep(row, definition));
     const nextCurrent =
       storedStatus === "completed"
         ? nextVisibleStepCode(normalizedSteps, code)
         : hasStatusUpdate && storedStatus === "active"
           ? code
           : instance.current_step_code;
-    const instanceStatus = code === TERMINAL_STEP_CODE && storedStatus === "completed" ? "completed" : "active";
+    const instanceStatus = code === terminalStepCode(definition) && storedStatus === "completed" ? "completed" : "active";
     if (storedStatus === "completed" && nextCurrent && nextCurrent !== code && instanceStatus === "active") {
       await client.query(
         `UPDATE shipment_workflow_step_states
@@ -537,7 +635,7 @@ export async function updateShipmentWorkflowCurrent(pool, {
       publicVisible: Boolean(publicVisible || publicNote),
       metadata: { ...metadata, status: storedStatus, customsRoute: nextRoute },
     });
-    await writePublicProjection(client, refreshedInstance, {
+    await writePublicProjection(client, refreshedInstance, definition, {
       stepCode: code,
       publicNote,
       actorUserId,
@@ -559,7 +657,6 @@ export async function addShipmentWorkflowBlocker(pool, {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "addShipmentWorkflowBlocker");
   return withTransaction(pool, async (client) => {
     if (!isValidIranImportBlockerCode(blockerCode)) return { invalidBlocker: true };
-    if (stepCode && !isValidIranImportStepCode(stepCode)) return { invalidStep: true };
     let instance = await getInstance(client, shipmentId, scopedOrganizationId);
     if (!instance) {
       const shipment = await getShipment(client, shipmentId, scopedOrganizationId, { lock: true });
@@ -570,7 +667,13 @@ export async function addShipmentWorkflowBlocker(pool, {
         actorUserId,
         metadata: { autoStartedBy: "blocker_mutation", ...metadata },
       });
+      if (!instance) return { noWorkflowTemplate: true };
     }
+    const definition = await getWorkflowDefinitionForInstance(client, {
+      organizationId: scopedOrganizationId,
+      instance,
+    }) || fallbackWorkflowDefinition();
+    if (stepCode && !isValidWorkflowStepCode(definition, stepCode)) return { invalidStep: true };
 
     const blockerId = crypto.randomUUID();
     const result = await client.query(
@@ -604,13 +707,13 @@ export async function addShipmentWorkflowBlocker(pool, {
       publicVisible: Boolean(publicNote),
       metadata,
     });
-    await writePublicProjection(client, instance, {
+    await writePublicProjection(client, instance, definition, {
       stepCode: stepCode || instance.current_step_code,
       publicNote: publicNote ? safePublicBlockerMessage(publicNote) : "",
       actorUserId,
     });
     return {
-      blocker: normalizeBlocker(result.rows[0]),
+      blocker: normalizeBlocker(result.rows[0], definition),
       progress: await buildProgressPayload(client, shipmentId, scopedOrganizationId),
     };
   });
@@ -631,6 +734,10 @@ export async function resolveShipmentWorkflowBlocker(pool, {
   return withTransaction(pool, async (client) => {
     const instance = await getInstance(client, shipmentId, scopedOrganizationId);
     if (!instance) return null;
+    const definition = await getWorkflowDefinitionForInstance(client, {
+      organizationId: scopedOrganizationId,
+      instance,
+    }) || fallbackWorkflowDefinition();
     const nextStatus = status === "cancelled" ? "cancelled" : "resolved";
     const values = [
       scopedOrganizationId,
@@ -680,13 +787,13 @@ export async function resolveShipmentWorkflowBlocker(pool, {
       publicVisible: Boolean(publicNote),
       metadata,
     });
-    await writePublicProjection(client, instance, {
+    await writePublicProjection(client, instance, definition, {
       stepCode: blocker.step_code || instance.current_step_code,
       publicNote,
       actorUserId,
     });
     return {
-      blocker: normalizeBlocker(blocker),
+      blocker: normalizeBlocker(blocker, definition),
       progress: await buildProgressPayload(client, shipmentId, scopedOrganizationId),
     };
   });
@@ -698,14 +805,17 @@ export async function getPublicWorkflowSummary(queryable, shipmentId) {
       `SELECT *
        FROM shipment_workflow_instances
        WHERE shipment_id = $1
-         AND workflow_key = $2
          AND status <> 'cancelled'
        ORDER BY created_at DESC
        LIMIT 1`,
-      [shipmentId, IR_IMPORT_CUSTOMS_WORKFLOW_KEY]
+      [shipmentId]
     );
     const instance = instanceResult.rows[0];
     if (!instance) return null;
+    const definition = await getWorkflowDefinitionForInstance(queryable, {
+      organizationId: instance.organization_id,
+      instance,
+    }) || fallbackWorkflowDefinition();
     const [stepsResult, blockersResult, publicEventResult] = await Promise.all([
       queryable.query(
         `SELECT *
@@ -736,9 +846,9 @@ export async function getPublicWorkflowSummary(queryable, shipmentId) {
         [instance.id, instance.organization_id]
       ),
     ]);
-    const steps = stepsResult.rows.map(normalizeStep).sort((a, b) => a.order - b.order);
-    const blockers = blockersResult.rows.map(normalizeBlocker);
-    const summary = progressSummary(steps, instance.current_step_code, blockers);
+    const steps = stepsResult.rows.map((row) => normalizeStep(row, definition)).sort((a, b) => a.order - b.order);
+    const blockers = blockersResult.rows.map((row) => normalizeBlocker(row, definition));
+    const summary = progressSummary(steps, instance.current_step_code, blockers, definition);
     return {
       currentPublicPhase: summary.currentPublicPhase,
       currentPublicLabel: blockers.length

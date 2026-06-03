@@ -122,8 +122,11 @@ export interface OrganizationMemberOption {
 
 export interface ShipmentWorkflowPhase {
   id: string;
+  phaseKey?: string;
   labelFa: string;
   labelEn: string;
+  order?: number;
+  isVisible?: boolean;
 }
 
 export interface ShipmentWorkflowStep {
@@ -133,6 +136,14 @@ export interface ShipmentWorkflowStep {
   phaseLabelEn: string;
   labelFa: string;
   labelEn: string;
+  publicLabel?: string;
+  isRequired?: boolean;
+  isCustomerVisible?: boolean;
+  roleSuggestion?: string;
+  expectedDurationHours?: number | null;
+  taskPolicy?: Record<string, unknown>;
+  expectedDocuments?: unknown[];
+  expectedFormFields?: unknown[];
   order: number;
   status: ShipmentWorkflowStepStatus;
   isVisible: boolean;
@@ -176,16 +187,33 @@ export interface ShipmentWorkflowEvent {
 }
 
 export interface ShipmentWorkflowProgress {
-  definition: {
+  definition: null | {
     key: string;
+    code?: string;
+    version?: number;
+    templateId?: string | null;
+    titleFa?: string;
+    titleEn?: string;
+    routeVisibilityRule?: string | null;
     phases: ShipmentWorkflowPhase[];
-    steps: Array<{ code: string; phaseId: string; labelFa: string; labelEn: string; order: number }>;
+    steps: Array<{
+      code: string;
+      phaseId: string;
+      labelFa: string;
+      labelEn: string;
+      order: number;
+      publicLabel?: string;
+      visibilityRule?: { type?: string; [key: string]: unknown } | null;
+    }>;
     blockers: Array<{ code: string; labelFa: string; labelEn: string }>;
   };
   shipmentId: string;
   workflow: null | {
     id: string;
     workflowKey: string;
+    workflowTemplateId?: string | null;
+    workflowTemplateCode?: string | null;
+    workflowTemplateVersion?: number | null;
     status: "active" | "completed" | "cancelled";
     shipmentId: string;
     currentStepCode: string;

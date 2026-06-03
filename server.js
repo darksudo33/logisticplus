@@ -219,6 +219,7 @@ import { registerPublicTrackingRoutes } from "./src/server/routes/public-trackin
 import { registerShipmentProgressRoutes } from "./src/server/routes/shipment-progress-routes.js";
 import { registerDailyStatusRoutes } from "./src/server/routes/daily-status-routes.js";
 import { registerShipmentFormTemplateRoutes } from "./src/server/routes/shipment-form-template-routes.js";
+import { registerShipmentWorkflowTemplateRoutes } from "./src/server/routes/shipment-workflow-template-routes.js";
 import { registerUserRoutes } from "./src/server/routes/user-routes.js";
 import { startShipmentWorkflow as startShipmentWorkflowRecord } from "./src/server/repositories/shipment-progress.js";
 import { parseRequestValue } from "./src/server/validation.js";
@@ -2100,6 +2101,15 @@ async function startServer() {
   });
 
   registerShipmentFormTemplateRoutes(app, {
+    auditLog,
+    createApiError,
+    pool,
+    requestContext,
+    requireAuthenticatedTenantUser,
+    requirePermission,
+  });
+
+  registerShipmentWorkflowTemplateRoutes(app, {
     auditLog,
     createApiError,
     pool,

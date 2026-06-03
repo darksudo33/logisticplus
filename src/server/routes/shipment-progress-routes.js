@@ -121,6 +121,7 @@ export function registerShipmentProgressRoutes(
         metadata: body.metadata || {},
       });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
+      if (data.noWorkflowTemplate) return createApiError(res, 404, "WORKFLOW_TEMPLATE_NOT_FOUND", "No workflow template is mapped for this shipment type.");
       await auditLog({
         actorUserId: user.id,
         action: "shipment_workflow.start",
@@ -152,6 +153,7 @@ export function registerShipmentProgressRoutes(
         ...body,
       });
       if (!data) return createApiError(res, 404, "WORKFLOW_NOT_STARTED", "Shipment workflow has not been started.");
+      if (data.noWorkflowTemplate) return createApiError(res, 404, "WORKFLOW_TEMPLATE_NOT_FOUND", "No workflow template is mapped for this shipment type.");
       if (data.invalidStep) return createApiError(res, 400, "INVALID_WORKFLOW_STEP", "Workflow step is not valid.", "stepCode");
       if (data.invalidRoute) return createApiError(res, 400, "INVALID_CUSTOMS_ROUTE", "Customs route is not valid.", "customsRoute");
       await auditLog({
@@ -185,6 +187,7 @@ export function registerShipmentProgressRoutes(
         ...body,
       });
       if (!data) return createApiError(res, 404, "WORKFLOW_NOT_STARTED", "Shipment workflow has not been started.");
+      if (data.noWorkflowTemplate) return createApiError(res, 404, "WORKFLOW_TEMPLATE_NOT_FOUND", "No workflow template is mapped for this shipment type.");
       if (data.invalidBlocker) return createApiError(res, 400, "INVALID_BLOCKER", "Blocker code is not valid.", "blockerCode");
       if (data.invalidStep) return createApiError(res, 400, "INVALID_WORKFLOW_STEP", "Workflow step is not valid.", "stepCode");
       await auditLog({

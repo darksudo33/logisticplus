@@ -76,7 +76,7 @@ import {
 import { ShamsiDateTimeField } from "@/src/components/ShamsiDateTimeField";
 import { getShipmentProgress } from "@/src/lib/shipmentWorkflow";
 import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
-import { IranImportProgressTimeline } from "@/src/components/shipments/IranImportProgressTimeline";
+import { ShipmentWorkflowTimeline } from "@/src/components/shipments/ShipmentWorkflowTimeline";
 import { RelatedShipmentTasksPanel } from "@/src/components/shipments/RelatedShipmentTasksPanel";
 import { ShipmentDailyStatusPanel } from "@/src/components/shipments/ShipmentDailyStatusPanel";
 import { ShipmentProgressBlockerDialog } from "@/src/components/shipments/ShipmentProgressBlockerDialog";
@@ -1623,7 +1623,7 @@ export default function ShipmentDetail() {
             </CardContent>
           </Card>
 
-          <IranImportProgressTimeline
+          <ShipmentWorkflowTimeline
             progress={shipmentProgress}
             isLoading={isProgressLoading}
             onStart={handleStartWorkflow}

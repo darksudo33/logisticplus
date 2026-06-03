@@ -7,9 +7,12 @@ import {
 } from "../../shared/daily-status-board.js";
 import {
   IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
+  IR_IMPORT_CUSTOMS_PHASES,
+  IR_IMPORT_CUSTOMS_STEPS,
   getIranImportPhase,
   getIranImportStep,
 } from "../../shared/iran-import-customs-workflow.js";
+import { normalizeWorkflowDefinition } from "./shipment-workflow-templates.js";
 import {
   getActiveShipmentFormTemplateForShipment,
   validateCustomFieldPatchForTemplate,
@@ -141,10 +144,38 @@ function summarizeCommercialCard(row) {
   };
 }
 
+function fallbackWorkflowDefinition() {
+  return normalizeWorkflowDefinition({
+    key: IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
+    code: IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
+    version: 1,
+    phases: IR_IMPORT_CUSTOMS_PHASES,
+    steps: IR_IMPORT_CUSTOMS_STEPS.map((step) => ({
+      ...step,
+      phaseKey: step.phaseId,
+      stepKey: step.code,
+    })),
+  });
+}
+
+function workflowStepFromDefinition(definition, stepCode) {
+  return (definition?.steps || []).find((step) => step.code === stepCode || step.stepKey === stepCode) || null;
+}
+
+function workflowPhaseFromDefinition(definition, phaseId) {
+  return (definition?.phases || []).find((phase) => phase.id === phaseId || phase.phaseKey === phaseId) || null;
+}
+
 function summarizeWorkflow(row) {
   if (!row.workflow_id) return null;
-  const currentStep = getIranImportStep(row.workflow_current_step_code);
-  const currentPhase = currentStep ? getIranImportPhase(currentStep.phaseId) : null;
+  const definition = normalizeWorkflowDefinition(row.workflow_definition_snapshot_json) || fallbackWorkflowDefinition();
+  const currentStep =
+    workflowStepFromDefinition(definition, row.workflow_current_step_code) ||
+    getIranImportStep(row.workflow_current_step_code);
+  const currentPhase = currentStep
+    ? workflowPhaseFromDefinition(definition, currentStep.phaseId || currentStep.phaseKey) ||
+      getIranImportPhase(currentStep.phaseId)
+    : null;
   return {
     currentPhase: currentPhase?.labelFa || currentPhase?.labelEn || "",
     currentStepCode: row.workflow_current_step_code || null,
@@ -291,7 +322,7 @@ function appendFilter(values, conditions, sql, value) {
 }
 
 function dailyStatusQuery(filters = {}, organizationId) {
-  const values = [organizationId, IR_IMPORT_CUSTOMS_WORKFLOW_KEY];
+  const values = [organizationId];
   const conditions = ["s.organization_id = $1", "s.archived_at IS NULL"];
 
   if (filters.shipmentId) appendFilter(values, conditions, "s.id = ?", filters.shipmentId);
@@ -348,16 +379,25 @@ function dailyStatusQuery(filters = {}, organizationId) {
           wi.id,
           wi.current_step_code,
           wi.customs_route,
+          wi.workflow_definition_snapshot_json,
           COUNT(st.step_code) FILTER (WHERE st.is_visible = TRUE) AS total_count,
           COUNT(st.step_code) FILTER (WHERE st.is_visible = TRUE AND st.status = 'completed') AS completed_count
-        FROM shipment_workflow_instances wi
+        FROM (
+          SELECT *,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY organization_id, shipment_id
+                   ORDER BY created_at DESC
+                 ) AS workflow_rank
+          FROM shipment_workflow_instances
+          WHERE organization_id = $1
+            AND status <> 'cancelled'
+        ) wi
         LEFT JOIN shipment_workflow_step_states st
           ON st.workflow_instance_id = wi.id
          AND st.organization_id = wi.organization_id
          AND st.shipment_id = wi.shipment_id
-        WHERE wi.organization_id = $1
-          AND wi.workflow_key = $2
-        GROUP BY wi.organization_id, wi.shipment_id, wi.id, wi.current_step_code, wi.customs_route
+        WHERE wi.workflow_rank = 1
+        GROUP BY wi.organization_id, wi.shipment_id, wi.id, wi.current_step_code, wi.customs_route, wi.workflow_definition_snapshot_json
       ),
       task_summary AS (
         SELECT
@@ -495,6 +535,7 @@ function dailyStatusQuery(filters = {}, organizationId) {
         wf.id AS workflow_id,
         wf.current_step_code AS workflow_current_step_code,
         wf.customs_route AS workflow_customs_route,
+        wf.workflow_definition_snapshot_json,
         wf.total_count AS workflow_total_count,
         wf.completed_count AS workflow_completed_count,
         COALESCE(ts.open_count, 0) AS open_task_count,

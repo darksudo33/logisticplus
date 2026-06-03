@@ -35,6 +35,7 @@ const Profile = lazy(() => import("./app/Profile"));
 const Settings = lazy(() => import("./app/Settings"));
 const UserManagement = lazy(() => import("./app/UserManagement"));
 const ShipmentFormTemplatesAdmin = lazy(() => import("./app/ShipmentFormTemplatesAdmin"));
+const ShipmentWorkflowTemplatesAdmin = lazy(() => import("./app/ShipmentWorkflowTemplatesAdmin"));
 const AdminConsoleRoute = lazy(() => import("./app/AdminConsoleRoute"));
 const ShipmentDetail = lazy(() => import("./app/ShipmentDetail"));
 const Documents = lazy(() => import("./app/Documents"));
@@ -126,6 +127,7 @@ function AppRoutes() {
         <Route path="/settings" element={<ProtectedAppLayout><Settings /></ProtectedAppLayout>} />
         <Route path="/management" element={<ProtectedAppLayout anyOf={["users.manage"]}><UserManagement /></ProtectedAppLayout>} />
         <Route path="/admin/shipment-form-templates" element={<ProtectedAppLayout anyOf={["shipment_forms.manage"]}><ShipmentFormTemplatesAdmin /></ProtectedAppLayout>} />
+        <Route path="/admin/workflow-templates" element={<ProtectedAppLayout anyOf={["shipment_workflows.manage"]}><ShipmentWorkflowTemplatesAdmin /></ProtectedAppLayout>} />
         <Route path="/admin" element={<Navigate to="/platform-admin" replace />} />
         <Route path="/platform-admin" element={<AdminConsoleRoute />} />
 

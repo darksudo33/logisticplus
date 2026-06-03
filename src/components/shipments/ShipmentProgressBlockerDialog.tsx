@@ -20,7 +20,7 @@ export function ShipmentProgressBlockerDialog({
   step,
   onSubmit,
 }: ShipmentProgressBlockerDialogProps) {
-  const blockers = progress?.definition.blockers || [];
+  const blockers = progress?.definition?.blockers || [];
   const [isSaving, setIsSaving] = React.useState(false);
   const [blockerCode, setBlockerCode] = React.useState(blockers[0]?.code || "");
   const [internalNote, setInternalNote] = React.useState("");

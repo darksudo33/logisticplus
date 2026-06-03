@@ -7,7 +7,7 @@ import React, { useState, useEffect } from "react";
 import { format } from "date-fns-jalali";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { LayoutDashboard, Ship, Users, CheckSquare, MessageSquare, ChevronRight, ChevronLeft, LogOut, Search, Bell, FileText, History, Settings as SettingsIcon, Menu, ShieldCheck, CreditCard, Archive, Calculator, X, Sun, Moon, IdCard, ClipboardList } from "lucide-react";
+import { LayoutDashboard, Ship, Users, CheckSquare, MessageSquare, ChevronRight, ChevronLeft, LogOut, Search, Bell, FileText, History, Settings as SettingsIcon, Menu, ShieldCheck, CreditCard, Archive, Calculator, X, Sun, Moon, IdCard, ClipboardList, GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { QUOTATIONS_UI_ENABLED } from "@/src/config/features";
 import { useMockStore } from "../../store/useMockStore";
@@ -38,6 +38,7 @@ const sidebarItems = [
   { icon: ClipboardList, label: "وضعیت روزانه", path: "/daily-status" },
   { icon: Ship, label: "محموله‌ها", path: "/shipments" },
   { icon: SettingsIcon, label: "فرم‌های نوع محموله", path: "/admin/shipment-form-templates", permission: "shipment_forms.manage" },
+  { icon: GitBranch, label: "قالب گردش کار محموله‌ها", path: "/admin/workflow-templates", permission: "shipment_workflows.manage" },
   ...(QUOTATIONS_UI_ENABLED ? [{ icon: Calculator, label: "مدیریت کوتاژ", path: "/quotations" }] : []),
   { icon: Users, label: "مشتریان", path: "/customers" },
   { icon: Archive, label: "بایگانی", path: "/archive" },
