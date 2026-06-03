@@ -55,7 +55,7 @@ for (const viewport of viewports) {
       await expect(page.locator("h1").first()).toBeVisible();
       const planLinks = page.locator('a[href*="/signup?plan="]');
       await expect(planLinks).toHaveCount(3);
-      await expect(planLinks.filter({ hasText: "شروع ثبت‌نام" }).first()).toBeVisible();
+      await expect(planLinks.filter({ hasText: "ثبت‌نام" }).first()).toBeVisible();
       await expect(page.locator("body")).toContainText("SMS");
       await expect(page.locator("body")).toContainText("افزونه");
     });

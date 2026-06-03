@@ -177,9 +177,7 @@ async function consumePostgresRateLimit(key, { limit, windowMs }) {
 
 export async function consumeRateLimit(req, res, scope, { limit, windowMs, discriminator = "" }) {
   const key = rateLimitKey(req, scope, discriminator);
-  const result = currentStore() === "memory"
-    ? await consumeMemoryRateLimit(key, { limit, windowMs })
-    : await consumePostgresRateLimit(key, { limit, windowMs });
+  const result = await consumeRateLimitKey(key, { limit, windowMs });
 
   if (result.limited) {
     res.setHeader("Retry-After", String(result.retryAfter));
@@ -187,4 +185,12 @@ export async function consumeRateLimit(req, res, scope, { limit, windowMs, discr
     return false;
   }
   return true;
+}
+
+export async function consumeRateLimitKey(key, { limit, windowMs }) {
+  const result = currentStore() === "memory"
+    ? await consumeMemoryRateLimit(key, { limit, windowMs })
+    : await consumePostgresRateLimit(key, { limit, windowMs });
+
+  return result;
 }

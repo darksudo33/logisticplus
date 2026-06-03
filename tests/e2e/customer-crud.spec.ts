@@ -12,6 +12,7 @@ const testCustomer = {
   phoneNumber: "09120001122",
   email: "customer-cleanup@example.test",
   address: "تهران، خیابان ولیعصر، پلاک ۱۰",
+  referrer: "معرف آزمونی",
   notes: "شماره تماس و آدرس باید بعد از ثبت قابل مشاهده باشد.",
 };
 
@@ -80,7 +81,7 @@ test.describe.serial("customer create and archive flow", () => {
       if (!isIgnorableMessage(error.message)) consoleErrors.push(error.message);
     });
 
-    const { customerName, companyName, phoneNumber, email, address, notes } = testCustomer;
+    const { customerName, companyName, phoneNumber, email, address, referrer, notes } = testCustomer;
 
     await loginViaUi(page);
     await page.goto("/customers");
@@ -91,6 +92,7 @@ test.describe.serial("customer create and archive flow", () => {
     await page.getByLabel("نام شرکت").fill(companyName);
     await page.getByLabel("ایمیل").fill(email);
     await page.getByLabel("شماره تماس").fill(phoneNumber);
+    await page.getByLabel("معرف").fill(referrer);
     await page.getByLabel("آدرس").fill(address);
     await page.getByLabel("یادداشت داخلی").fill(notes);
     await page.getByRole("button", { name: "ذخیره مشتری" }).click();
@@ -100,6 +102,7 @@ test.describe.serial("customer create and archive flow", () => {
     await expect(customerRow).toContainText(companyName);
     await expect(customerRow).toContainText(phoneNumber);
     await expect(customerRow).toContainText(email);
+    await expect(customerRow).toContainText(referrer);
 
     await customerRow.getByRole("button", { name: `عملیات ${customerName}` }).click();
     await page.getByRole("menuitem", { name: "حذف مشتری" }).click();

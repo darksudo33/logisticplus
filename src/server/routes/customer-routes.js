@@ -6,6 +6,13 @@ import {
 } from "../request-schemas.js";
 import { parseRequestValue } from "../validation.js";
 
+function requireCompanyCeoRole(user) {
+  if (user?.role === "CEO") return;
+  const error = new Error("Company CEO access is required.");
+  error.statusCode = 403;
+  throw error;
+}
+
 export function registerCustomerRoutes(
   app,
   {
@@ -34,6 +41,7 @@ export function registerCustomerRoutes(
         includeArchived: req.query.includeArchived === "true",
         search: req.query.search || "",
         organizationId: tenantContext.organizationId,
+        includePrivateDetails: user.role === "CEO",
       });
       res.json({ ok: true, data });
     } catch (error) {
@@ -50,6 +58,7 @@ export function registerCustomerRoutes(
       const tenantContext = requireTenantContext(req, res, "create customer");
       if (!tenantContext) return;
       await requirePermission(user, "customers.create");
+      requireCompanyCeoRole(user);
       const body = parseRequestValue(res, customerCreateBodySchema, req.body || {});
       if (!body) return;
       const created = await createCustomerRecord({ ownerUserId: user.id, actorUserId: user.id, customer: body });
@@ -80,7 +89,10 @@ export function registerCustomerRoutes(
       await requirePermission(user, "customers.view");
       const params = parseRequestValue(res, customerParamsSchema, req.params);
       if (!params) return;
-      const customer = await getCustomerRecord(params.id, { organizationId: tenantContext.organizationId });
+      const customer = await getCustomerRecord(params.id, {
+        organizationId: tenantContext.organizationId,
+        includePrivateDetails: user.role === "CEO",
+      });
       if (!customer) return createApiError(res, 404, "NOT_FOUND", "Customer was not found.");
       res.json({ ok: true, data: customer });
     } catch (error) {
@@ -97,6 +109,7 @@ export function registerCustomerRoutes(
       const tenantContext = requireTenantContext(req, res, "update customer");
       if (!tenantContext) return;
       await requirePermission(user, "customers.update");
+      requireCompanyCeoRole(user);
       const params = parseRequestValue(res, customerParamsSchema, req.params);
       if (!params) return;
       const body = parseRequestValue(res, customerUpdateBodySchema, req.body || {});
@@ -131,7 +144,10 @@ export function registerCustomerRoutes(
       await requirePermission(user, "customers.view");
       const params = parseRequestValue(res, customerRelatedParamsSchema, req.params);
       if (!params) return;
-      const data = await listCustomerRelated(params.id, params.related, { organizationId: tenantContext.organizationId });
+      const data = await listCustomerRelated(params.id, params.related, {
+        organizationId: tenantContext.organizationId,
+        includePrivateDetails: user.role === "CEO",
+      });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Customer was not found.");
       res.json({ ok: true, data });
     } catch (error) {
@@ -148,6 +164,7 @@ export function registerCustomerRoutes(
       const tenantContext = requireTenantContext(req, res, "archive customer");
       if (!tenantContext) return;
       await requirePermission(user, "customers.update");
+      requireCompanyCeoRole(user);
       const params = parseRequestValue(res, customerParamsSchema, req.params);
       if (!params) return;
       const result = await archiveCustomerRecord(params.id, { organizationId: tenantContext.organizationId });

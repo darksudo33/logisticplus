@@ -22,6 +22,20 @@ async function uploadDocument(
   });
 }
 
+async function uploadChatAttachment(
+  context: Awaited<ReturnType<typeof loginApi>>,
+  threadId: string,
+  file: { name: string; mimeType: string; buffer: Buffer },
+  caption = ""
+) {
+  return context.post(`/api/chat/threads/${encodeURIComponent(threadId)}/attachments`, {
+    multipart: {
+      caption,
+      file,
+    },
+  });
+}
+
 test.describe.serial("public tracking leak hardening", () => {
   test("workflow, blocker, task, and private document internals stay out of public payloads", async () => {
     const owner = await loginApi();
@@ -98,6 +112,20 @@ test.describe.serial("public tracking leak hardening", () => {
           }
         )
       );
+      const chatThread = await readOk<any>(await owner.get("/api/shipments/s1/chat-thread"));
+      const chatAttachmentName = `private-chat-${Date.now()}.txt`;
+      const chatMessage = await readOk<any>(
+        await uploadChatAttachment(
+          owner,
+          chatThread.id,
+          {
+            name: chatAttachmentName,
+            mimeType: "text/plain",
+            buffer: Buffer.from(`${secret} internal chat attachment`),
+          },
+          `${secret} internal chat caption`
+        )
+      );
 
       const access = await readOk<{ token: string }>(
         await owner.post("/api/shipments/s1/customer-access/generate")
@@ -119,12 +147,16 @@ test.describe.serial("public tracking leak hardening", () => {
         const serialized = JSON.stringify(payload);
         expect(serialized).not.toContain(secret);
         expect(serialized).not.toContain(task.id);
+        expect(serialized).not.toContain(chatThread.id);
+        expect(serialized).not.toContain(chatMessage.id);
+        expect(serialized).not.toContain(chatAttachmentName);
         expect(serialized).not.toContain(progress.workflow.id);
         expect(serialized).not.toContain(blocker.blocker.id);
         expect(serialized).not.toContain("B17");
         expect(serialized.toLowerCase()).not.toContain("workflowinstance");
         expect(serialized.toLowerCase()).not.toContain("workflowblocker");
         expect(serialized.toLowerCase()).not.toContain("actoruserid");
+        expect(serialized.toLowerCase()).not.toContain("chat");
       }
 
       const privatePublicDownload = await publicContext.get(

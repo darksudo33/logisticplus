@@ -21,6 +21,7 @@ export const tenantPermissionDescriptions = {
   "shipments.create": "Create shipments",
   "shipments.update": "Update shipments",
   "shipments.archive": "Archive shipments",
+  "shipment_forms.manage": "Manage shipment type form templates",
   "shipment_steps.update": "Update shipment steps",
   "customers.view": "View customers",
   "customers.create": "Create customers",
@@ -36,6 +37,8 @@ export const tenantPermissionDescriptions = {
   "changes.view": "View company change log",
   "chat.use": "Use company chat",
   "chat.manage_groups": "Manage company chat groups",
+  "chat.media.view": "View company chat media library",
+  "chat.media.delete": "Delete company chat media files",
   "users.manage": "Manage company users",
   "users.promote": "Promote company users",
   "cheques.manage": "Manage cheques",
@@ -50,6 +53,11 @@ export const platformPermissionDescriptions = {
 };
 
 const allTenantPermissions = Object.keys(tenantPermissionDescriptions);
+const ceoOnlyTenantPermissions = new Set([
+  "chat.media.view",
+  "chat.media.delete",
+  "shipment_forms.manage",
+]);
 const companyOperationalPermissions = [
   "archive.view",
   "changes.view",
@@ -78,7 +86,7 @@ const companyOperationalPermissions = [
 
 export const rolePermissions = {
   CEO: allTenantPermissions,
-  MANAGER: allTenantPermissions.filter((key) => key !== "users.promote"),
+  MANAGER: allTenantPermissions.filter((key) => key !== "users.promote" && !ceoOnlyTenantPermissions.has(key)),
   OPERATIONS: ["dashboard.view", ...companyOperationalPermissions],
   CUSTOMER_SERVICE: ["dashboard.view", ...companyOperationalPermissions],
   FINANCE: ["dashboard.view", "cheques.manage", ...companyOperationalPermissions],

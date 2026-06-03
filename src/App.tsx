@@ -7,6 +7,7 @@ import React, { Suspense, lazy, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { ClientErrorBoundary } from "./components/ClientErrorBoundary";
 import { ProtectedShellSkeleton, PublicRouteSkeleton } from "./components/SkeletonStates";
+import { QUOTATIONS_UI_ENABLED } from "./config/features";
 import { installClientErrorReporting } from "./lib/errorReporting";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -24,6 +25,7 @@ const SignupPage = lazy(() => import("./app/SaasSignup").then((module) => ({ def
 const SignupPendingPage = lazy(() => import("./app/SaasSignup").then((module) => ({ default: module.SignupPendingPage })));
 const Dashboard = lazy(() => import("./app/Dashboard"));
 const Shipments = lazy(() => import("./app/Shipments"));
+const DailyStatus = lazy(() => import("./app/DailyStatus"));
 const Customers = lazy(() => import("./app/Customers"));
 const Tasks = lazy(() => import("./app/Tasks"));
 const Chat = lazy(() => import("./app/Chat"));
@@ -32,6 +34,7 @@ const PublicTrackSearch = lazy(() => import("./app/PublicTrack").then((module) =
 const Profile = lazy(() => import("./app/Profile"));
 const Settings = lazy(() => import("./app/Settings"));
 const UserManagement = lazy(() => import("./app/UserManagement"));
+const ShipmentFormTemplatesAdmin = lazy(() => import("./app/ShipmentFormTemplatesAdmin"));
 const AdminConsoleRoute = lazy(() => import("./app/AdminConsoleRoute"));
 const ShipmentDetail = lazy(() => import("./app/ShipmentDetail"));
 const Documents = lazy(() => import("./app/Documents"));
@@ -41,12 +44,14 @@ const Compliance = lazy(() => import("./app/Compliance"));
 const ChequeManagement = lazy(() => import("./app/ChequeManagement"));
 const CommercialCards = lazy(() => import("./app/CommercialCards"));
 const ArchivePage = lazy(() => import("./app/Archive"));
-const QuotageManagement = lazy(() => import("./app/QuotageManagement"));
+const QuotageManagement = QUOTATIONS_UI_ENABLED ? lazy(() => import("./app/QuotageManagement")) : null;
 const CustomerDetail = lazy(() => import("./app/CustomerDetail"));
 const SearchPage = lazy(() => import("./app/SearchPage"));
 
 const protectedRoutePrefixes = [
   "/dashboard",
+  "/daily-status",
+  "/kootaj-board",
   "/shipments",
   "/changelog",
   "/customers",
@@ -89,6 +94,8 @@ function AppRoutes() {
         <Route path="/track/search" element={<PublicTrackSearch />} />
 
         <Route path="/dashboard" element={<ProtectedAppLayout><Dashboard /></ProtectedAppLayout>} />
+        <Route path="/daily-status" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><DailyStatus /></ProtectedAppLayout>} />
+        <Route path="/kootaj-board" element={<Navigate to="/daily-status" replace />} />
         <Route path="/shipments" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><Shipments /></ProtectedAppLayout>} />
         <Route path="/shipments/:id" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentDetail /></ProtectedAppLayout>} />
         <Route path="/shipments/:id/edit" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentEdit /></ProtectedAppLayout>} />
@@ -102,13 +109,23 @@ function AppRoutes() {
         <Route path="/cheques" element={<ProtectedAppLayout anyOf={["cheques.manage"]}><ChequeManagement /></ProtectedAppLayout>} />
         <Route path="/commercial-cards" element={<ProtectedAppLayout><CommercialCards /></ProtectedAppLayout>} />
         <Route path="/search" element={<ProtectedAppLayout><SearchPage /></ProtectedAppLayout>} />
-        <Route path="/quotage" element={<Navigate to="/quotations" replace />} />
-        <Route path="/quotations" element={<ProtectedAppLayout anyOf={["quotations.manage"]}><QuotageManagement /></ProtectedAppLayout>} />
+        <Route path="/quotage" element={<Navigate to="/dashboard" replace />} />
+        <Route
+          path="/quotations"
+          element={
+            QUOTATIONS_UI_ENABLED && QuotageManagement ? (
+              <ProtectedAppLayout anyOf={["quotations.manage"]}><QuotageManagement /></ProtectedAppLayout>
+            ) : (
+              <Navigate to="/dashboard" replace />
+            )
+          }
+        />
         <Route path="/archive" element={<ProtectedAppLayout anyOf={["archive.view"]}><ArchivePage /></ProtectedAppLayout>} />
         <Route path="/chat" element={<ProtectedAppLayout anyOf={["chat.use"]}><Chat /></ProtectedAppLayout>} />
         <Route path="/profile" element={<ProtectedAppLayout><Profile /></ProtectedAppLayout>} />
         <Route path="/settings" element={<ProtectedAppLayout><Settings /></ProtectedAppLayout>} />
         <Route path="/management" element={<ProtectedAppLayout anyOf={["users.manage"]}><UserManagement /></ProtectedAppLayout>} />
+        <Route path="/admin/shipment-form-templates" element={<ProtectedAppLayout anyOf={["shipment_forms.manage"]}><ShipmentFormTemplatesAdmin /></ProtectedAppLayout>} />
         <Route path="/admin" element={<Navigate to="/platform-admin" replace />} />
         <Route path="/platform-admin" element={<AdminConsoleRoute />} />
 

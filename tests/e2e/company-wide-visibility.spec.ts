@@ -25,7 +25,20 @@ async function cleanupCompanyWideArtifacts(client: DbClient) {
   await client.query("DELETE FROM compliance_meetings WHERE title LIKE 'E2E company-wide%'");
   await client.query("DELETE FROM quotations WHERE customer_name LIKE 'E2E company-wide%'");
   await client.query("DELETE FROM user_records WHERE collection = 'commercialCards' AND item_id LIKE 'e2e-company-wide-%'");
-  await client.query("DELETE FROM app_users WHERE email LIKE 'e2e-company-wide-%@example.test'");
+  const users = await client.query("SELECT id FROM app_users WHERE email LIKE 'e2e-company-wide-%@example.test'");
+  const userIds = users.rows.map((row) => row.id);
+  if (userIds.length) {
+    await client.query("DELETE FROM app_sessions WHERE user_id = ANY($1::text[])", [userIds]);
+    await client.query("DELETE FROM user_permissions WHERE user_id = ANY($1::text[])", [userIds]);
+    await client.query(
+      "DELETE FROM user_records WHERE owner_user_id = ANY($1::text[]) OR (collection = 'users' AND item_id = ANY($1::text[]))",
+      [userIds]
+    );
+    await client.query(
+      "UPDATE app_users SET status = 'suspended', email = CONCAT('archived-', id, '-', email) WHERE id = ANY($1::text[])",
+      [userIds]
+    );
+  }
 }
 
 async function createCompanyUser(owner: Awaited<ReturnType<typeof loginApi>>, role: string) {

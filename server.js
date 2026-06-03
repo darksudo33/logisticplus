@@ -18,8 +18,10 @@ import {
   convertQuotationToShipment,
   createApiError,
   createAppUserRecord,
+  createChatAttachmentMessage,
   createBillingInvoice,
   createChatMessage,
+  createChatMessageNotifications,
   createChatThread,
   createContactRequest,
   createLoginSmsChallenge,
@@ -39,11 +41,15 @@ import {
   deleteAbandonedSignupRequest,
   deleteAppUserRecord,
   deleteArchivedEntityRecord,
+  deleteChatAttachment,
   disableShipmentCustomerAccess,
   ensureDirectChat,
+  ensureShipmentChatThread,
   generateShipmentCustomerAccess,
   expireOrganizationSubscription,
   getChangeLog,
+  getChatThreadForUser,
+  getChatAttachmentForDelivery,
   getDocumentDetail,
   getDocumentForDownload,
   getFeatureConfig,
@@ -83,6 +89,8 @@ import {
   listAuditLogs,
   listChangeLogs,
   listChatMessages,
+  listChatMediaAttachments,
+  listChatParticipants,
   listChatThreadMemberIds,
   listChatThreads,
   listContactRequests,
@@ -107,6 +115,7 @@ import {
   listTasks,
   listTaskEvents,
   markChatThreadRead,
+  markChatAttachmentStorageCleanup,
   markBillingPaymentManually,
   markPaymentRequested,
   markPaymentVerifiedByAuthorityWithResult,
@@ -157,14 +166,32 @@ import {
 } from "./src/server/db.js";
 import {
   cleanupPersistedDocument,
+  deleteStoredChatAttachmentFiles,
   deleteStoredDocumentFiles,
+  persistChatAttachmentFile,
   persistDocumentFile,
+  sendStoredChatAttachment,
   sendStoredDocument,
+  uploadChatAttachmentSingle,
   uploadSingle,
 } from "./src/server/document-storage.js";
 import {
   archiveEntityParamsSchema,
   billingPaymentStartParamsSchema,
+  chatDirectBodySchema,
+  chatAttachmentUploadBodySchema,
+  chatMediaListQuerySchema,
+  chatMessageAttachmentParamsSchema,
+  chatMessageListQuerySchema,
+  chatMessageSendBodySchema,
+  chatParticipantBodySchema,
+  chatParticipantsQuerySchema,
+  chatReadBodySchema,
+  chatThreadCreateBodySchema,
+  chatThreadAttachmentParamsSchema,
+  chatThreadParamsSchema,
+  chatThreadParticipantParamsSchema,
+  chatTypingBodySchema,
   documentMetadataSchema,
   documentParamsSchema,
   documentVisibilitySchema,
@@ -190,6 +217,8 @@ import { registerCustomerRoutes } from "./src/server/routes/customer-routes.js";
 import { registerNotificationRoutes } from "./src/server/routes/notification-routes.js";
 import { registerPublicTrackingRoutes } from "./src/server/routes/public-tracking-routes.js";
 import { registerShipmentProgressRoutes } from "./src/server/routes/shipment-progress-routes.js";
+import { registerDailyStatusRoutes } from "./src/server/routes/daily-status-routes.js";
+import { registerShipmentFormTemplateRoutes } from "./src/server/routes/shipment-form-template-routes.js";
 import { registerUserRoutes } from "./src/server/routes/user-routes.js";
 import { startShipmentWorkflow as startShipmentWorkflowRecord } from "./src/server/repositories/shipment-progress.js";
 import { parseRequestValue } from "./src/server/validation.js";
@@ -202,6 +231,7 @@ import {
 import {
   clearRateLimit,
   consumeRateLimit,
+  consumeRateLimitKey,
   rateLimitKey,
 } from "./src/server/rate-limit.js";
 import { runStartupChecks, shouldTrustProxy } from "./src/server/startup-checks.js";
@@ -219,15 +249,139 @@ const DOCUMENT_DOWNLOAD_LIMIT = { limit: 60, windowMs: 10 * 60 * 1000 };
 const PUBLIC_DOCUMENT_DOWNLOAD_LIMIT = { limit: 30, windowMs: 10 * 60 * 1000 };
 const PUBLIC_TRACK_LOOKUP_LIMIT = { limit: 60, windowMs: 10 * 60 * 1000 };
 const PUBLIC_TRACK_SEARCH_LIMIT = { limit: 20, windowMs: 15 * 60 * 1000 };
+const CHAT_THREAD_CREATE_LIMIT = { limit: 20, windowMs: 60 * 60 * 1000 };
+const CHAT_PARTICIPANT_CHANGE_LIMIT = { limit: 60, windowMs: 60 * 60 * 1000 };
+const CHAT_ATTACHMENT_UPLOAD_LIMIT = { limit: 20, windowMs: 15 * 60 * 1000 };
+const CHAT_MESSAGE_SEND_LIMITS = [
+  { scope: "user_short", limit: 5, windowMs: 5 * 1000 },
+  { scope: "user_minute", limit: 30, windowMs: 60 * 1000 },
+  { scope: "thread_minute", limit: 60, windowMs: 60 * 1000 },
+];
+const CHAT_TYPING_LIMIT = { limit: 1, windowMs: 2 * 1000 };
+const CHAT_SOCKET_EVENT_LIMIT = { limit: 180, windowMs: 60 * 1000 };
+const CHAT_SOCKET_CONNECTION_LIMIT = { limit: 12, windowMs: 60 * 1000 };
+const CHAT_SOCKET_MAX_BYTES = 8 * 1024;
 const ZARINPAL_MIN_AMOUNT_IRR = 10000;
 
 const chatClients = new Map();
+const chatRateLimitBuckets = new Map();
+const CHAT_SOCKET_OPEN = 1;
 
-function broadcastChat(event, userIds) {
+function sendChatSocket(ws, event) {
+  if (ws.readyState !== CHAT_SOCKET_OPEN) return;
+  ws.send(JSON.stringify(event));
+}
+
+function chatRateLimitRetryAfterMs(resetAt, now = Date.now()) {
+  return Math.max(250, resetAt - now);
+}
+
+function chatRateLimitBucket(key, windowMs, now = Date.now()) {
+  const existing = chatRateLimitBuckets.get(key);
+  if (!existing || existing.resetAt <= now) {
+    const fresh = { count: 0, resetAt: now + windowMs };
+    chatRateLimitBuckets.set(key, fresh);
+    return fresh;
+  }
+  return existing;
+}
+
+function pruneChatRateLimitBuckets(now = Date.now()) {
+  if (chatRateLimitBuckets.size < 5000) return;
+  for (const [key, bucket] of chatRateLimitBuckets.entries()) {
+    if (bucket.resetAt <= now) chatRateLimitBuckets.delete(key);
+  }
+}
+
+function consumeChatRateLimits(limits) {
+  const now = Date.now();
+  pruneChatRateLimitBuckets(now);
+  const buckets = limits.map((item) => ({
+    ...item,
+    bucket: chatRateLimitBucket(item.key, item.windowMs, now),
+  }));
+  const blocked = buckets.filter((item) => item.bucket.count >= item.limit);
+  if (blocked.length) {
+    return {
+      limited: true,
+      retryAfterMs: Math.max(...blocked.map((item) => chatRateLimitRetryAfterMs(item.bucket.resetAt, now))),
+    };
+  }
+  for (const item of buckets) {
+    item.bucket.count += 1;
+  }
+  return { limited: false, retryAfterMs: 0 };
+}
+
+function chatMessageLimitKey({ organizationId, userId, threadId, scope }) {
+  return `chat:${scope}:org:${String(organizationId)}:user:${String(userId)}:thread:${String(threadId || "")}`;
+}
+
+function consumeChatMessageSendLimit({ organizationId, userId, threadId }) {
+  return consumeChatRateLimits(CHAT_MESSAGE_SEND_LIMITS.map((limit) => {
+    const keyScope = limit.scope === "thread_minute" ? "thread_minute" : limit.scope;
+    return {
+      ...limit,
+      key: chatMessageLimitKey({
+        organizationId,
+        userId: limit.scope === "thread_minute" ? "" : userId,
+        threadId: limit.scope === "thread_minute" ? threadId : "",
+        scope: keyScope,
+      }),
+    };
+  }));
+}
+
+function consumeChatTypingLimit({ organizationId, userId, threadId }) {
+  return consumeChatRateLimits([
+    {
+      ...CHAT_TYPING_LIMIT,
+      key: chatMessageLimitKey({ organizationId, userId, threadId, scope: "typing" }),
+    },
+  ]);
+}
+
+function chatForbiddenError(message = "Thread access denied.") {
+  return Object.assign(new Error(message), { statusCode: 403, code: "FORBIDDEN" });
+}
+
+async function requireChatThreadMembership(userId, threadId, { organizationId } = {}) {
+  const memberIds = await listChatThreadMemberIds(threadId, { organizationId });
+  if (!memberIds.includes(userId)) throw chatForbiddenError();
+  return memberIds;
+}
+
+function sendChatRateLimitedResponse(res, { retryAfterMs }) {
+  res.setHeader("Retry-After", String(Math.max(1, Math.ceil(Number(retryAfterMs || 0) / 1000))));
+  return res.status(429).json({
+    ok: false,
+    error: {
+      code: "CHAT_RATE_LIMITED",
+      message: "Too many chat messages. Please slow down.",
+      retryAfterMs: Math.max(250, Number(retryAfterMs || 0)),
+    },
+  });
+}
+
+function connectedChatUserIds(organizationId, userIds = []) {
+  const allowed = new Set(userIds);
+  const connected = new Set();
+  for (const [, client] of chatClients.entries()) {
+    if (client.organizationId !== organizationId) continue;
+    if (allowed.size && !allowed.has(client.user.id)) continue;
+    connected.add(client.user.id);
+  }
+  return connected;
+}
+
+function broadcastChat(event, { organizationId, userIds } = {}) {
+  if (!organizationId) return;
   const message = JSON.stringify(event);
+  const allowedUserIds = userIds ? new Set(userIds) : null;
   for (const [ws, client] of chatClients.entries()) {
-    if (ws.readyState !== ws.OPEN) continue;
-    if (userIds && !userIds.includes(client.user.id)) continue;
+    if (ws.readyState !== CHAT_SOCKET_OPEN) continue;
+    if (client.organizationId !== organizationId) continue;
+    if (allowedUserIds && !allowedUserIds.has(client.user.id)) continue;
     ws.send(message);
   }
 }
@@ -521,6 +675,13 @@ function documentStorageAuditMetadata(persisted) {
   };
 }
 
+function safeStorageCleanupMessage(error) {
+  return String(error?.message || error || "storage_cleanup_failed")
+    .replace(/(access[_-]?key|secret|signature|credential|token|authorization)[^,\s]*/gi, "[redacted]")
+    .replace(/https?:\/\/\S+/gi, "[redacted-url]")
+    .slice(0, 300);
+}
+
 async function requestZarinpalPayment(req, payment) {
   const amount = normalizeZarinpalAmount(payment.amount_irr);
   const callbackUrl = `${appBaseUrl(req)}/api/billing/zarinpal/callback`;
@@ -658,6 +819,90 @@ async function requireAuthenticatedTenantUser(req, res, operation) {
   return { user, tenantContext, organizationId: tenantContext.organizationId };
 }
 
+function rejectClientTenantScope(req, res) {
+  const identifiers = findClientTenantIdentifiers(req);
+  if (!identifiers.length) return false;
+  createApiError(
+    res,
+    403,
+    "TENANT_SCOPE_REJECTED",
+    "This API derives tenant scope from the authenticated session.",
+    identifiers[0]
+  );
+  return true;
+}
+
+async function requireChatTenantUser(req, res, operation, permission = "chat.use") {
+  const tenantRequest = await requireAuthenticatedTenantUser(req, res, operation);
+  if (!tenantRequest) return null;
+  if (rejectClientTenantScope(req, res)) return null;
+  await requirePermission(tenantRequest.user, permission);
+  return tenantRequest;
+}
+
+function handleChatRouteError(res, error, fallbackCode, fallbackMessage) {
+  if (error.statusCode) {
+    return createApiError(res, error.statusCode, error.code || fallbackCode, error.message || fallbackMessage);
+  }
+  console.error(`${fallbackCode}:`, error);
+  return createApiError(res, 500, fallbackCode, fallbackMessage);
+}
+
+async function authenticateChatSocket(req) {
+  const sessionToken = parseCookies(req.headers.cookie || "")[SESSION_COOKIE];
+  const session = await getSessionByToken(sessionToken);
+  if (!session?.user) throw Object.assign(new Error("Authentication is required."), { statusCode: 401, code: "UNAUTHENTICATED" });
+  if (session.user.status && session.user.status !== "active") {
+    throw Object.assign(new Error("User account is not active."), { statusCode: 403, code: "FORBIDDEN" });
+  }
+  if (session.user.organizationStatus && session.user.organizationStatus !== "active") {
+    throw Object.assign(new Error("Organization is not active yet."), { statusCode: 403, code: "ORGANIZATION_INACTIVE" });
+  }
+  const permissions = await getUserPermissions(session.user.id);
+  session.user.permissions = permissions;
+  if (
+    !hasPlatformAdminPermission(permissions) &&
+    ["expired", "suspended", "cancelled", "rejected"].includes(session.user.subscriptionStatus || "")
+  ) {
+    throw Object.assign(new Error("Subscription is not active."), { statusCode: 403, code: "SUBSCRIPTION_INACTIVE" });
+  }
+  const tenantContext = attachTenantContext(req, session.user, { permissions });
+  if (!tenantContext) {
+    throw Object.assign(new Error("Active organization membership is required."), { statusCode: 403, code: "ORGANIZATION_MEMBERSHIP_REQUIRED" });
+  }
+  session.user.organizationId = tenantContext?.organizationId || null;
+  session.user.organization_id = tenantContext?.organizationId || null;
+  await requirePermission(session.user, "chat.use");
+  return { user: session.user, tenantContext, organizationId: tenantContext?.organizationId || null };
+}
+
+function sendChatSocketError(ws, { requestId, code = "CHAT_EVENT_FAILED", message = "Chat event failed.", ...details } = {}) {
+  sendChatSocket(ws, { type: "error", requestId, ok: false, error: { code, message, ...details } });
+}
+
+function parseChatSocketPayload(ws, schema, payload, requestId) {
+  const result = schema.safeParse(payload || {});
+  if (result.success) return result.data;
+  const issue = result.error?.issues?.[0];
+  sendChatSocketError(ws, {
+    requestId,
+    code: "VALIDATION_ERROR",
+    message: issue?.message || "Invalid chat event payload.",
+  });
+  return null;
+}
+
+function rejectChatSocketTenantScope(ws, payload, requestId) {
+  const identifiers = findClientTenantIdentifiers({ body: payload || {}, query: {}, params: {} });
+  if (!identifiers.length) return false;
+  sendChatSocketError(ws, {
+    requestId,
+    code: "TENANT_SCOPE_REJECTED",
+    message: "Chat tenant scope is derived from the authenticated session.",
+  });
+  return true;
+}
+
 async function requirePlatformAdmin(req, res) {
   const user = await requireAuthenticatedUser(req, res);
   if (!user) return null;
@@ -753,6 +998,19 @@ async function canAccessTask(user, task, action = "view") {
   if (canViewAll) return true;
   if (action === "status" && (isAssigned || isCreator)) return true;
   return permissions.includes("tasks.view_own") && (isAssigned || isCreator);
+}
+
+async function canAccessShipment(user, shipment) {
+  if (!shipment) return false;
+  const shipmentOrganizationId = shipment.organization_id || shipment.organizationId;
+  if (shipmentOrganizationId && shipmentOrganizationId !== user.organizationId) return false;
+  const permissions = user.permissions || await getUserPermissions(user.id);
+  user.permissions = permissions;
+  if (permissions.includes("shipments.view_all")) return true;
+  if (!permissions.includes("shipments.view_assigned")) return false;
+  const ownerUserId = shipment.owner_user_id || shipment.ownerUserId;
+  const assignedManagerId = shipment.assigned_manager_id || shipment.assignedManagerId;
+  return ownerUserId === user.id || assignedManagerId === user.id;
 }
 
 async function startServer() {
@@ -1166,7 +1424,7 @@ async function startServer() {
         return res.json({
           ok: true,
           data: {
-            codeSent: true,
+            codeSent: false,
             message: "If this phone belongs to an active user, a login code will be sent.",
           },
         });
@@ -1623,6 +1881,69 @@ async function startServer() {
     }
   });
 
+  app.get("/api/shipments/:shipmentId/chat-thread", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "shipment chat thread API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const params = parseRequestValue(res, shipmentProgressParamsSchema, req.params);
+      if (!params) return;
+
+      const shipment = await getShipmentRecord(params.shipmentId, { organizationId });
+      if (!shipment) {
+        await auditLog({
+          actorUserId: user.id,
+          organizationId,
+          action: "chat.shipment_access_denied",
+          entityType: "SHIPMENT",
+          entityId: params.shipmentId,
+          summary: "Shipment chat access was denied.",
+          metadata: { reason: "shipment_not_found_or_cross_tenant" },
+          requestContext: requestContext(req),
+        });
+        return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
+      }
+      if (!(await canAccessShipment(user, shipment))) {
+        await auditLog({
+          actorUserId: user.id,
+          organizationId,
+          action: "chat.shipment_access_denied",
+          entityType: "SHIPMENT",
+          entityId: params.shipmentId,
+          summary: "Shipment chat access was denied.",
+          metadata: { reason: "missing_shipment_access" },
+          requestContext: requestContext(req),
+        });
+        return createApiError(res, 403, "FORBIDDEN", "You cannot access this shipment chat.");
+      }
+
+      const ensured = await ensureShipmentChatThread({
+        actorUserId: user.id,
+        organizationId,
+        shipmentId: shipment.id,
+      });
+      if (ensured.created) {
+        await auditLog({
+          actorUserId: user.id,
+          organizationId,
+          action: "chat.shipment_thread_create",
+          entityType: "chat_thread",
+          entityId: ensured.id,
+          summary: "Shipment chat thread was created.",
+          after: { shipmentId: shipment.id, participantCount: ensured.participantCount },
+          requestContext: requestContext(req),
+        });
+      }
+      const thread = await getChatThreadForUser(ensured.id, user.id, { organizationId });
+      if (!thread) return createApiError(res, 404, "NOT_FOUND", "Shipment chat thread was not found.");
+      const memberIds = await listChatThreadMemberIds(ensured.id, { organizationId });
+      broadcastChat({ type: "thread.updated", payload: { threadId: ensured.id } }, { organizationId, userIds: memberIds });
+      res.status(ensured.created ? 201 : 200).json({ ok: true, data: thread });
+    } catch (error) {
+      handleChatRouteError(res, error, "SHIPMENT_CHAT_THREAD_FAILED", "Could not open shipment chat.");
+    }
+  });
+
   app.get("/api/shipments/:id", async (req, res) => {
     try {
       const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment get API");
@@ -1767,6 +2088,24 @@ async function startServer() {
     requestContext,
     requireAuthenticatedUser,
     requireTenantContext: requireRequestTenant,
+  });
+
+  registerDailyStatusRoutes(app, {
+    auditLog,
+    createApiError,
+    pool,
+    requestContext,
+    requireAuthenticatedTenantUser,
+    requirePermission,
+  });
+
+  registerShipmentFormTemplateRoutes(app, {
+    auditLog,
+    createApiError,
+    pool,
+    requestContext,
+    requireAuthenticatedTenantUser,
+    requirePermission,
   });
 
   registerUserRoutes(app, {
@@ -2408,7 +2747,11 @@ async function startServer() {
       if (!tenantRequest) return;
       const { user, organizationId } = tenantRequest;
       await requirePermission(user, "quotations.manage");
-      const data = await listQuotations({ organizationId, includeArchived: req.query.includeArchived === "true" });
+      const data = await listQuotations({
+        organizationId,
+        includeArchived: req.query.includeArchived === "true",
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
       res.json({ ok: true, data });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -2424,7 +2767,13 @@ async function startServer() {
       const { user, tenantContext } = tenantRequest;
       await requirePermission(user, "quotations.manage");
       if (!req.body?.customerName) return createApiError(res, 400, "VALIDATION_FAILED", "Customer name is required.", "customerName");
-      const created = await createQuotationRecord({ ownerUserId: user.id, actorUserId: user.id, tenantContext, quote: req.body });
+      const created = await createQuotationRecord({
+        ownerUserId: user.id,
+        actorUserId: user.id,
+        tenantContext,
+        quote: req.body,
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
       await auditLog({ actorUserId: user.id, action: "quotation.create", entityType: "quotation", entityId: created.id, summary: "Quotation was created.", after: created, requestContext: requestContext(req) });
       res.status(201).json({ ok: true, data: created });
     } catch (error) {
@@ -2441,7 +2790,10 @@ async function startServer() {
       if (!tenantRequest) return;
       const { user, organizationId } = tenantRequest;
       await requirePermission(user, "quotations.manage");
-      const data = await getQuotationRecord(req.params.id, { organizationId });
+      const data = await getQuotationRecord(req.params.id, {
+        organizationId,
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Quotation was not found.");
       res.json({ ok: true, data });
     } catch (error) {
@@ -2456,7 +2808,10 @@ async function startServer() {
       if (!tenantRequest) return;
       const { user, organizationId } = tenantRequest;
       await requirePermission(user, "quotations.manage");
-      const result = await updateQuotationRecord(req.params.id, req.body || {}, { organizationId });
+      const result = await updateQuotationRecord(req.params.id, req.body || {}, {
+        organizationId,
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
       if (!result.after) return createApiError(res, 404, "NOT_FOUND", "Quotation was not found.");
       await auditLog({ actorUserId: user.id, action: "quotation.update", entityType: "quotation", entityId: req.params.id, summary: "Quotation was updated.", before: result.before, after: result.after, requestContext: requestContext(req) });
       res.json({ ok: true, data: result.after });
@@ -2473,7 +2828,10 @@ async function startServer() {
         if (!tenantRequest) return;
         const { user, organizationId } = tenantRequest;
         await requirePermission(user, "quotations.manage");
-        const result = await setQuotationStatus(req.params.id, status, req.body || {}, { organizationId });
+        const result = await setQuotationStatus(req.params.id, status, req.body || {}, {
+          organizationId,
+          includeCustomerPrivateDetails: user.role === "CEO",
+        });
         if (!result.after) return createApiError(res, 404, "NOT_FOUND", "Quotation was not found.");
         await auditLog({ actorUserId: user.id, action: `quotation.${pathName}`, entityType: "quotation", entityId: req.params.id, summary: `Quotation was ${pathName}ed.`, before: result.before, after: result.after, requestContext: requestContext(req) });
         res.json({ ok: true, data: result.after });
@@ -2490,7 +2848,10 @@ async function startServer() {
       if (!tenantRequest) return;
       const { user, organizationId } = tenantRequest;
       await requirePermission(user, "quotations.manage");
-      const result = await convertQuotationToShipment(req.params.id, user.id, { organizationId });
+      const result = await convertQuotationToShipment(req.params.id, user.id, {
+        organizationId,
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Quotation was not found.");
       await auditLog({ actorUserId: user.id, action: "quotation.convert_to_shipment", entityType: "quotation", entityId: req.params.id, summary: "Quotation was converted to shipment.", after: result, requestContext: requestContext(req) });
       res.json({ ok: true, data: result });
@@ -2634,98 +2995,440 @@ async function startServer() {
     }
   });
 
+  app.get("/api/chat/participants", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat participants API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const query = parseRequestValue(res, chatParticipantsQuerySchema, req.query || {});
+      if (!query) return;
+      const data = await listChatParticipants({
+        organizationId,
+        search: query.q,
+        limit: query.limit,
+        excludeUserId: user.id,
+      });
+      res.json({ ok: true, data });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_PARTICIPANTS_FAILED", "Could not load chat participants.");
+    }
+  });
+
   app.get("/api/chat/threads", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "chat.use");
-      res.json({ ok: true, data: await listChatThreads(user.id) });
+      const tenantRequest = await requireChatTenantUser(req, res, "chat threads API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      res.json({ ok: true, data: await listChatThreads(user.id, { organizationId }) });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("List chat threads failed:", error);
-      createApiError(res, 500, "CHAT_THREADS_FAILED", "Could not load chat threads.");
+      handleChatRouteError(res, error, "CHAT_THREADS_FAILED", "Could not load chat threads.");
+    }
+  });
+
+  app.get("/api/chat/media", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat media library API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "chat.media.view");
+      const query = parseRequestValue(res, chatMediaListQuerySchema, req.query || {});
+      if (!query) return;
+      const data = await listChatMediaAttachments({
+        organizationId,
+        search: query.q,
+        type: query.type,
+        includeDeleted: query.includeDeleted,
+        limit: query.limit,
+      });
+      res.json({ ok: true, data });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_MEDIA_FAILED", "Could not load chat media.");
+    }
+  });
+
+  app.post("/api/chat/direct", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat direct thread API");
+      if (!tenantRequest) return;
+      if (!(await consumeRateLimit(req, res, "chat_thread_create", { ...CHAT_THREAD_CREATE_LIMIT, discriminator: tenantRequest.user.id }))) return;
+      const body = parseRequestValue(res, chatDirectBodySchema, req.body || {});
+      if (!body) return;
+      const id = await ensureDirectChat(tenantRequest.user.id, body.userId, { organizationId: tenantRequest.organizationId });
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "chat.direct_ensure",
+        entityType: "chat_thread",
+        entityId: id,
+        summary: "Direct chat was opened.",
+        requestContext: requestContext(req),
+      });
+      const memberIds = await listChatThreadMemberIds(id, { organizationId: tenantRequest.organizationId });
+      broadcastChat({ type: "thread.updated", payload: { threadId: id } }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      res.status(201).json({ ok: true, data: { id } });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_DIRECT_FAILED", "Could not open direct chat.");
     }
   });
 
   app.post("/api/chat/threads", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, req.body?.type === "GROUP" ? "chat.manage_groups" : "chat.use");
-      const id = req.body?.type === "DM"
-        ? await ensureDirectChat(user.id, req.body.memberId)
-        : await createChatThread({ actorUserId: user.id, type: req.body?.type || "GROUP", name: req.body?.name, description: req.body?.description, memberIds: req.body?.memberIds || [] });
-      await auditLog({ actorUserId: user.id, action: "chat.thread_create", entityType: "chat_thread", entityId: id, summary: "Chat thread was created.", requestContext: requestContext(req) });
+      const tenantRequest = await requireChatTenantUser(req, res, "chat group thread API", "chat.manage_groups");
+      if (!tenantRequest) return;
+      if (!(await consumeRateLimit(req, res, "chat_thread_create", { ...CHAT_THREAD_CREATE_LIMIT, discriminator: tenantRequest.user.id }))) return;
+      const body = parseRequestValue(res, chatThreadCreateBodySchema, req.body || {});
+      if (!body) return;
+      const id = await createChatThread({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        type: "GROUP",
+        name: body.name,
+        description: body.description,
+        participantUserIds: body.participantUserIds,
+      });
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "chat.thread_create",
+        entityType: "chat_thread",
+        entityId: id,
+        summary: "Chat group was created.",
+        after: { type: "GROUP", participantCount: body.participantUserIds.length + 1 },
+        requestContext: requestContext(req),
+      });
+      const memberIds = await listChatThreadMemberIds(id, { organizationId: tenantRequest.organizationId });
+      broadcastChat({ type: "thread.updated", payload: { threadId: id } }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
       res.status(201).json({ ok: true, data: { id } });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("Create chat thread failed:", error);
-      createApiError(res, 500, "CHAT_THREAD_CREATE_FAILED", "Could not create chat thread.");
+      handleChatRouteError(res, error, "CHAT_THREAD_CREATE_FAILED", "Could not create chat thread.");
     }
   });
 
   app.get("/api/chat/threads/:id/messages", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "chat.use");
-      res.json({ ok: true, data: await listChatMessages(req.params.id, user.id, req.query.limit) });
+      const tenantRequest = await requireChatTenantUser(req, res, "chat messages API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatThreadParamsSchema, req.params);
+      const query = parseRequestValue(res, chatMessageListQuerySchema, req.query || {});
+      if (!params || !query) return;
+      res.json({
+        ok: true,
+        data: await listChatMessages(params.id, tenantRequest.user.id, {
+          organizationId: tenantRequest.organizationId,
+          limit: query.limit,
+          before: query.before,
+        }),
+      });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "CHAT_MESSAGES_FAILED", "Could not load messages.");
+      handleChatRouteError(res, error, "CHAT_MESSAGES_FAILED", "Could not load messages.");
+    }
+  });
+
+  app.post("/api/chat/threads/:id/messages", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat message send API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatThreadParamsSchema, req.params);
+      const body = parseRequestValue(res, chatMessageSendBodySchema, req.body || {});
+      if (!params || !body) return;
+      await requireChatThreadMembership(tenantRequest.user.id, params.id, { organizationId: tenantRequest.organizationId });
+      const sendLimit = consumeChatMessageSendLimit({
+        organizationId: tenantRequest.organizationId,
+        userId: tenantRequest.user.id,
+        threadId: params.id,
+      });
+      if (sendLimit.limited) {
+        sendChatRateLimitedResponse(res, sendLimit);
+        return;
+      }
+      const message = await createChatMessage({
+        threadId: params.id,
+        sender: tenantRequest.user,
+        organizationId: tenantRequest.organizationId,
+        body: body.body,
+        clientMessageId: body.clientMessageId,
+      });
+      const memberIds = await listChatThreadMemberIds(params.id, { organizationId: tenantRequest.organizationId });
+      const connectedRecipients = connectedChatUserIds(tenantRequest.organizationId, memberIds);
+      const missedRecipientIds = memberIds.filter((userId) => userId !== tenantRequest.user.id && !connectedRecipients.has(userId));
+      await createChatMessageNotifications({
+        organizationId: tenantRequest.organizationId,
+        threadId: params.id,
+        messageId: message.id,
+        senderId: tenantRequest.user.id,
+        senderName: tenantRequest.user.name,
+        recipientUserIds: missedRecipientIds,
+      });
+      broadcastChat({ type: "message.created", ok: true, payload: message }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      broadcastChat({ type: "thread.updated", payload: { threadId: params.id, lastMessage: message } }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      res.status(201).json({ ok: true, data: message });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_MESSAGE_SEND_FAILED", "Could not send message.");
+    }
+  });
+
+  app.post("/api/chat/threads/:threadId/attachments", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat attachment upload API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatThreadAttachmentParamsSchema, req.params);
+      if (!params) return;
+      if (!(await consumeRateLimit(req, res, "chat_attachment_upload", {
+        ...CHAT_ATTACHMENT_UPLOAD_LIMIT,
+        discriminator: tenantRequest.user.id,
+      }))) return;
+      await requireChatThreadMembership(tenantRequest.user.id, params.threadId, { organizationId: tenantRequest.organizationId });
+      await uploadChatAttachmentSingle(req, res);
+      const body = parseRequestValue(res, chatAttachmentUploadBodySchema, req.body || {});
+      if (!body) return;
+
+      const persisted = await persistChatAttachmentFile(req.file, { organizationId: tenantRequest.organizationId });
+      if (persisted.error) {
+        return createApiError(
+          res,
+          persisted.error.statusCode || 415,
+          persisted.error.code,
+          persisted.error.message,
+          persisted.error.field
+        );
+      }
+
+      let message = null;
+      try {
+        message = await createChatAttachmentMessage({
+          threadId: params.threadId,
+          sender: tenantRequest.user,
+          organizationId: tenantRequest.organizationId,
+          caption: body.caption || "",
+          clientMessageId: body.clientMessageId,
+          attachment: persisted,
+        });
+      } catch (error) {
+        await cleanupPersistedDocument(persisted);
+        throw error;
+      }
+      const attachment = message.attachments?.[0] || null;
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "chat.attachment.upload",
+        entityType: "chat_attachment",
+        entityId: attachment?.id || message.id,
+        summary: "Chat attachment was uploaded.",
+        after: {
+          attachmentId: attachment?.id,
+          messageId: message.id,
+          threadId: params.threadId,
+          attachmentType: attachment?.attachmentType,
+          contentType: attachment?.contentType,
+          sizeBytes: attachment?.sizeBytes,
+          fileName: attachment?.filename,
+        },
+        metadata: documentStorageAuditMetadata(persisted),
+        requestContext: requestContext(req),
+      });
+      const memberIds = await listChatThreadMemberIds(params.threadId, { organizationId: tenantRequest.organizationId });
+      const connectedRecipients = connectedChatUserIds(tenantRequest.organizationId, memberIds);
+      const missedRecipientIds = memberIds.filter((userId) => userId !== tenantRequest.user.id && !connectedRecipients.has(userId));
+      await createChatMessageNotifications({
+        organizationId: tenantRequest.organizationId,
+        threadId: params.threadId,
+        messageId: message.id,
+        senderId: tenantRequest.user.id,
+        senderName: tenantRequest.user.name,
+        recipientUserIds: missedRecipientIds,
+      });
+      broadcastChat({ type: "message.created", ok: true, payload: message }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      broadcastChat({ type: "thread.updated", payload: { threadId: params.threadId, lastMessage: message } }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      res.status(201).json({ ok: true, data: message });
+    } catch (error) {
+      if (error?.code === "LIMIT_FILE_SIZE") {
+        return createApiError(res, 413, "FILE_TOO_LARGE", "حجم فایل بیش از حد مجاز است", "file");
+      }
+      handleChatRouteError(res, error, "CHAT_ATTACHMENT_UPLOAD_FAILED", "Could not upload chat attachment.");
+    }
+  });
+
+  app.get("/api/chat/messages/:messageId/attachments/:attachmentId/preview", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat attachment preview API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatMessageAttachmentParamsSchema, req.params);
+      if (!params) return;
+      if (!(await consumeRateLimit(req, res, "chat-attachment-preview", {
+        ...DOCUMENT_DOWNLOAD_LIMIT,
+        discriminator: tenantRequest.user.id,
+      }))) return;
+      const attachment = await getChatAttachmentForDelivery(params.messageId, params.attachmentId, tenantRequest.user.id, {
+        organizationId: tenantRequest.organizationId,
+        previewOnly: true,
+      });
+      await sendStoredChatAttachment(res, attachment, { disposition: "inline" });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_ATTACHMENT_PREVIEW_FAILED", "Could not preview chat attachment.");
+    }
+  });
+
+  app.get("/api/chat/messages/:messageId/attachments/:attachmentId/download", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat attachment download API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatMessageAttachmentParamsSchema, req.params);
+      if (!params) return;
+      if (!(await consumeRateLimit(req, res, "chat-attachment-download", {
+        ...DOCUMENT_DOWNLOAD_LIMIT,
+        discriminator: tenantRequest.user.id,
+      }))) return;
+      const attachment = await getChatAttachmentForDelivery(params.messageId, params.attachmentId, tenantRequest.user.id, {
+        organizationId: tenantRequest.organizationId,
+      });
+      await sendStoredChatAttachment(res, attachment, { disposition: "attachment" });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_ATTACHMENT_DOWNLOAD_FAILED", "Could not download chat attachment.");
+    }
+  });
+
+  app.delete("/api/chat/messages/:messageId/attachments/:attachmentId", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat attachment delete API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatMessageAttachmentParamsSchema, req.params);
+      if (!params) return;
+      const canManageMedia = await userHasPermission(tenantRequest.user, "chat.media.delete");
+      const result = await deleteChatAttachment({
+        messageId: params.messageId,
+        attachmentId: params.attachmentId,
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        reason: canManageMedia ? "deleted_by_manager" : "deleted_by_sender",
+        allowAny: canManageMedia,
+      });
+      let storageCleanup = "already_deleted";
+      if (!result.alreadyDeleted) {
+        try {
+          await deleteStoredChatAttachmentFiles(result.before);
+          await markChatAttachmentStorageCleanup(params.attachmentId, { organizationId: tenantRequest.organizationId });
+          storageCleanup = "deleted";
+        } catch (cleanupError) {
+          const safeReason = safeStorageCleanupMessage(cleanupError);
+          await markChatAttachmentStorageCleanup(params.attachmentId, {
+            organizationId: tenantRequest.organizationId,
+            error: safeReason,
+          });
+          storageCleanup = "failed";
+        }
+      }
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "chat.attachment.delete",
+        entityType: "chat_attachment",
+        entityId: params.attachmentId,
+        summary: "Chat attachment was deleted.",
+        before: {
+          attachmentId: result.before.id,
+          messageId: result.before.message_id,
+          threadId: result.before.thread_id,
+          attachmentType: result.before.attachment_type,
+          contentType: result.before.content_type,
+          sizeBytes: Number(result.before.size_bytes || 0),
+          fileName: result.before.original_filename,
+        },
+        after: {
+          attachmentId: result.ui.id,
+          deletedAt: result.ui.deletedAt,
+          storageCleanup,
+        },
+        requestContext: requestContext(req),
+      });
+      const memberIds = await listChatThreadMemberIds(result.before.thread_id, { organizationId: tenantRequest.organizationId });
+      broadcastChat(
+        { type: "message.updated", ok: true, payload: { threadId: result.before.thread_id, messageId: params.messageId, attachment: result.ui } },
+        { organizationId: tenantRequest.organizationId, userIds: memberIds }
+      );
+      res.json({ ok: true, data: { attachment: result.ui, storageCleanup } });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_ATTACHMENT_DELETE_FAILED", "Could not delete chat attachment.");
     }
   });
 
   app.post("/api/chat/threads/:id/read", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "chat.use");
-      const data = await markChatThreadRead(req.params.id, user.id);
-      const memberIds = await listChatThreadMemberIds(req.params.id);
-      broadcastChat({ type: "message.read", payload: data }, memberIds);
+      const tenantRequest = await requireChatTenantUser(req, res, "chat read API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatThreadParamsSchema, req.params);
+      const body = parseRequestValue(res, chatReadBodySchema, req.body || {});
+      if (!params || !body) return;
+      const data = await markChatThreadRead(params.id, tenantRequest.user.id, {
+        organizationId: tenantRequest.organizationId,
+        messageId: body.messageId,
+      });
+      const memberIds = await listChatThreadMemberIds(params.id, { organizationId: tenantRequest.organizationId });
+      broadcastChat({ type: "message.read", payload: data }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
       res.json({ ok: true, data });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "CHAT_READ_FAILED", "Could not mark thread read.");
+      handleChatRouteError(res, error, "CHAT_READ_FAILED", "Could not mark thread read.");
     }
   });
 
-  app.post("/api/chat/threads/:id/members", async (req, res) => {
+  app.post("/api/chat/threads/:id/participants", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "chat.manage_groups");
-      if (!(await userCanAccessThread(user.id, req.params.id))) {
-        return createApiError(res, 403, "FORBIDDEN", "You cannot manage this chat thread.");
-      }
-      await addChatThreadMember(req.params.id, req.body?.userId);
-      await auditLog({ actorUserId: user.id, action: "chat.member_add", entityType: "chat_thread", entityId: req.params.id, summary: "Chat member was added.", after: req.body, requestContext: requestContext(req) });
-      const memberIds = await listChatThreadMemberIds(req.params.id);
-      broadcastChat({ type: "thread.updated", payload: { threadId: req.params.id } }, memberIds);
-      res.json({ ok: true, data: { threadId: req.params.id, userId: req.body?.userId } });
+      const tenantRequest = await requireChatTenantUser(req, res, "chat participant add API", "chat.manage_groups");
+      if (!tenantRequest) return;
+      if (!(await consumeRateLimit(req, res, "chat_participant_change", { ...CHAT_PARTICIPANT_CHANGE_LIMIT, discriminator: tenantRequest.user.id }))) return;
+      const params = parseRequestValue(res, chatThreadParamsSchema, req.params);
+      const body = parseRequestValue(res, chatParticipantBodySchema, req.body || {});
+      if (!params || !body) return;
+      const data = await addChatThreadMember(params.id, body.userId, {
+        organizationId: tenantRequest.organizationId,
+        actorUserId: tenantRequest.user.id,
+      });
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "chat.participant_add",
+        entityType: "chat_thread",
+        entityId: params.id,
+        summary: "Chat participant was added.",
+        after: { userId: body.userId },
+        requestContext: requestContext(req),
+      });
+      const memberIds = await listChatThreadMemberIds(params.id, { organizationId: tenantRequest.organizationId });
+      broadcastChat({ type: "participant.updated", payload: data }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      broadcastChat({ type: "thread.updated", payload: { threadId: params.id } }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      res.json({ ok: true, data });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "CHAT_MEMBER_ADD_FAILED", "Could not add chat member.");
+      handleChatRouteError(res, error, "CHAT_PARTICIPANT_ADD_FAILED", "Could not add chat participant.");
     }
   });
 
-  app.delete("/api/chat/threads/:id/members/:userId", async (req, res) => {
+  app.delete("/api/chat/threads/:id/participants/:userId", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "chat.manage_groups");
-      if (!(await userCanAccessThread(user.id, req.params.id))) {
-        return createApiError(res, 403, "FORBIDDEN", "You cannot manage this chat thread.");
-      }
-      const memberIds = await listChatThreadMemberIds(req.params.id);
-      await removeChatThreadMember(req.params.id, req.params.userId);
-      await auditLog({ actorUserId: user.id, action: "chat.member_remove", entityType: "chat_thread", entityId: req.params.id, summary: "Chat member was removed.", after: { userId: req.params.userId }, requestContext: requestContext(req) });
-      broadcastChat({ type: "thread.updated", payload: { threadId: req.params.id } }, memberIds);
-      res.json({ ok: true, data: { threadId: req.params.id, userId: req.params.userId } });
+      const tenantRequest = await requireChatTenantUser(req, res, "chat participant remove API", "chat.manage_groups");
+      if (!tenantRequest) return;
+      if (!(await consumeRateLimit(req, res, "chat_participant_change", { ...CHAT_PARTICIPANT_CHANGE_LIMIT, discriminator: tenantRequest.user.id }))) return;
+      const params = parseRequestValue(res, chatThreadParticipantParamsSchema, req.params);
+      if (!params) return;
+      const memberIdsBefore = await listChatThreadMemberIds(params.id, { organizationId: tenantRequest.organizationId });
+      const data = await removeChatThreadMember(params.id, params.userId, {
+        organizationId: tenantRequest.organizationId,
+        actorUserId: tenantRequest.user.id,
+      });
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "chat.participant_remove",
+        entityType: "chat_thread",
+        entityId: params.id,
+        summary: "Chat participant was removed.",
+        after: { userId: params.userId },
+        requestContext: requestContext(req),
+      });
+      broadcastChat({ type: "participant.updated", payload: data }, { organizationId: tenantRequest.organizationId, userIds: memberIdsBefore });
+      broadcastChat({ type: "thread.updated", payload: { threadId: params.id } }, { organizationId: tenantRequest.organizationId, userIds: memberIdsBefore });
+      res.json({ ok: true, data });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "CHAT_MEMBER_REMOVE_FAILED", "Could not remove chat member.");
+      handleChatRouteError(res, error, "CHAT_PARTICIPANT_REMOVE_FAILED", "Could not remove chat participant.");
     }
   });
 
@@ -4482,57 +5185,201 @@ async function startServer() {
         socket.destroy();
         return;
       }
-      const session = await getSessionByToken(parseCookies(req.headers.cookie || "")[SESSION_COOKIE]);
-      if (!session?.user || (session.user.status && session.user.status !== "active")) {
+      const auth = await authenticateChatSocket(req);
+      const connectionLimit = await consumeRateLimitKey(
+        rateLimitKey(req, "chat_socket_connection", auth.user.id),
+        CHAT_SOCKET_CONNECTION_LIMIT
+      );
+      if (connectionLimit.limited) {
         socket.destroy();
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
-        chatClients.set(ws, { user: session.user });
-        ws.send(JSON.stringify({ type: "connection.ready", payload: { userId: session.user.id } }));
-        broadcastChat({ type: "presence.updated", payload: { userId: session.user.id, isOnline: true } });
+        const clientState = {
+          user: auth.user,
+          organizationId: auth.organizationId,
+          joinedThreads: new Set(),
+        };
+        chatClients.set(ws, clientState);
+        sendChatSocket(ws, {
+          type: "connection.ready",
+          ok: true,
+          payload: { userId: auth.user.id, organizationId: auth.organizationId },
+        });
+        broadcastChat(
+          { type: "presence.updated", payload: { userId: auth.user.id, isOnline: true } },
+          { organizationId: auth.organizationId }
+        );
 
         ws.on("message", async (raw) => {
           let event;
+          const rawText = raw.toString();
+          if (Buffer.byteLength(rawText, "utf8") > CHAT_SOCKET_MAX_BYTES) {
+            sendChatSocketError(ws, { code: "MESSAGE_TOO_LARGE", message: "Chat event is too large." });
+            return;
+          }
+          const eventLimit = await consumeRateLimitKey(
+            rateLimitKey(req, "chat_socket_event", auth.user.id),
+            CHAT_SOCKET_EVENT_LIMIT
+          );
+          if (eventLimit.limited) {
+            sendChatSocketError(ws, { code: "RATE_LIMITED", message: "Too many chat events. Please slow down." });
+            return;
+          }
           try {
-            event = JSON.parse(raw.toString());
+            event = JSON.parse(rawText);
           } catch {
-            ws.send(JSON.stringify({ type: "error", ok: false, error: { code: "BAD_JSON", message: "Invalid WebSocket message." } }));
+            sendChatSocketError(ws, { code: "BAD_JSON", message: "Invalid WebSocket message." });
             return;
           }
 
           try {
             if (event.type === "message.send") {
-              const payload = event.payload || {};
+              if (rejectChatSocketTenantScope(ws, event.payload, event.requestId)) return;
+              const payload = parseChatSocketPayload(ws, chatMessageSendBodySchema, event.payload, event.requestId);
+              if (!payload) return;
+              if (!payload.threadId) {
+                sendChatSocketError(ws, { requestId: event.requestId, code: "THREAD_REQUIRED", message: "Thread id is required." });
+                return;
+              }
+              await requireChatThreadMembership(auth.user.id, payload.threadId, { organizationId: auth.organizationId });
+              const sendLimit = consumeChatMessageSendLimit({
+                organizationId: auth.organizationId,
+                userId: auth.user.id,
+                threadId: payload.threadId,
+              });
+              if (sendLimit.limited) {
+                sendChatSocketError(ws, {
+                  requestId: event.requestId,
+                  code: "CHAT_RATE_LIMITED",
+                  message: "Too many chat messages. Please slow down.",
+                  retryAfterMs: sendLimit.retryAfterMs,
+                });
+                return;
+              }
               const message = await createChatMessage({
                 threadId: payload.threadId,
-                sender: session.user,
-                content: payload.content,
-                legacyData: payload.legacyData || {},
+                sender: auth.user,
+                organizationId: auth.organizationId,
+                body: payload.body,
+                clientMessageId: payload.clientMessageId,
               });
-              const memberIds = await listChatThreadMemberIds(payload.threadId);
+              const memberIds = await listChatThreadMemberIds(payload.threadId, { organizationId: auth.organizationId });
+              const connectedRecipients = connectedChatUserIds(auth.organizationId, memberIds);
+              const missedRecipientIds = memberIds.filter((userId) => userId !== auth.user.id && !connectedRecipients.has(userId));
+              await createChatMessageNotifications({
+                organizationId: auth.organizationId,
+                threadId: payload.threadId,
+                messageId: message.id,
+                senderId: auth.user.id,
+                senderName: auth.user.name,
+                recipientUserIds: missedRecipientIds,
+              });
+              sendChatSocket(ws, {
+                type: "message.ack",
+                ok: true,
+                requestId: event.requestId,
+                payload: { id: message.id, clientMessageId: payload.clientMessageId },
+              });
               const outgoing = { type: "message.created", ok: true, requestId: event.requestId, payload: message };
-              broadcastChat(outgoing, memberIds);
-              broadcastChat({ type: "thread.updated", payload: { threadId: payload.threadId, lastMessage: message } }, memberIds);
+              broadcastChat(outgoing, { organizationId: auth.organizationId, userIds: memberIds });
+              broadcastChat(
+                { type: "thread.updated", payload: { threadId: payload.threadId, lastMessage: message } },
+                { organizationId: auth.organizationId, userIds: memberIds }
+              );
               return;
             }
 
             if (event.type === "message.read") {
-              const data = await markChatThreadRead(event.payload?.threadId, session.user.id);
-              const memberIds = await listChatThreadMemberIds(event.payload?.threadId);
-              broadcastChat({ type: "message.read", ok: true, requestId: event.requestId, payload: data }, memberIds);
+              if (rejectChatSocketTenantScope(ws, event.payload, event.requestId)) return;
+              const payload = parseChatSocketPayload(ws, chatReadBodySchema, event.payload, event.requestId);
+              if (!payload) return;
+              if (!payload.threadId) {
+                sendChatSocketError(ws, { requestId: event.requestId, code: "THREAD_REQUIRED", message: "Thread id is required." });
+                return;
+              }
+              const data = await markChatThreadRead(payload.threadId, auth.user.id, {
+                organizationId: auth.organizationId,
+                messageId: payload.messageId,
+              });
+              const memberIds = await listChatThreadMemberIds(payload.threadId, { organizationId: auth.organizationId });
+              broadcastChat(
+                { type: "message.read", ok: true, requestId: event.requestId, payload: data },
+                { organizationId: auth.organizationId, userIds: memberIds }
+              );
               return;
             }
 
-            ws.send(JSON.stringify({ type: "error", requestId: event.requestId, ok: false, error: { code: "UNKNOWN_EVENT", message: "Unknown chat event." } }));
+            if (event.type === "thread.join") {
+              if (rejectChatSocketTenantScope(ws, event.payload, event.requestId)) return;
+              const payload = parseChatSocketPayload(ws, chatTypingBodySchema, event.payload, event.requestId);
+              if (!payload) return;
+              if (!(await userCanAccessThread(auth.user.id, payload.threadId, { organizationId: auth.organizationId }))) {
+                sendChatSocketError(ws, { requestId: event.requestId, code: "FORBIDDEN", message: "Thread access denied." });
+                return;
+              }
+              clientState.joinedThreads.add(payload.threadId);
+              sendChatSocket(ws, { type: "thread.joined", ok: true, requestId: event.requestId, payload });
+              return;
+            }
+
+            if (event.type === "thread.leave") {
+              if (rejectChatSocketTenantScope(ws, event.payload, event.requestId)) return;
+              const payload = parseChatSocketPayload(ws, chatTypingBodySchema, event.payload, event.requestId);
+              if (!payload) return;
+              clientState.joinedThreads.delete(payload.threadId);
+              sendChatSocket(ws, { type: "thread.left", ok: true, requestId: event.requestId, payload });
+              return;
+            }
+
+            if (event.type === "typing.start" || event.type === "typing.stop") {
+              if (rejectChatSocketTenantScope(ws, event.payload, event.requestId)) return;
+              const payload = parseChatSocketPayload(ws, chatTypingBodySchema, event.payload, event.requestId);
+              if (!payload) return;
+              if (!(await userCanAccessThread(auth.user.id, payload.threadId, { organizationId: auth.organizationId }))) {
+                sendChatSocketError(ws, { requestId: event.requestId, code: "FORBIDDEN", message: "Thread access denied." });
+                return;
+              }
+              const typingLimit = consumeChatTypingLimit({
+                organizationId: auth.organizationId,
+                userId: auth.user.id,
+                threadId: payload.threadId,
+              });
+              if (typingLimit.limited) return;
+              const memberIds = (await listChatThreadMemberIds(payload.threadId, { organizationId: auth.organizationId }))
+                .filter((userId) => userId !== auth.user.id);
+              broadcastChat(
+                {
+                  type: "typing.updated",
+                  payload: {
+                    threadId: payload.threadId,
+                    userId: auth.user.id,
+                    isTyping: event.type === "typing.start",
+                  },
+                },
+                { organizationId: auth.organizationId, userIds: memberIds }
+              );
+              return;
+            }
+
+            sendChatSocketError(ws, { requestId: event.requestId, code: "UNKNOWN_EVENT", message: "Unknown chat event." });
           } catch (error) {
-            ws.send(JSON.stringify({ type: "error", requestId: event.requestId, ok: false, error: { code: error.code || "CHAT_EVENT_FAILED", message: error.message || "Chat event failed." } }));
+            sendChatSocketError(ws, {
+              requestId: event.requestId,
+              code: error.code || "CHAT_EVENT_FAILED",
+              message: error.message || "Chat event failed.",
+            });
           }
         });
 
         ws.on("close", () => {
           chatClients.delete(ws);
-          broadcastChat({ type: "presence.updated", payload: { userId: session.user.id, isOnline: false } });
+          if (!connectedChatUserIds(auth.organizationId, [auth.user.id]).has(auth.user.id)) {
+            broadcastChat(
+              { type: "presence.updated", payload: { userId: auth.user.id, isOnline: false } },
+              { organizationId: auth.organizationId }
+            );
+          }
         });
       });
     } catch {

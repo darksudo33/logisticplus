@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useAppDataStore } from "@/src/store/useMockStore";
+import { useAppDataStore, useMockStore } from "@/src/store/useMockStore";
 import { 
   FileText, 
   Search, 
@@ -11,7 +11,12 @@ import {
   ExternalLink,
   ChevronLeft,
   ChevronRight,
-  Archive
+  Archive,
+  Eye,
+  Image as ImageIcon,
+  Loader2,
+  MessageSquare,
+  Trash2
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,18 +39,54 @@ import { DocumentType } from "../types";
 import { EmptyState, resetFiltersAction } from "@/src/components/EmptyState";
 import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
 
+type ChatMediaAttachment = {
+  id: string;
+  messageId: string;
+  threadId: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  fileSize: string;
+  attachmentType: "image" | "document";
+  createdAt: string;
+  deletedAt?: string | null;
+  deletedReason?: string | null;
+  downloadUrl?: string;
+  previewUrl?: string;
+  uploadedBy?: string;
+  uploadedById?: string | null;
+  threadType?: "DM" | "GROUP" | "SHIPMENT";
+  threadName?: string;
+  shipment?: {
+    id: string;
+    code: string;
+    status?: string;
+    customerName?: string;
+    detailUrl?: string;
+  } | null;
+};
+
 export default function Documents() {
   const navigate = useNavigate();
+  const currentUser = useMockStore(state => state.currentUser);
+  const canViewChatMedia = Boolean(currentUser?.permissions?.includes("chat.media.view"));
+  const canDeleteChatMedia = Boolean(currentUser?.permissions?.includes("chat.media.delete"));
   const documents = useAppDataStore(state => state.documents);
   const shipments = useAppDataStore(state => state.shipments);
   const refreshDocumentRecords = useAppDataStore(state => state.refreshDocuments);
 
+  const [activeSection, setActiveSection] = useState<"documents" | "chatMedia">("documents");
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("ALL");
+  const [chatMediaTypeFilter, setChatMediaTypeFilter] = useState<"ALL" | "image" | "document">("ALL");
+  const [chatMedia, setChatMedia] = useState<ChatMediaAttachment[]>([]);
+  const [isChatMediaLoading, setIsChatMediaLoading] = useState(false);
+  const [chatMediaError, setChatMediaError] = useState("");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [documentToArchive, setDocumentToArchive] = useState<{ id: string; name: string } | null>(null);
+  const [chatAttachmentToDelete, setChatAttachmentToDelete] = useState<ChatMediaAttachment | null>(null);
   const [newDoc, setNewDoc] = useState({
     name: "",
     type: "OTHER" as DocumentType,
@@ -53,6 +94,34 @@ export default function Documents() {
     visibility: "internal" as "internal" | "customer_visible"
   });
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const loadChatMedia = React.useCallback(async () => {
+    if (!canViewChatMedia) return;
+    setIsChatMediaLoading(true);
+    setChatMediaError("");
+    try {
+      const response = await fetch("/api/chat/media?includeDeleted=true&limit=100");
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error?.message || "Could not load chat media.");
+      }
+      setChatMedia(payload.data || []);
+    } catch (error: any) {
+      setChatMediaError(error?.message || "Could not load chat media.");
+    } finally {
+      setIsChatMediaLoading(false);
+    }
+  }, [canViewChatMedia]);
+
+  React.useEffect(() => {
+    if (!canViewChatMedia && activeSection === "chatMedia") {
+      setActiveSection("documents");
+    }
+  }, [activeSection, canViewChatMedia]);
+
+  React.useEffect(() => {
+    if (canViewChatMedia) void loadChatMedia();
+  }, [canViewChatMedia, loadChatMedia]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -70,9 +139,28 @@ export default function Documents() {
       return isNotArchived && matchesSearch && matchesType;
     });
   }, [documents, searchTerm, typeFilter]);
+
+  const filteredChatMedia = React.useMemo(() => {
+    const query = searchTerm.trim().toLowerCase();
+    return chatMedia.filter(item => {
+      const matchesType = chatMediaTypeFilter === "ALL" || item.attachmentType === chatMediaTypeFilter;
+      const searchable = [
+        item.filename,
+        item.uploadedBy,
+        item.threadName,
+        item.threadType,
+        item.shipment?.code,
+        item.shipment?.customerName,
+      ].filter(Boolean).join(" ").toLowerCase();
+      const matchesSearch = !query || searchable.includes(query);
+      return matchesType && matchesSearch;
+    });
+  }, [chatMedia, chatMediaTypeFilter, searchTerm]);
+
   const resetDocumentFilters = () => {
     setSearchTerm("");
     setTypeFilter("ALL");
+    setChatMediaTypeFilter("ALL");
   };
   const activeDocs = documents.filter(doc => !doc.isArchived);
   const documentStats = [
@@ -80,6 +168,12 @@ export default function Documents() {
     { label: "متصل به محموله", value: activeDocs.filter(doc => doc.shipmentId).length, icon: Ship, tone: "text-blue-600 bg-blue-500/10" },
     { label: "انواع سند", value: new Set(activeDocs.map(doc => doc.type)).size, icon: FileIcon, tone: "text-emerald-600 bg-emerald-500/10" },
     { label: "آرشیو شده", value: documents.filter(doc => doc.isArchived).length, icon: Archive, tone: "text-amber-600 bg-amber-500/10" },
+  ];
+  const chatMediaStats = [
+    { label: "رسانه‌های گفتگو", value: chatMedia.length, icon: MessageSquare, tone: "text-primary bg-primary/10" },
+    { label: "تصاویر", value: chatMedia.filter(item => item.attachmentType === "image").length, icon: ImageIcon, tone: "text-blue-600 bg-blue-500/10" },
+    { label: "فایل‌ها", value: chatMedia.filter(item => item.attachmentType === "document").length, icon: FileIcon, tone: "text-emerald-600 bg-emerald-500/10" },
+    { label: "حذف‌شده", value: chatMedia.filter(item => item.deletedAt).length, icon: Archive, tone: "text-amber-600 bg-amber-500/10" },
   ];
 
   const refreshDocuments = async () => {
@@ -132,6 +226,20 @@ export default function Documents() {
     setDocumentToArchive(null);
   };
 
+  const handleDeleteChatAttachment = async (attachment: ChatMediaAttachment) => {
+    const response = await fetch(
+      `/api/chat/messages/${encodeURIComponent(attachment.messageId)}/attachments/${encodeURIComponent(attachment.id)}`,
+      { method: "DELETE" }
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error?.message || "حذف فایل گفتگو ناموفق بود.");
+    }
+    await loadChatMedia();
+    toast.success("فایل گفتگو حذف شد.");
+    setChatAttachmentToDelete(null);
+  };
+
   const handleVisibilityChange = async (id: string, visibility: "internal" | "customer_visible") => {
     const response = await fetch(`/api/documents/${encodeURIComponent(id)}/visibility`, {
       method: "PATCH",
@@ -157,6 +265,19 @@ export default function Documents() {
       OTHER: "سایر"
     };
     return labels[type] || type;
+  };
+
+  const getChatThreadTypeLabel = (type?: string) => {
+    if (type === "SHIPMENT") return "محموله";
+    if (type === "DM") return "مستقیم";
+    return "گروه";
+  };
+
+  const formatChatMediaDate = (value?: string) => {
+    if (!value) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" });
   };
 
   return (
@@ -259,8 +380,35 @@ export default function Documents() {
         </Dialog>
       </div>
 
+      {canViewChatMedia && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-2 shadow-sm" data-testid="documents-section-tabs">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={cn("h-9 rounded-lg px-4 text-xs font-black", activeSection === "documents" ? "bg-primary text-primary-foreground" : "text-muted-foreground")}
+            onClick={() => setActiveSection("documents")}
+            data-testid="documents-tab"
+          >
+            <FileText className="ml-2 h-4 w-4" />
+            اسناد
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={cn("h-9 rounded-lg px-4 text-xs font-black", activeSection === "chatMedia" ? "bg-primary text-primary-foreground" : "text-muted-foreground")}
+            onClick={() => setActiveSection("chatMedia")}
+            data-testid="chat-media-tab"
+          >
+            <MessageSquare className="ml-2 h-4 w-4" />
+            رسانه‌ها و فایل‌های گفتگو
+          </Button>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {documentStats.map((stat) => (
+        {(activeSection === "chatMedia" ? chatMediaStats : documentStats).map((stat) => (
           <Card key={stat.label} className="bg-card border-border rounded-xl p-4 shadow-sm">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -275,6 +423,7 @@ export default function Documents() {
         ))}
       </div>
 
+      {activeSection === "documents" ? (
       <Card className="bg-card border-border rounded-xl shadow-sm overflow-hidden">
         <CardHeader className="border-b border-border/50 p-4 md:p-5">
           <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
@@ -413,6 +562,156 @@ export default function Documents() {
           )}
         </CardContent>
       </Card>
+      ) : (
+      <Card className="bg-card border-border rounded-xl shadow-sm overflow-hidden" data-testid="chat-media-library">
+        <CardHeader className="border-b border-border/50 p-4 md:p-5">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div className="relative w-full md:w-96">
+              <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="جستجو در فایل‌های گفتگو..."
+                className="h-10 rounded-xl border-border bg-background pr-10 text-xs"
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+              />
+            </div>
+            <div className="flex w-full flex-wrap items-center gap-2 md:w-auto">
+              {[
+                { value: "ALL", label: "همه" },
+                { value: "image", label: "تصاویر" },
+                { value: "document", label: "فایل‌ها" },
+              ].map(filter => (
+                <Button
+                  key={filter.value}
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={cn("h-8 rounded-lg px-4 text-xs", chatMediaTypeFilter === filter.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}
+                  onClick={() => setChatMediaTypeFilter(filter.value as typeof chatMediaTypeFilter)}
+                >
+                  {filter.label}
+                </Button>
+              ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 rounded-lg px-4 text-xs"
+                onClick={() => void loadChatMedia()}
+                disabled={isChatMediaLoading}
+              >
+                {isChatMediaLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "بروزرسانی"}
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-4 md:p-5">
+          {chatMediaError && (
+            <div className="mb-4 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs font-bold text-destructive">
+              {chatMediaError}
+            </div>
+          )}
+          {isChatMediaLoading ? (
+            <div className="flex min-h-40 items-center justify-center">
+              <Loader2 className="h-7 w-7 animate-spin text-primary" />
+            </div>
+          ) : filteredChatMedia.length === 0 ? (
+            <EmptyState
+              icon={MessageSquare}
+              title="فایلی در گفتگوها پیدا نشد"
+              description="با تغییر جستجو یا فیلتر نوع فایل، رسانه‌های گفتگو را بررسی کنید."
+              primaryAction={resetFiltersAction(resetDocumentFilters)}
+            />
+          ) : (
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2" data-testid="chat-media-list">
+              {filteredChatMedia.map(item => {
+                const isDeleted = Boolean(item.deletedAt);
+                return (
+                  <div key={item.id} className="rounded-xl border border-border bg-background p-3 shadow-sm" data-testid="chat-media-item">
+                    <div className="flex min-w-0 items-start gap-3">
+                      {item.attachmentType === "image" && item.previewUrl && !isDeleted ? (
+                        <a href={item.previewUrl} target="_blank" rel="noreferrer" className="block h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-border bg-muted">
+                          <img src={item.previewUrl} alt={item.filename} className="h-full w-full object-cover" loading="lazy" />
+                        </a>
+                      ) : (
+                        <span className="grid h-16 w-16 shrink-0 place-items-center rounded-lg bg-muted text-primary">
+                          {item.attachmentType === "image" ? <ImageIcon className="h-6 w-6" /> : <FileIcon className="h-6 w-6" />}
+                        </span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="outline" className="rounded-md text-[10px]">
+                            {item.attachmentType === "image" ? "تصویر" : "فایل"}
+                          </Badge>
+                          <Badge variant="secondary" className="rounded-md text-[10px]">
+                            {getChatThreadTypeLabel(item.threadType)}
+                          </Badge>
+                          {isDeleted && (
+                            <Badge variant="destructive" className="rounded-md text-[10px]">
+                              حذف‌شده
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="mt-2 truncate text-xs font-black text-foreground">{item.filename}</p>
+                        <p className="mt-1 text-[11px] font-bold text-muted-foreground">
+                          {item.fileSize} · {item.uploadedBy || "کاربر"}
+                        </p>
+                        <p className="mt-1 text-[11px] font-bold text-muted-foreground">
+                          {item.shipment?.code ? `محموله ${item.shipment.code}` : item.threadName || "گفتگوی داخلی"}
+                        </p>
+                        <p className="mt-1 text-[10px] font-bold text-muted-foreground">{formatChatMediaDate(item.createdAt)}</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-3">
+                      <div className="flex items-center gap-1">
+                        {item.previewUrl && !isDeleted && (
+                          <Button asChild variant="ghost" size="icon" className="h-8 w-8 rounded-lg">
+                            <a href={item.previewUrl} target="_blank" rel="noreferrer" aria-label="Preview chat media">
+                              <Eye className="h-4 w-4" />
+                            </a>
+                          </Button>
+                        )}
+                        {item.downloadUrl && !isDeleted && (
+                          <Button asChild variant="ghost" size="icon" className="h-8 w-8 rounded-lg">
+                            <a href={item.downloadUrl} target="_blank" rel="noreferrer" aria-label="Download chat media">
+                              <Download className="h-4 w-4" />
+                            </a>
+                          </Button>
+                        )}
+                        {item.shipment?.detailUrl && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 rounded-lg"
+                            onClick={() => navigate(item.shipment?.detailUrl || "")}
+                            aria-label="Open shipment"
+                          >
+                            <Ship className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                      {canDeleteChatMedia && !isDeleted && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 rounded-lg px-3 text-xs text-destructive hover:text-destructive"
+                          onClick={() => setChatAttachmentToDelete(item)}
+                        >
+                          <Trash2 className="ml-1 h-4 w-4" />
+                          حذف
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+      )}
       <DeleteConfirmDialog
         isOpen={Boolean(documentToArchive)}
         onClose={() => setDocumentToArchive(null)}
@@ -422,6 +721,16 @@ export default function Documents() {
         itemName={documentToArchive?.name}
         confirmLabel="انتقال به بایگانی"
         pendingLabel="در حال بایگانی..."
+      />
+      <DeleteConfirmDialog
+        isOpen={Boolean(chatAttachmentToDelete)}
+        onClose={() => setChatAttachmentToDelete(null)}
+        onConfirm={() => chatAttachmentToDelete ? handleDeleteChatAttachment(chatAttachmentToDelete) : undefined}
+        title="حذف فایل گفتگو"
+        description="این فایل فقط از گفتگوی داخلی و کتابخانه رسانه گفتگو حذف می‌شود و اسناد رسمی محموله دست‌نخورده می‌مانند."
+        itemName={chatAttachmentToDelete?.filename}
+        confirmLabel="حذف فایل گفتگو"
+        pendingLabel="در حال حذف..."
       />
     </div>
   );

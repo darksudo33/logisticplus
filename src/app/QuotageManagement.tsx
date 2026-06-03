@@ -88,7 +88,8 @@ const QuoteStatusBadge = ({ status }: { status: QuoteStatus }) => {
 };
 
 export default function QuotageManagement() {
-  const { quotes, loadCurrentUserRecords } = useMockStore();
+  const { quotes, loadCurrentUserRecords, currentUser } = useMockStore();
+  const canViewCustomerPrivateDetails = currentUser?.role === "CEO";
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState<QuoteStatus | "ALL">("ALL");
   const [showAddForm, setShowAddForm] = useState(false);
@@ -217,7 +218,7 @@ export default function QuotageManagement() {
           method: "PATCH",
           body: JSON.stringify({
         customerName: newQuote.customerName,
-        customerPhone: newQuote.customerPhone,
+        ...(canViewCustomerPrivateDetails ? { customerPhone: newQuote.customerPhone } : {}),
         originCity: newQuote.originCity,
         destinationCity: newQuote.destinationCity,
         cargoType: newQuote.cargoType,
@@ -242,7 +243,7 @@ export default function QuotageManagement() {
           method: "POST",
           body: JSON.stringify({
         customerName: newQuote.customerName || "",
-        customerPhone: newQuote.customerPhone || "",
+        ...(canViewCustomerPrivateDetails ? { customerPhone: newQuote.customerPhone || "" } : {}),
         originCity: newQuote.originCity || "",
         destinationCity: newQuote.destinationCity || "",
         cargoType: newQuote.cargoType as CargoType,
@@ -284,6 +285,7 @@ export default function QuotageManagement() {
           <p className="text-muted-foreground text-xs font-bold mt-1">مدیریت، محاسبه و پیگیری نرخ‌های اعلامی به مشتریان</p>
         </div>
         <Button 
+          data-testid="open-quotation-dialog"
           onClick={() => setShowAddForm(true)}
           className="bg-emerald-600 hover:bg-emerald-500 text-white font-black h-11 px-5 rounded-xl shadow-sm shadow-emerald-500/20"
         >
@@ -586,7 +588,7 @@ export default function QuotageManagement() {
                             onChange={(e) => setNewQuote({...newQuote, customerName: e.target.value})}
                           />
                         </div>
-                        <div className="space-y-1.5">
+                        {canViewCustomerPrivateDetails ? <div className="space-y-1.5">
                           <label className="text-[10px] font-bold text-muted-foreground px-1">شماره تماس</label>
                           <Input 
                             className="bg-background border-border h-11 text-xs font-bold text-foreground rounded-xl text-left font-mono"
@@ -594,7 +596,7 @@ export default function QuotageManagement() {
                             value={newQuote.customerPhone}
                             onChange={(e) => setNewQuote({...newQuote, customerPhone: e.target.value})}
                           />
-                        </div>
+                        </div> : null}
                       </div>
                     </div>
 
@@ -850,7 +852,9 @@ export default function QuotageManagement() {
                 <h2 className="text-xs font-black text-slate-500 uppercase border-b border-slate-100 pb-1">اطلاعات مشتری (Client Details)</h2>
                 <div>
                   <div className="text-lg font-black text-slate-900">{quote.customerName}</div>
-                  <div className="text-sm text-slate-600 font-mono mt-1">{quote.customerPhone}</div>
+                  {canViewCustomerPrivateDetails && quote.customerPhone ? (
+                    <div className="text-sm text-slate-600 font-mono mt-1">{quote.customerPhone}</div>
+                  ) : null}
                 </div>
               </div>
               <div className="space-y-4">

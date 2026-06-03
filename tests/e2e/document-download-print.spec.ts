@@ -10,6 +10,8 @@ import {
   loginApi,
   loginViaUi,
   readOk,
+  uniqueEmail,
+  USER_PASSWORD,
 } from "./helpers";
 
 const { Client } = pg;
@@ -30,6 +32,35 @@ async function uploadDocument(
       file,
     },
   });
+}
+
+async function uploadChatAttachment(
+  context: Awaited<ReturnType<typeof loginApi>>,
+  threadId: string,
+  file: { name: string; mimeType: string; buffer: Buffer },
+  caption = ""
+) {
+  return context.post(`/api/chat/threads/${encodeURIComponent(threadId)}/attachments`, {
+    multipart: {
+      caption,
+      file,
+    },
+  });
+}
+
+async function createCompanyUser(owner: Awaited<ReturnType<typeof loginApi>>, role: string, prefix: string) {
+  const email = uniqueEmail(prefix);
+  const data = await readOk<any>(
+    await owner.post("/api/users", {
+      data: {
+        name: `E2E Documents ${role}`,
+        email,
+        password: USER_PASSWORD,
+        role,
+      },
+    })
+  );
+  return { id: data.id, email, name: data.name };
 }
 
 async function withDb<T>(callback: (client: any) => Promise<T>) {
@@ -165,7 +196,7 @@ test.describe.serial("document download, public access, archive, and print/expor
     await disposeContexts(owner, publicContext);
   });
 
-  test("renders document download links and prints only the selected quotation", async ({ page }) => {
+  test("renders document download links while quotation UI remains disabled", async ({ page }) => {
     const owner = await loginApi();
     const title = `E2E UI Download ${Date.now()}`;
     const uploaded = await readOk<any>(
@@ -214,20 +245,8 @@ test.describe.serial("document download, public access, archive, and print/expor
     page.on("pageerror", (error) => {
       if (!isIgnorableDevServerMessage(error.message)) consoleErrors.push(error.message);
     });
-    await page.addInitScript(() => {
-      (window as any).__printCalls = 0;
-      (window as any).__activePrintBlocks = 0;
-      (window as any).__printTitle = "";
-      window.print = () => {
-        (window as any).__printCalls += 1;
-        (window as any).__activePrintBlocks = document.querySelectorAll('.print-content[data-print-active="true"]').length;
-        (window as any).__printTitle = document.title;
-        window.dispatchEvent(new Event("afterprint"));
-      };
-    });
-
     await loginViaUi(page);
-    for (const route of ["/documents", "/shipments/s1", "/track/search", "/quotage"]) {
+    for (const route of ["/documents", "/shipments/s1", "/track/search"]) {
       await page.goto(route);
       await expect(page.locator("h1").first()).toBeVisible();
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
@@ -245,14 +264,85 @@ test.describe.serial("document download, public access, archive, and print/expor
     expect(await shipmentDownload.getAttribute("href")).toBe(`/api/documents/${uploaded.id}/download`);
 
     await page.goto("/quotage");
-    const originalTitle = await page.title();
-    await page.getByLabel(`Print quotation ${quote.id}`).first().click();
-    await expect.poll(() => page.evaluate(() => (window as any).__printCalls)).toBe(1);
-    expect(await page.evaluate(() => (window as any).__activePrintBlocks)).toBe(1);
-    expect(await page.evaluate(() => (window as any).__printTitle)).toContain(quote.id);
-    await expect.poll(() => page.title()).toBe(originalTitle);
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await page.goto("/quotations");
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page.getByText(quote.customerName)).toHaveCount(0);
+    await expect(page.getByLabel(`Print quotation ${quote.id}`)).toHaveCount(0);
     expect(consoleErrors).toEqual([]);
 
     await disposeContexts(owner);
+  });
+
+  test("shows CEO-only chat media library and deletes chat media without touching documents", async ({ browser }) => {
+    const owner = await loginApi();
+    const employee = await createCompanyUser(owner, "OPERATIONS", "e2e-docs-media-ops");
+    const employeeApi = await loginApi(employee.email, USER_PASSWORD);
+    const documentTitle = `E2E Protected Document ${Date.now()}`;
+    const chatFileName = `chat-media-library-${Date.now()}.txt`;
+
+    const uploadedDocument = await readOk<any>(
+      await uploadDocument(
+        owner,
+        {
+          name: "protected-document.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("official document body"),
+        },
+        {
+          title: documentTitle,
+          shipmentId: "s1",
+        }
+      )
+    );
+    const thread = await readOk<{ id: string }>(
+      await owner.post("/api/chat/direct", { data: { userId: employee.id } })
+    );
+    const chatMessage = await readOk<any>(
+      await uploadChatAttachment(
+        owner,
+        thread.id,
+        {
+          name: chatFileName,
+          mimeType: "text/plain",
+          buffer: Buffer.from("internal chat media body"),
+        },
+        "CEO media library smoke"
+      )
+    );
+    const attachment = chatMessage.attachments?.[0];
+    expect(attachment?.downloadUrl).toBeTruthy();
+
+    const ownerContext = await browser.newContext();
+    const ownerPage = await ownerContext.newPage();
+    const employeeContext = await browser.newContext();
+    const employeePage = await employeeContext.newPage();
+
+    try {
+      await loginViaUi(ownerPage);
+      await ownerPage.goto("/documents");
+      await expect(ownerPage.getByTestId("chat-media-tab")).toBeVisible();
+      await ownerPage.getByTestId("chat-media-tab").click();
+      await expect(ownerPage.getByTestId("chat-media-library")).toBeVisible();
+      await expect(ownerPage.getByTestId("chat-media-item").filter({ hasText: chatFileName })).toBeVisible();
+
+      await loginViaUi(employeePage, employee.email, USER_PASSWORD);
+      await employeePage.goto("/documents");
+      await expect(employeePage.getByTestId("chat-media-tab")).toHaveCount(0);
+
+      const item = ownerPage.getByTestId("chat-media-item").filter({ hasText: chatFileName });
+      await item.getByRole("button", { name: /حذف/ }).click();
+      await ownerPage.getByRole("button", { name: /حذف فایل گفتگو/ }).click();
+      await expect(item.getByText("حذف‌شده")).toBeVisible();
+
+      await expectUnavailable(await owner.get(attachment.downloadUrl));
+      const documentDownload = await owner.get(`/api/documents/${encodeURIComponent(uploadedDocument.id)}/download`);
+      expect(documentDownload.status(), await documentDownload.text()).toBe(200);
+      expect(await documentDownload.text()).toBe("official document body");
+    } finally {
+      await ownerContext.close();
+      await employeeContext.close();
+      await disposeContexts(owner, employeeApi);
+    }
   });
 });

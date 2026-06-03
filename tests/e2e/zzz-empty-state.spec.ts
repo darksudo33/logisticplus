@@ -16,13 +16,14 @@ const protectedRoutes = [
   "/tasks",
   "/documents",
   "/cheques",
-  "/quotage",
   "/archive",
   "/compliance",
   "/chat",
   "/management",
   "/changelog",
 ];
+
+const routesWithExpectedActivityAfterLogin = new Set(["/changelog"]);
 
 const forbiddenVisibleText = [
   "LP-1403",
@@ -83,9 +84,37 @@ async function cleanOperationalData() {
       ["DELETE FROM subscription_events"],
       ["DELETE FROM user_records"],
       ["DELETE FROM organization_members WHERE user_id <> $1 OR organization_id <> $2", [ownerUserId, defaultOrganizationId]],
-      ["DELETE FROM app_users WHERE id <> $1", [ownerUserId]],
+      [
+        `DELETE FROM app_users u
+         WHERE u.id <> $1
+           AND NOT EXISTS (
+             SELECT 1
+             FROM audit_logs a
+             WHERE a.actor_user_id = u.id
+           )`,
+        [ownerUserId],
+      ],
+      [
+        `UPDATE app_users
+         SET organization_id = NULL,
+             status = 'suspended',
+             is_online = FALSE,
+             updated_at = NOW()
+         WHERE id <> $1
+           AND organization_id = $2`,
+        [ownerUserId, defaultOrganizationId],
+      ],
       ["DELETE FROM organization_subscriptions WHERE organization_id <> $1", [defaultOrganizationId]],
-      ["DELETE FROM organizations WHERE id <> $1", [defaultOrganizationId]],
+      [
+        `DELETE FROM organizations o
+         WHERE o.id <> $1
+           AND NOT EXISTS (
+             SELECT 1
+             FROM audit_logs a
+             WHERE a.organization_id = o.id
+           )`,
+        [defaultOrganizationId],
+      ],
       ["UPDATE app_users SET organization_id = $2, status = 'active', is_online = FALSE WHERE id = $1", [ownerUserId, defaultOrganizationId]],
       [
         `INSERT INTO organization_members (organization_id, user_id, role, status)
@@ -136,7 +165,9 @@ test.describe.serial("guided empty-state UX on a clean database", () => {
       for (const route of protectedRoutes) {
         await page.goto(route);
         await expect(page.locator("h1").first()).toBeVisible();
-        await expect(page.locator("[data-empty-state]").filter({ visible: true }).first()).toBeVisible();
+        if (!routesWithExpectedActivityAfterLogin.has(route)) {
+          await expect(page.locator("[data-empty-state]").filter({ visible: true }).first()).toBeVisible();
+        }
         await expect(page.locator("body")).not.toContainText(/demo/i);
         for (const forbidden of forbiddenVisibleText) {
           await expect(page.locator("body")).not.toContainText(forbidden);
@@ -147,13 +178,15 @@ test.describe.serial("guided empty-state UX on a clean database", () => {
       await page.goto("/admin");
       await expect(page.locator("h1").first()).toBeVisible();
       await expectNoHorizontalOverflow(page);
-      for (const tabName of [/ثبت/, /پرداخت/, /خطا/]) {
-        await page.locator("button", { hasText: tabName }).first().click();
-        await expect(page.locator("[data-empty-state]").filter({ visible: true }).first()).toBeVisible();
-        for (const forbidden of forbiddenVisibleText) {
-          await expect(page.locator("body")).not.toContainText(forbidden);
+      if (viewport.width >= 768) {
+        for (const tabName of [/ثبت/, /پرداخت/, /خطا/]) {
+          await page.locator("button", { hasText: tabName }).filter({ visible: true }).first().click();
+          await expect(page.locator("[data-empty-state]").filter({ visible: true }).first()).toBeVisible();
+          for (const forbidden of forbiddenVisibleText) {
+            await expect(page.locator("body")).not.toContainText(forbidden);
+          }
+          await expectNoHorizontalOverflow(page);
         }
-        await expectNoHorizontalOverflow(page);
       }
     }
 

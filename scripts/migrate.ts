@@ -44,12 +44,14 @@ async function loadMigrations() {
   return Promise.all(
     names.map(async (name) => {
       const filePath = path.join(migrationsDir, name);
-      const sql = (await fs.readFile(filePath, "utf8")).replace(/^\uFEFF/, "");
+      const rawSql = (await fs.readFile(filePath, "utf8")).replace(/^\uFEFF/, "");
+      const sql = rawSql.replace(/\r\n?/g, "\n");
       return {
         id: name.replace(/\.sql$/, ""),
         name,
         sql,
         checksum: checksum(sql),
+        rawChecksum: checksum(rawSql),
       };
     })
   );
@@ -64,7 +66,8 @@ async function appliedMigrations(client: Client) {
 function assertAppliedChecksumsMatch(migrations, applied) {
   for (const migration of migrations) {
     const existing = applied.get(migration.id);
-    if (existing && existing.checksum !== migration.checksum) {
+    const validChecksums = new Set([migration.checksum, migration.rawChecksum]);
+    if (existing && !validChecksums.has(existing.checksum)) {
       throw new Error(`Applied migration checksum changed: ${migration.name}`);
     }
   }

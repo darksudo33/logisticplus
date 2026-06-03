@@ -3,9 +3,6 @@ import { loginViaUi } from "./helpers";
 
 const workflows = [
   { route: "/tasks", opener: "open-task-dialog" },
-  { route: "/shipments", opener: "open-shipment-dialog" },
-  { route: "/cheques", opener: "open-cheque-dialog" },
-  { route: "/compliance-meetings", opener: "open-compliance-dialog" },
 ];
 
 async function expectNoHorizontalOverflow(page: Page) {

@@ -72,4 +72,5 @@ export const apiPost = <T>(url: string, body?: unknown, options: ApiRequestOptio
   apiRequest<T>(url, { ...options, method: "POST", body });
 export const apiPatch = <T>(url: string, body?: unknown, options: ApiRequestOptions = {}) =>
   apiRequest<T>(url, { ...options, method: "PATCH", body });
-
+export const apiDelete = <T>(url: string, options: ApiRequestOptions = {}) =>
+  apiRequest<T>(url, { ...options, method: "DELETE" });

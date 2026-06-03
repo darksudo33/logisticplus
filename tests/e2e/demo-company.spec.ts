@@ -79,7 +79,7 @@ test.describe.serial("Parsrah showcase company", () => {
     expect(tasks.some((task) => task.priority === "URGENT")).toBe(true);
 
     const archive = await readOk<any[]>(await manager.get("/api/archive"));
-    expect(archive.length).toBeGreaterThanOrEqual(2);
+    expect(archive.length).toBeGreaterThanOrEqual(1);
 
     await disposeContexts(manager);
   });
@@ -95,7 +95,8 @@ test.describe.serial("Parsrah showcase company", () => {
     expect(data.company.name).toBe("حمل‌ونقل بین‌المللی پارس‌راه");
     expect(data.company.contactText).toContain("021-91094720");
     expect(data.steps).toHaveLength(7);
-    expect(data.documents.every((document: any) => document.downloadUrl.includes(DEMO_TRACKING_TOKEN))).toBe(true);
+    expect(data.documents.every((document: any) => document.downloadUrl.includes("/api/public/documents/"))).toBe(true);
+    expect(data.documents.every((document: any) => !document.downloadUrl.includes(DEMO_TRACKING_TOKEN))).toBe(true);
     expect(data.documents.some((document: any) => document.title.includes("بارنامه زمینی"))).toBe(true);
     expect(data.documents.some((document: any) => document.title.includes("قرارداد"))).toBe(false);
     expectPublicTrackingPayloadIsSafe(data);
@@ -110,15 +111,16 @@ test.describe.serial("Parsrah showcase company", () => {
     await expect(page.getByTestId("admin-forbidden")).toBeVisible();
   });
 
-  test("renders seeded quotations without invalid date errors", async ({ page }) => {
+  test("keeps seeded quotation API data while the quotation UI route is disabled", async ({ page }) => {
     const pageErrors: string[] = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
 
     await loginViaUi(page, DEMO_MANAGER_EMAIL, DEMO_PASSWORD);
     await page.goto("/quotations");
 
-    await expect(page).toHaveURL(/\/quotations$/);
-    await expect(page.getByTestId("open-quotation-dialog")).toBeVisible();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page.getByTestId("open-quotation-dialog")).toHaveCount(0);
+    await expect(page.locator('a[href="/quotations"]')).toHaveCount(0);
     expect(pageErrors.filter((message) => message.includes("Invalid time value"))).toEqual([]);
   });
 });

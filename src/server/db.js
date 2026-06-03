@@ -11,14 +11,21 @@ import {
   markPaymentVerifiedByAuthority as markPaymentVerifiedByAuthorityInRepository,
 } from "./repositories/billing.js";
 import {
+  DEFAULT_SHIPMENT_TYPE_CODE,
+  normalizeShipmentTypeCode,
+  shipmentTypeByCode,
+} from "../shared/shipment-form-fields.js";
+import {
   getDocumentDetail as getDocumentDetailFromRepository,
   getDocumentForDownload as getDocumentForDownloadFromRepository,
   listDocuments as listDocumentsFromRepository,
   listDocumentStorageKeysForCleanup as listDocumentStorageKeysForCleanupFromRepository,
 } from "./repositories/documents.js";
 import {
+  canViewCustomerPrivateDetails,
   getCustomerRecord as getCustomerRecordFromRepository,
   listCustomersDetailed as listCustomersDetailedFromRepository,
+  toUiCustomer as toUiCustomerFromRepository,
 } from "./repositories/customers.js";
 import {
   getShipmentRecord as getShipmentRecordFromRepository,
@@ -42,6 +49,7 @@ const TRANSIENT_SESSION_HOURS = 12;
 const REMEMBER_SESSION_DAYS = 30;
 const LOGIN_SMS_CODE_TTL_MINUTES = 5;
 const LOGIN_SMS_MAX_ATTEMPTS = 5;
+const QUOTATIONS_UI_SURFACE_ENABLED = false;
 
 export function hashSessionToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
@@ -266,32 +274,48 @@ async function searchShipments({ user, normalizedQuery, fetchLimit }) {
 async function searchCustomers({ user, normalizedQuery, fetchLimit }) {
   const values = [];
   const organizationParam = `$${values.push(user.organizationId)}`;
+  const includePrivateDetails = canViewCustomerPrivateDetails(user);
   const fields = {
     customerName: normalizedSearchSql("CONCAT_WS(' ', c.company_name, c.contact_name)"),
-    phone: normalizedSearchSql("c.phone"),
-    email: normalizedSearchSql("c.email"),
-    address: normalizedSearchSql("c.address"),
-    nationalId: normalizedSearchSql("CONCAT_WS(' ', c.legacy_data->>'nationalId', c.legacy_data->>'taxId', c.legacy_data->>'nationalCode')"),
   };
+  if (includePrivateDetails) {
+    Object.assign(fields, {
+      phone: normalizedSearchSql("c.phone"),
+      email: normalizedSearchSql("c.email"),
+      address: normalizedSearchSql("c.address"),
+      referrer: normalizedSearchSql("c.referrer"),
+      nationalId: normalizedSearchSql("CONCAT_WS(' ', c.legacy_data->>'nationalId', c.legacy_data->>'taxId', c.legacy_data->>'nationalCode')"),
+    });
+  }
   const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
   const limitParam = `$${values.push(fetchLimit)}`;
+  const subtitleExpression = includePrivateDetails
+    ? "CONCAT_WS(' - ', NULLIF(c.contact_name, ''), NULLIF(c.phone, ''), NULLIF(c.email, ''))"
+    : "CONCAT_WS(' - ', NULLIF(c.contact_name, ''), NULLIF(c.company_name, ''))";
+  const descriptionExpression = includePrivateDetails ? "COALESCE(NULLIF(c.address, ''), 'پرونده مشتری')" : "'پرونده مشتری'";
+  const fieldValuesExpression = includePrivateDetails
+    ? `jsonb_build_object(
+         'customerName', CONCAT_WS(' ', c.company_name, c.contact_name),
+         'phone', c.phone,
+         'email', c.email,
+         'address', c.address,
+         'referrer', c.referrer,
+         'nationalId', CONCAT_WS(' ', c.legacy_data->>'nationalId', c.legacy_data->>'taxId', c.legacy_data->>'nationalCode')
+       )`
+    : `jsonb_build_object(
+         'customerName', CONCAT_WS(' ', c.company_name, c.contact_name)
+       )`;
   return runOperationalSearchQuery(
     `SELECT
        c.id,
        'customer' AS result_type,
        COALESCE(NULLIF(c.company_name, ''), NULLIF(c.contact_name, ''), c.id) AS title,
-       CONCAT_WS(' · ', NULLIF(c.contact_name, ''), NULLIF(c.phone, ''), NULLIF(c.email, '')) AS subtitle,
-       COALESCE(NULLIF(c.address, ''), 'پرونده مشتری') AS description,
+       ${subtitleExpression} AS subtitle,
+       ${descriptionExpression} AS description,
        CONCAT('/customers/', c.id) AS url,
        COALESCE(c.updated_at, c.created_at) AS updated_at,
        ${matcher.score} AS search_score,
-       jsonb_build_object(
-         'customerName', CONCAT_WS(' ', c.company_name, c.contact_name),
-         'phone', c.phone,
-         'email', c.email,
-         'address', c.address,
-         'nationalId', CONCAT_WS(' ', c.legacy_data->>'nationalId', c.legacy_data->>'taxId', c.legacy_data->>'nationalCode')
-       ) AS field_values,
+       ${fieldValuesExpression} AS field_values,
        COUNT(*) OVER()::int AS total_count
      FROM customers c
      WHERE c.organization_id = ${organizationParam}
@@ -493,6 +517,7 @@ async function searchArchive({ user, normalizedQuery, fetchLimit }) {
   };
   const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
   const limitParam = `$${values.push(fetchLimit)}`;
+  const includeQuotationArchiveParam = `$${values.push(QUOTATIONS_UI_SURFACE_ENABLED)}`;
   return runOperationalSearchQuery(
     `SELECT
        ar.id,
@@ -514,6 +539,7 @@ async function searchArchive({ user, normalizedQuery, fetchLimit }) {
      FROM archive_records ar
      WHERE ar.organization_id = ${organizationParam}
        AND ar.restored_at IS NULL
+       AND (${includeQuotationArchiveParam}::boolean OR ar.entity_type <> 'quotation')
        AND ${matcher.condition}
      ORDER BY search_score DESC, COALESCE(ar.archived_at, NOW()) DESC
      LIMIT ${limitParam}`,
@@ -765,12 +791,22 @@ export async function getRecordsForUser(ownerUserId, { organizationId, tenantCon
     commercialCards,
   ] = await Promise.all([
     listOrganizationUsersForBootstrap(userOrganizationId),
-    listCustomersDetailed({ organizationId: userOrganizationId, includeArchived: true }),
+    listCustomersDetailed({
+      organizationId: userOrganizationId,
+      includeArchived: true,
+      includePrivateDetails: canViewCustomerPrivateDetails(user),
+    }),
     listBootstrapShipments(ownerUserId, userOrganizationId),
     listTasks({ organizationId: userOrganizationId, includeAll: true }),
     listDocuments({ organizationId: userOrganizationId, includeArchived: true }),
     listComplianceMeetings({ organizationId: userOrganizationId, includeArchived: true }),
-    listQuotations({ organizationId: userOrganizationId, includeArchived: true }),
+    QUOTATIONS_UI_SURFACE_ENABLED
+      ? listQuotations({
+          organizationId: userOrganizationId,
+          includeArchived: true,
+          includeCustomerPrivateDetails: canViewCustomerPrivateDetails(user),
+        })
+      : Promise.resolve([]),
     listOrganizationUserRecords(userOrganizationId, "shipmentSteps"),
     listOrganizationUserRecords(userOrganizationId, "commercialCards"),
   ]);
@@ -813,9 +849,20 @@ export async function replaceRecordsForUser(ownerUserId, recordsByCollection, { 
 
     let total = 0;
     for (const [collection, records] of entries) {
-      if (collection === "notifications") {
+      if (
+        collection === "notifications" ||
+        collection === "customers" ||
+        collection === "channels" ||
+        collection === "messages" ||
+        (!QUOTATIONS_UI_SURFACE_ENABLED && collection === "quotes")
+      ) {
         // Notifications are canonical in the notifications table; the compatibility
         // bridge must not overwrite real read state or resurrect seed/demo rows.
+        // Customers are canonical and may be privacy-sanitized in bootstrap payloads.
+        // Live chat is canonical in chat_* tables and must not be reseeded from
+        // legacy channels/messages collections.
+        // Quotations are temporarily hidden from the UI and must be managed only
+        // through the canonical quotation API while the UI surface is disabled.
         continue;
       }
       const uniqueRecords = Array.from(
@@ -1408,6 +1455,9 @@ function toUiShipment(row) {
     origin: row.origin || legacy.origin || "",
     destination: row.destination || legacy.destination || "",
     status: row.status || legacy.status || "PENDING",
+    shipmentDirection: row.shipment_direction || legacy.shipmentDirection || legacy.shipment_direction || "import",
+    transportMode: row.transport_mode || legacy.transportMode || legacy.transport_mode || "",
+    shipmentTypeCode: row.shipment_type_code || legacy.shipmentTypeCode || legacy.shipment_type_code || DEFAULT_SHIPMENT_TYPE_CODE,
     createdAt: row.created_at || legacy.createdAt || new Date().toISOString(),
     estimatedDelivery: row.estimated_delivery_at || legacy.estimatedDelivery || "",
     actualDelivery: row.actual_delivery_at || legacy.actualDelivery || undefined,
@@ -1432,6 +1482,36 @@ function toUiShipment(row) {
   };
 }
 
+function shipmentTypeColumnsFromMutation(updates = {}, fallback = {}) {
+  const requestedType =
+    updates.shipmentTypeCode ??
+    updates.shipment_type_code ??
+    fallback.shipment_type_code ??
+    fallback.shipmentTypeCode ??
+    DEFAULT_SHIPMENT_TYPE_CODE;
+  const shipmentTypeCode = normalizeShipmentTypeCode(requestedType);
+  const shipmentType = shipmentTypeByCode.get(shipmentTypeCode);
+  const shipmentDirection =
+    updates.shipmentDirection ??
+    updates.shipment_direction ??
+    fallback.shipment_direction ??
+    fallback.shipmentDirection ??
+    shipmentType?.direction ??
+    "import";
+  const transportMode =
+    updates.transportMode ??
+    updates.transport_mode ??
+    fallback.transport_mode ??
+    fallback.transportMode ??
+    shipmentType?.transportMode ??
+    null;
+  return {
+    shipmentTypeCode,
+    shipmentDirection,
+    transportMode,
+  };
+}
+
 function cleanShipmentLegacyPatch(updates = {}) {
   const legacyPatch = {};
   for (const key of [
@@ -1447,6 +1527,15 @@ function cleanShipmentLegacyPatch(updates = {}) {
     "importPermitNumber",
   ]) {
     if (updates[key] !== undefined) legacyPatch[key] = updates[key] ?? "";
+  }
+  if (updates.shipmentTypeCode !== undefined || updates.shipment_type_code !== undefined) {
+    legacyPatch.shipmentTypeCode = updates.shipmentTypeCode ?? updates.shipment_type_code ?? "";
+  }
+  if (updates.shipmentDirection !== undefined || updates.shipment_direction !== undefined) {
+    legacyPatch.shipmentDirection = updates.shipmentDirection ?? updates.shipment_direction ?? "";
+  }
+  if (updates.transportMode !== undefined || updates.transport_mode !== undefined) {
+    legacyPatch.transportMode = updates.transportMode ?? updates.transport_mode ?? "";
   }
   return legacyPatch;
 }
@@ -1501,6 +1590,7 @@ export async function createShipmentRecord({ ownerUserId, actorUserId, organizat
   const id = crypto.randomUUID();
   const shipmentCode = String(shipment.shipmentCode || shipment.trackingNumber || "").trim();
   const legacyPatch = cleanShipmentLegacyPatch(shipment);
+  const typeColumns = shipmentTypeColumnsFromMutation(shipment);
 
   try {
     await client.query("BEGIN");
@@ -1513,9 +1603,10 @@ export async function createShipmentRecord({ ownerUserId, actorUserId, organizat
     const result = await client.query(
       `INSERT INTO shipments (
          id, organization_id, owner_user_id, shipment_code, customer_id, customer_name, status,
+         shipment_direction, transport_mode, shipment_type_code,
          origin, destination, estimated_delivery_at, assigned_manager_id, legacy_data, created_by_id, updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, NOW())
        RETURNING *`,
       [
         id,
@@ -1525,6 +1616,9 @@ export async function createShipmentRecord({ ownerUserId, actorUserId, organizat
         shipment.customerId || null,
         shipment.customerName || customer?.company_name || customer?.contact_name || null,
         shipment.status || "PENDING",
+        typeColumns.shipmentDirection,
+        typeColumns.transportMode,
+        typeColumns.shipmentTypeCode,
         shipment.origin || null,
         shipment.destination || null,
         shipment.estimatedDelivery || null,
@@ -1534,6 +1628,9 @@ export async function createShipmentRecord({ ownerUserId, actorUserId, organizat
           trackingNumber: shipmentCode,
           customerId: shipment.customerId || undefined,
           customerName: shipment.customerName || customer?.company_name || customer?.contact_name || undefined,
+          shipmentTypeCode: typeColumns.shipmentTypeCode,
+          shipmentDirection: typeColumns.shipmentDirection,
+          transportMode: typeColumns.transportMode,
         }),
         actorUserId || ownerUserId,
       ]
@@ -1574,6 +1671,14 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
       assignedManagerId: updates.assignedManagerId || null,
     });
     const legacyPatch = cleanShipmentLegacyPatch(updates);
+    const hasShipmentTypeUpdate =
+      updates.shipmentTypeCode !== undefined ||
+      updates.shipment_type_code !== undefined ||
+      updates.shipmentDirection !== undefined ||
+      updates.shipment_direction !== undefined ||
+      updates.transportMode !== undefined ||
+      updates.transport_mode !== undefined;
+    const typeColumns = shipmentTypeColumnsFromMutation(updates, before);
     const nextLegacy = {
       ...(before.legacy_data || {}),
       ...legacyPatch,
@@ -1582,6 +1687,13 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
         : {}),
       ...(updates.customerId !== undefined ? { customerId: updates.customerId || "" } : {}),
       ...(updates.customerName !== undefined ? { customerName: updates.customerName || "" } : {}),
+      ...(hasShipmentTypeUpdate
+        ? {
+            shipmentTypeCode: typeColumns.shipmentTypeCode,
+            shipmentDirection: typeColumns.shipmentDirection,
+            transportMode: typeColumns.transportMode,
+          }
+        : {}),
     };
 
     const columns = [];
@@ -1599,6 +1711,11 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
       addColumn("customer_name", updates.customerName || customer?.company_name || customer?.contact_name || null);
     }
     if (updates.status !== undefined) addColumn("status", updates.status);
+    if (hasShipmentTypeUpdate) {
+      addColumn("shipment_direction", typeColumns.shipmentDirection || null);
+      addColumn("transport_mode", typeColumns.transportMode || null);
+      addColumn("shipment_type_code", typeColumns.shipmentTypeCode);
+    }
     if (updates.origin !== undefined) addColumn("origin", updates.origin || null);
     if (updates.destination !== undefined) addColumn("destination", updates.destination || null);
     if (updates.estimatedDelivery !== undefined) addColumn("estimated_delivery_at", updates.estimatedDelivery || null);
@@ -1734,27 +1851,13 @@ function toUiUser(row) {
 }
 
 function toUiCustomer(row) {
-  if (!row) return null;
-  const legacy = row.legacy_data || {};
-  return {
-    id: row.id,
-    name: row.contact_name || legacy.name || row.company_name,
-    company: row.company_name || legacy.company || "",
-    phone: row.phone || legacy.phone || "",
-    email: row.email || legacy.email || "",
-    address: row.address || legacy.address || "",
-    shipmentsCount: Number(legacy.shipmentsCount || 0),
-    createdAt: row.created_at || legacy.createdAt || new Date().toISOString(),
-    notes: row.notes || legacy.notes || "",
-    status: row.status || legacy.status || "active",
-    isArchived: Boolean(row.archived_at),
-  };
+  return toUiCustomerFromRepository(row);
 }
 
-function toUiQuote(row) {
+function toUiQuote(row, { includeCustomerPrivateDetails = true } = {}) {
   if (!row) return null;
   const legacy = row.legacy_data || {};
-  return {
+  const quote = {
     id: row.id,
     customerId: row.customer_id || legacy.customerId || undefined,
     customerName: row.customer_name || legacy.customerName || "",
@@ -1781,6 +1884,8 @@ function toUiQuote(row) {
     convertedShipmentId: row.converted_shipment_id || legacy.convertedShipmentId || undefined,
     isArchived: Boolean(row.archived_at),
   };
+  if (includeCustomerPrivateDetails) return quote;
+  return { ...quote, customerPhone: "" };
 }
 
 function toUiCheque(row) {
@@ -3887,7 +3992,7 @@ export async function updateMeetingRequiredDocument(meetingId, documentId, updat
 export async function getDashboardData(user, permissions = []) {
   const canViewAllTasks = permissions.includes("tasks.view_all");
   const canViewCompliance = permissions.includes("compliance.manage");
-  const canViewQuotations = permissions.includes("quotations.manage");
+  const canViewQuotations = QUOTATIONS_UI_SURFACE_ENABLED && permissions.includes("quotations.manage");
   const canUseCheques = permissions.includes("cheques.manage");
   const canViewOrganizationCheques = canUseCheques && (user.role === "CEO" || user.role === "MANAGER");
   const organizationId = user.organizationId || user.organization_id;
@@ -3972,13 +4077,14 @@ export async function getDashboardData(user, permissions = []) {
       [orgParam, user.id, canViewOrganizationCheques, canUseCheques]
     ),
     listComplianceMeetings(canViewCompliance ? { organizationId } : { organizationId, assignedToId: user.id }),
-    pool.query(
-      `SELECT COUNT(*) FILTER (WHERE archived_at IS NULL AND status = 'PENDING')::int AS active_quotations
-       FROM quotations
-       WHERE ($1::text IS NULL OR organization_id = $1)
-         AND $2::boolean`,
-      [orgParam, canViewQuotations]
-    ),
+    canViewQuotations
+      ? pool.query(
+          `SELECT COUNT(*) FILTER (WHERE archived_at IS NULL AND status = 'PENDING')::int AS active_quotations
+           FROM quotations
+           WHERE ($1::text IS NULL OR organization_id = $1)`,
+          [orgParam]
+        )
+      : Promise.resolve({ rows: [{ active_quotations: 0 }] }),
     pool.query(
       `SELECT * FROM notifications
        WHERE user_id = $1 AND ($2::text IS NULL OR organization_id = $2) AND read_at IS NULL
@@ -6697,12 +6803,12 @@ export async function deleteAppUserRecord(userId, { organizationId, actorUserId 
   }
 }
 
-export async function listCustomersDetailed({ includeArchived = false, search = "", organizationId } = {}) {
-  return listCustomersDetailedFromRepository(pool, { includeArchived, search, organizationId });
+export async function listCustomersDetailed({ includeArchived = false, search = "", organizationId, includePrivateDetails = true } = {}) {
+  return listCustomersDetailedFromRepository(pool, { includeArchived, search, organizationId, includePrivateDetails });
 }
 
-export async function getCustomerRecord(id, { organizationId } = {}) {
-  return getCustomerRecordFromRepository(pool, id, { organizationId });
+export async function getCustomerRecord(id, { organizationId, includePrivateDetails = true } = {}) {
+  return getCustomerRecordFromRepository(pool, id, { organizationId, includePrivateDetails });
 }
 
 export async function createCustomerRecord({ ownerUserId, actorUserId, customer }) {
@@ -6727,9 +6833,9 @@ export async function createCustomerRecord({ ownerUserId, actorUserId, customer 
     const result = await client.query(
       `INSERT INTO customers (
          id, organization_id, owner_user_id, company_name, contact_name, email, phone, address,
-         notes, status, legacy_data, created_by_id, updated_at
+         referrer, notes, status, legacy_data, created_by_id, updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10::jsonb, $11, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', $11::jsonb, $12, NOW())
        RETURNING *`,
       [
         id,
@@ -6740,6 +6846,7 @@ export async function createCustomerRecord({ ownerUserId, actorUserId, customer 
         customer.email || null,
         customer.phone || null,
         customer.address || null,
+        customer.referrer || null,
         customer.notes || null,
         JSON.stringify(customer),
         actorUserId || ownerUserId,
@@ -6747,7 +6854,7 @@ export async function createCustomerRecord({ ownerUserId, actorUserId, customer 
     );
     await syncCustomerUserRecord(client, ownerUserId, result.rows[0]);
     await client.query("COMMIT");
-    return result.rows[0];
+    return toUiCustomer(result.rows[0]);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -6789,11 +6896,12 @@ export async function updateCustomerRecord(id, updates, { organizationId } = {})
            email = COALESCE($4, email),
            phone = COALESCE($5, phone),
            address = COALESCE($6, address),
-           notes = COALESCE($7, notes),
-           status = COALESCE($8, status),
-           legacy_data = legacy_data || $9::jsonb,
+           referrer = COALESCE($7, referrer),
+           notes = COALESCE($8, notes),
+           status = COALESCE($9, status),
+           legacy_data = legacy_data || $10::jsonb,
            updated_at = NOW()
-       WHERE id = $1 AND organization_id = $10
+       WHERE id = $1 AND organization_id = $11
        RETURNING *`,
       [
         id,
@@ -6802,6 +6910,7 @@ export async function updateCustomerRecord(id, updates, { organizationId } = {})
         updates.email || null,
         updates.phone || null,
         updates.address || null,
+        updates.referrer || null,
         updates.notes || null,
         updates.status || null,
         JSON.stringify(updates || {}),
@@ -6810,7 +6919,7 @@ export async function updateCustomerRecord(id, updates, { organizationId } = {})
     );
     await syncCustomerUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
     await client.query("COMMIT");
-    return { before: current, after: result.rows[0] || null };
+    return { before: toUiCustomer(current), after: toUiCustomer(result.rows[0]) };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -6841,7 +6950,7 @@ export async function archiveCustomerRecord(id, { organizationId } = {}) {
     );
     await syncCustomerUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
     await client.query("COMMIT");
-    return { before: before.rows[0] || null, after: result.rows[0] || null };
+    return { before: toUiCustomer(before.rows[0]), after: toUiCustomer(result.rows[0]) };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -6850,7 +6959,7 @@ export async function archiveCustomerRecord(id, { organizationId } = {}) {
   }
 }
 
-export async function listCustomerRelated(id, type, { organizationId } = {}) {
+export async function listCustomerRelated(id, type, { organizationId, includePrivateDetails = true } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "listCustomerRelated");
   if (!(await getCustomerRecord(id, { organizationId }))) return null;
   if (type === "shipments") {
@@ -6860,9 +6969,12 @@ export async function listCustomerRelated(id, type, { organizationId } = {}) {
        ORDER BY updated_at DESC`,
       [id, scopedOrganizationId]
     );
-    return result.rows.map((row) => ({
+    return result.rows.map((row) => {
+      const legacy = row.legacy_data || {};
+      return {
       id: row.id,
       trackingNumber: row.shipment_code,
+      containerNumber: legacy.containerNumber || "",
       customerId: row.customer_id,
       customerName: row.customer_name,
       status: row.status,
@@ -6871,11 +6983,18 @@ export async function listCustomerRelated(id, type, { organizationId } = {}) {
       estimatedDelivery: row.estimated_delivery_at,
       isArchived: Boolean(row.archived_at),
       createdAt: row.created_at,
-      ...(row.legacy_data || {}),
-    }));
+      };
+    });
   }
   if (type === "documents") return listDocuments({ customerId: id, organizationId, includeArchived: true });
-  if (type === "quotations") return listQuotations({ customerId: id, organizationId, includeArchived: true });
+  if (type === "quotations") {
+    return listQuotations({
+      customerId: id,
+      organizationId,
+      includeArchived: true,
+      includeCustomerPrivateDetails: includePrivateDetails,
+    });
+  }
   if (type === "cheques") {
     const result = await pool.query(
       `SELECT * FROM cheques
@@ -6888,7 +7007,13 @@ export async function listCustomerRelated(id, type, { organizationId } = {}) {
   return [];
 }
 
-export async function listQuotations({ ownerUserId, customerId, organizationId, includeArchived = false } = {}) {
+export async function listQuotations({
+  ownerUserId,
+  customerId,
+  organizationId,
+  includeArchived = false,
+  includeCustomerPrivateDetails = true,
+} = {}) {
   const conditions = [];
   const values = [];
   const scopedOrganizationId = requireOrganizationScope(organizationId, "listQuotations");
@@ -6905,22 +7030,34 @@ export async function listQuotations({ ownerUserId, customerId, organizationId, 
   if (!includeArchived) conditions.push("archived_at IS NULL");
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const result = await pool.query(`SELECT * FROM quotations ${where} ORDER BY updated_at DESC`, values);
-  return result.rows.map(toUiQuote);
+  return result.rows.map((row) => toUiQuote(row, { includeCustomerPrivateDetails }));
 }
 
-export async function getQuotationRecord(id, { organizationId } = {}) {
+export async function getQuotationRecord(id, { organizationId, includeCustomerPrivateDetails = true } = {}) {
   const values = [id];
   const organizationFilter = organizationScopeClause(values, organizationId, "organization_id", "getQuotationRecord");
   const result = await pool.query(`SELECT * FROM quotations WHERE id = $1 ${organizationFilter} LIMIT 1`, values);
-  return result.rows[0] || null;
+  return toUiQuote(result.rows[0], { includeCustomerPrivateDetails });
 }
 
-export async function createQuotationRecord({ ownerUserId, actorUserId, organizationId, tenantContext, quote }) {
+export async function createQuotationRecord({
+  ownerUserId,
+  actorUserId,
+  organizationId,
+  tenantContext,
+  quote,
+  includeCustomerPrivateDetails = true,
+}) {
   const scopedOrganizationId = tenantContext
     ? organizationIdFromTenantContext(tenantContext, "createQuotationRecord")
     : requireOrganizationScope(organizationId, "createQuotationRecord");
   const client = await pool.connect();
-  const id = quote.id || crypto.randomUUID();
+  const safeQuote = { ...(quote || {}) };
+  if (!includeCustomerPrivateDetails) {
+    delete safeQuote.customerPhone;
+    delete safeQuote.customer_phone;
+  }
+  const id = safeQuote.id || crypto.randomUUID();
   try {
     await client.query("BEGIN");
     const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
@@ -6946,36 +7083,36 @@ export async function createQuotationRecord({ ownerUserId, actorUserId, organiza
         id,
         scopedOrganizationId,
         ownerUserId,
-        quote.quotationNumber || quote.id || id,
-        quote.customerId || null,
-        quote.customerName || "Unknown customer",
-        quote.customerPhone || null,
-        quote.originCity || null,
-        quote.destinationCity || null,
-        quote.cargoType || "GENERAL",
-        quote.weight || 0,
-        quote.dimensions || null,
-        quote.pickupDate || null,
-        quote.deliveryDate || null,
-        JSON.stringify(Array.isArray(quote.requirements) ? quote.requirements : []),
-        quote.baseRate || 0,
-        quote.fuelSurcharge || 0,
-        quote.loadingFees || 0,
-        quote.tollFees || 0,
-        quote.insurancePercentage || 0,
-        quote.profitMargin || 0,
-        quote.totalPrice || 0,
-        quote.validUntil || null,
-        quote.status || "PENDING",
-        quote.notes || null,
-        JSON.stringify(quote),
+        safeQuote.quotationNumber || safeQuote.id || id,
+        safeQuote.customerId || null,
+        safeQuote.customerName || "Unknown customer",
+        safeQuote.customerPhone || null,
+        safeQuote.originCity || null,
+        safeQuote.destinationCity || null,
+        safeQuote.cargoType || "GENERAL",
+        safeQuote.weight || 0,
+        safeQuote.dimensions || null,
+        safeQuote.pickupDate || null,
+        safeQuote.deliveryDate || null,
+        JSON.stringify(Array.isArray(safeQuote.requirements) ? safeQuote.requirements : []),
+        safeQuote.baseRate || 0,
+        safeQuote.fuelSurcharge || 0,
+        safeQuote.loadingFees || 0,
+        safeQuote.tollFees || 0,
+        safeQuote.insurancePercentage || 0,
+        safeQuote.profitMargin || 0,
+        safeQuote.totalPrice || 0,
+        safeQuote.validUntil || null,
+        safeQuote.status || "PENDING",
+        safeQuote.notes || null,
+        JSON.stringify(safeQuote),
         actorUserId || ownerUserId,
-        quote.isArchived ? new Date() : null,
+        safeQuote.isArchived ? new Date() : null,
       ]
     );
     await syncQuoteUserRecord(client, ownerUserId, result.rows[0]);
     await client.query("COMMIT");
-    return result.rows[0];
+    return toUiQuote(result.rows[0], { includeCustomerPrivateDetails });
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -6984,9 +7121,14 @@ export async function createQuotationRecord({ ownerUserId, actorUserId, organiza
   }
 }
 
-export async function updateQuotationRecord(id, updates, { organizationId } = {}) {
+export async function updateQuotationRecord(id, updates, { organizationId, includeCustomerPrivateDetails = true } = {}) {
   const client = await pool.connect();
   const scopedOrganizationId = requireOrganizationScope(organizationId, "updateQuotationRecord");
+  updates = { ...(updates || {}) };
+  if (!includeCustomerPrivateDetails) {
+    delete updates.customerPhone;
+    delete updates.customer_phone;
+  }
   try {
     await client.query("BEGIN");
     const before = await client.query(
@@ -7055,7 +7197,10 @@ export async function updateQuotationRecord(id, updates, { organizationId } = {}
     );
     await syncQuoteUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
     await client.query("COMMIT");
-    return { before: before.rows[0] || null, after: result.rows[0] || null };
+    return {
+      before: toUiQuote(before.rows[0], { includeCustomerPrivateDetails }),
+      after: toUiQuote(result.rows[0], { includeCustomerPrivateDetails }),
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -7064,7 +7209,7 @@ export async function updateQuotationRecord(id, updates, { organizationId } = {}
   }
 }
 
-export async function setQuotationStatus(id, status, extra = {}, { organizationId } = {}) {
+export async function setQuotationStatus(id, status, extra = {}, { organizationId, includeCustomerPrivateDetails = true } = {}) {
   const timestampColumn =
     status === "ACCEPTED" ? "accepted_at" : status === "REJECTED" ? "rejected_at" : status === "EXPIRED" ? "expired_at" : null;
   const client = await pool.connect();
@@ -7092,7 +7237,10 @@ export async function setQuotationStatus(id, status, extra = {}, { organizationI
     );
     await syncQuoteUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
     await client.query("COMMIT");
-    return { before: before.rows[0] || null, after: result.rows[0] || null };
+    return {
+      before: toUiQuote(before.rows[0], { includeCustomerPrivateDetails }),
+      after: toUiQuote(result.rows[0], { includeCustomerPrivateDetails }),
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -7101,7 +7249,7 @@ export async function setQuotationStatus(id, status, extra = {}, { organizationI
   }
 }
 
-export async function convertQuotationToShipment(id, actorUserId, { organizationId } = {}) {
+export async function convertQuotationToShipment(id, actorUserId, { organizationId, includeCustomerPrivateDetails = true } = {}) {
   const client = await pool.connect();
   const scopedOrganizationId = requireOrganizationScope(organizationId, "convertQuotationToShipment");
   try {
@@ -7134,7 +7282,7 @@ export async function convertQuotationToShipment(id, actorUserId, { organization
         quote.origin_city,
         quote.destination_city,
         quote.delivery_date,
-        JSON.stringify({ sourceQuotationId: quote.id, quote: toUiQuote(quote) }),
+        JSON.stringify({ sourceQuotationId: quote.id, quote: toUiQuote(quote, { includeCustomerPrivateDetails }) }),
         actorUserId || quote.owner_user_id,
       ]
     );
@@ -7148,7 +7296,10 @@ export async function convertQuotationToShipment(id, actorUserId, { organization
     );
     await syncQuoteUserRecord(client, quote.owner_user_id, updated.rows[0]);
     await client.query("COMMIT");
-    return { quote: updated.rows[0], shipment: shipment.rows[0] };
+    return {
+      quote: toUiQuote(updated.rows[0], { includeCustomerPrivateDetails }),
+      shipment: shipment.rows[0],
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -7181,6 +7332,7 @@ export async function listArchiveRecords({ search = "", organizationId } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "listArchiveRecords");
   const records = [];
   for (const [entityType, config] of Object.entries(archiveTables)) {
+    if (!QUOTATIONS_UI_SURFACE_ENABLED && entityType === "quotation") continue;
     const values = [scopedOrganizationId];
     const conditions = ["archived_at IS NOT NULL", "organization_id = $1"];
     const result = await pool.query(
@@ -7372,15 +7524,178 @@ export async function deleteArchivedEntityRecord(entityType, entityId, { organiz
   }
 }
 
-function toUiChatThread(row, members = [], lastMessage = null) {
+const CHAT_MESSAGE_MAX_LENGTH = 3000;
+
+function chatAccessError(message = "Thread access denied.", statusCode = 403, code = "FORBIDDEN") {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
+}
+
+function normalizeChatMessageBody(value) {
+  const body = String(value || "").trim();
+  if (!body) throw chatAccessError("Message cannot be empty.", 400, "CHAT_MESSAGE_EMPTY");
+  if (body.length > CHAT_MESSAGE_MAX_LENGTH) {
+    throw chatAccessError("Message is too long.", 400, "CHAT_MESSAGE_TOO_LONG");
+  }
+  return body;
+}
+
+function directChatKey(organizationId, userAId, userBId) {
+  const ids = [String(userAId), String(userBId)].sort();
+  return crypto
+    .createHash("sha256")
+    .update(`${organizationId}:${ids[0]}:${ids[1]}`)
+    .digest("hex");
+}
+
+function directChatId(organizationId, userAId, userBId) {
+  return `dm-${crypto.createHash("sha256").update(directChatKey(organizationId, userAId, userBId)).digest("hex").slice(0, 32)}`;
+}
+
+function shipmentChatId(organizationId, shipmentId) {
+  return `shipment-${crypto
+    .createHash("sha256")
+    .update(`${organizationId}:${shipmentId}`)
+    .digest("hex")
+    .slice(0, 32)}`;
+}
+
+function permissionsAllowShipmentChat(permissions = [], shipment = {}, userId = "") {
+  if (!permissions.includes("chat.use")) return false;
+  if (permissions.includes("shipments.view_all")) return true;
+  if (!permissions.includes("shipments.view_assigned")) return false;
+  return shipment.owner_user_id === userId || shipment.assigned_manager_id === userId;
+}
+
+async function userHasShipmentChatAccess(queryable, { userId, organizationId, shipmentId }) {
+  if (!userId || !shipmentId) return false;
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "userHasShipmentChatAccess");
+  const shipmentResult = await queryable.query(
+    `SELECT id, organization_id, owner_user_id, assigned_manager_id
+     FROM shipments
+     WHERE id = $1
+       AND organization_id = $2
+     LIMIT 1`,
+    [shipmentId, scopedOrganizationId]
+  );
+  const shipment = shipmentResult.rows[0];
+  if (!shipment) return false;
+  const permissions = await getUserPermissionsWithClient(queryable, userId);
+  return permissionsAllowShipmentChat(permissions, shipment, userId);
+}
+
+async function chatThreadAccessAllowed(queryable, row, userId, organizationId) {
+  if (!row) return false;
+  if (row.type !== "SHIPMENT") return true;
+  return userHasShipmentChatAccess(queryable, {
+    userId,
+    organizationId,
+    shipmentId: row.shipment_id,
+  });
+}
+
+async function filterShipmentChatMemberRows(queryable, rows, { organizationId }) {
+  const first = rows[0];
+  if (!first || first.thread_type !== "SHIPMENT") return rows;
+  const scopedOrganizationId = organizationId || first.organization_id;
+  const filtered = [];
+  for (const row of rows) {
+    if (await userHasShipmentChatAccess(queryable, {
+      userId: row.id || row.user_id,
+      organizationId: scopedOrganizationId,
+      shipmentId: row.shipment_id,
+    })) {
+      filtered.push(row);
+    }
+  }
+  return filtered;
+}
+
+async function ensureAccessibleShipmentThreadMembershipsForUser(userId, { organizationId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "ensureAccessibleShipmentThreadMembershipsForUser");
+  const result = await pool.query(
+    `SELECT t.id, t.shipment_id
+     FROM chat_threads t
+     WHERE t.organization_id = $1
+       AND t.type = 'SHIPMENT'
+       AND t.shipment_id IS NOT NULL
+       AND t.archived_at IS NULL
+       AND NOT EXISTS (
+         SELECT 1
+         FROM chat_thread_members m
+         WHERE m.thread_id = t.id
+           AND m.organization_id = t.organization_id
+           AND m.user_id = $2
+           AND m.status = 'active'
+       )`,
+    [scopedOrganizationId, userId]
+  );
+  for (const row of result.rows) {
+    if (!(await userHasShipmentChatAccess(pool, {
+      userId,
+      organizationId: scopedOrganizationId,
+      shipmentId: row.shipment_id,
+    }))) {
+      continue;
+    }
+    await upsertChatMember(pool, {
+      threadId: row.id,
+      userId,
+      organizationId: scopedOrganizationId,
+      role: "member",
+      actorUserId: userId,
+    });
+  }
+}
+
+function toUiChatMember(row) {
   return {
     id: row.id,
-    type: row.type,
-    name: row.name || "",
+    userId: row.id,
+    name: row.name || row.email || "User",
+    displayName: row.name || row.email || "User",
+    email: row.email || "",
+    role: row.role || "",
+    roleName: row.role || "",
+    avatar: row.avatar || "",
+    isOnline: Boolean(row.is_online),
+    active: (row.status || "active") === "active",
+    memberRole: row.member_role || "member",
+  };
+}
+
+function toUiChatThread(row, members = [], lastMessage = null) {
+  const type = row.type === "DM" ? "DM" : row.type === "SHIPMENT" ? "SHIPMENT" : "GROUP";
+  const shipmentCode = row.shipment_code || row.shipment_reference || row.shipment_id || "";
+  const shipmentDetailUrl = row.shipment_id ? `/shipments/${encodeURIComponent(row.shipment_id)}` : undefined;
+  return {
+    id: row.id,
+    type,
+    threadType: type.toLowerCase(),
+    name: type === "SHIPMENT" ? row.name || `Shipment ${shipmentCode}` : row.name || "",
     description: row.description || "",
     roleLimit: row.role_limit || undefined,
     icon: row.icon || undefined,
     legacyChannelId: row.legacy_channel_id || undefined,
+    shipmentId: row.shipment_id || undefined,
+    shipmentCode: shipmentCode || undefined,
+    shipmentStatus: row.shipment_status || undefined,
+    customerName: row.shipment_customer_name || undefined,
+    shipmentDetailUrl,
+    shipment: row.shipment_id
+      ? {
+        id: row.shipment_id,
+        code: shipmentCode,
+        status: row.shipment_status || "",
+        customerName: row.shipment_customer_name || "",
+        detailUrl: shipmentDetailUrl,
+      }
+      : undefined,
+    unreadCount: Number(row.unread_count || 0),
+    lastReadAt: row.last_read_at || null,
+    participantCount: members.length,
     members,
     lastMessage,
     createdAt: row.created_at,
@@ -7388,8 +7703,80 @@ function toUiChatThread(row, members = [], lastMessage = null) {
   };
 }
 
-function toUiChatMessage(row) {
+function formatAttachmentSize(bytes = 0) {
+  const size = Number(bytes) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function toUiChatAttachment(row) {
+  if (!row) return null;
+  const deletedAt = row.deleted_at || null;
+  const baseUrl = `/api/chat/messages/${encodeURIComponent(row.message_id)}/attachments/${encodeURIComponent(row.id)}`;
+  return {
+    id: row.id,
+    messageId: row.message_id,
+    threadId: row.thread_id,
+    filename: row.original_filename || row.file_name || row.id,
+    contentType: row.content_type || "application/octet-stream",
+    sizeBytes: Number(row.size_bytes || 0),
+    fileSize: formatAttachmentSize(row.size_bytes),
+    attachmentType: row.attachment_type === "image" ? "image" : "document",
+    createdAt: row.created_at,
+    deletedAt,
+    deletedReason: row.deleted_reason || null,
+    ...(deletedAt ? {} : {
+      downloadUrl: `${baseUrl}/download`,
+      ...(row.attachment_type === "image" ? { previewUrl: `${baseUrl}/preview` } : {}),
+    }),
+  };
+}
+
+function toUiChatMediaAttachment(row) {
+  const attachment = toUiChatAttachment(row);
+  if (!attachment) return null;
+  return {
+    ...attachment,
+    uploadedBy: row.uploaded_by_name || row.uploaded_by_email || "",
+    uploadedById: row.uploaded_by_id || null,
+    threadType: row.thread_type === "SHIPMENT" ? "SHIPMENT" : row.thread_type === "DM" ? "DM" : "GROUP",
+    threadName: row.thread_name || "",
+    shipment: row.shipment_id
+      ? {
+        id: row.shipment_id,
+        code: row.shipment_code || row.shipment_id,
+        status: row.shipment_status || "",
+        customerName: row.shipment_customer_name || "",
+        detailUrl: `/shipments/${encodeURIComponent(row.shipment_id)}`,
+      }
+      : null,
+  };
+}
+
+async function listChatAttachmentsForMessages(queryable, messageIds = [], organizationId) {
+  const ids = [...new Set(messageIds.filter(Boolean))];
+  if (!ids.length) return new Map();
+  const result = await queryable.query(
+    `SELECT *
+     FROM chat_message_attachments
+     WHERE organization_id = $1
+       AND message_id = ANY($2::text[])
+     ORDER BY created_at ASC`,
+    [organizationId, ids]
+  );
+  const attachmentsByMessage = new Map();
+  for (const row of result.rows) {
+    const list = attachmentsByMessage.get(row.message_id) || [];
+    list.push(toUiChatAttachment(row));
+    attachmentsByMessage.set(row.message_id, list);
+  }
+  return attachmentsByMessage;
+}
+
+function toUiChatMessage(row, attachments = []) {
   const legacy = row.legacy_data || {};
+  const body = row.body || row.content || "";
   return {
     id: row.id,
     threadId: row.thread_id,
@@ -7399,224 +7786,1085 @@ function toUiChatMessage(row) {
     receiverName: legacy.receiverName,
     groupId: legacy.groupId || row.thread_id,
     isGroup: legacy.isGroup ?? true,
-    content: row.content,
+    body,
+    content: body,
+    clientMessageId: row.client_message_id || undefined,
+    status: row.status || "sent",
     read: legacy.read ?? false,
+    attachments,
     createdAt: row.created_at,
   };
 }
 
 export async function seedDefaultChatThreads(ownerUserId = "u1", organizationId) {
-  const records = await getRecordsForUser(ownerUserId);
-  const channels = records.channels || [];
-  const owner = organizationId ? null : await getUserById(ownerUserId);
-  const orgId = organizationId || owner?.organization_id || owner?.organizationId || null;
-  const users = await pool.query(
-    "SELECT id, role FROM app_users WHERE status = 'active' AND ($1::text IS NULL OR organization_id = $1)",
-    [orgId]
-  );
-  for (const channel of channels) {
-    const threadId = orgId ? `${orgId}-${channel.id}` : channel.id;
-    await pool.query(
-      `INSERT INTO chat_threads (id, organization_id, owner_user_id, type, name, description, role_limit, icon, legacy_channel_id, updated_at)
-       VALUES ($1, $2, $3, 'CHANNEL', $4, $5, $6, $7, $8, NOW())
-       ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name,
-         description = EXCLUDED.description,
-         role_limit = EXCLUDED.role_limit,
-         icon = EXCLUDED.icon,
-         updated_at = NOW()`,
-      [threadId, orgId, ownerUserId, channel.name, channel.description || null, channel.roleLimit || null, channel.icon || null, channel.id]
-    );
-    for (const user of users.rows) {
-      if (!channel.roleLimit || user.role === "CEO" || user.role === channel.roleLimit) {
-        await pool.query(
-          `INSERT INTO chat_thread_members (id, thread_id, user_id)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (thread_id, user_id) DO NOTHING`,
-          [crypto.randomUUID(), threadId, user.id]
-        );
-      }
-    }
-  }
+  // Legacy channels are no longer seeded into live chat. The function remains
+  // as a compatibility no-op for old bootstrap code paths.
+  return [];
 }
 
-export async function listChatThreads(userId) {
-  const user = await getUserById(userId);
-  await seedDefaultChatThreads(userId, user?.organization_id || user?.organizationId);
-  const result = await pool.query(
-    `SELECT t.*
+async function assertChatParticipant(queryable, { threadId, userId, organizationId, lock = false }) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "assertChatParticipant");
+  const result = await queryable.query(
+    `SELECT t.*, m.role AS member_role, m.unread_count, m.last_read_at
      FROM chat_threads t
      JOIN chat_thread_members m ON m.thread_id = t.id
-     WHERE m.user_id = $1
+     WHERE t.id = $1
+       AND t.organization_id = $2
+       AND t.archived_at IS NULL
+       AND m.organization_id = $2
+       AND m.user_id = $3
+       AND m.status = 'active'
+     LIMIT 1
+     ${lock ? "FOR UPDATE" : ""}`,
+    [threadId, scopedOrganizationId, userId]
+  );
+  const row = result.rows[0];
+  if (!row) throw chatAccessError();
+  if (!(await chatThreadAccessAllowed(queryable, row, userId, scopedOrganizationId))) {
+    throw chatAccessError();
+  }
+  return row;
+}
+
+async function activeChatMembers(queryable, { threadId, organizationId }) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "activeChatMembers");
+  const result = await queryable.query(
+    `SELECT u.id, u.name, u.email, u.role, u.avatar, u.is_online, u.status, m.role AS member_role,
+            t.type AS thread_type, t.shipment_id
+     FROM chat_thread_members m
+     JOIN chat_threads t ON t.id = m.thread_id
+     JOIN app_users u ON u.id = m.user_id
+     WHERE m.thread_id = $1
+       AND m.organization_id = $2
+       AND m.status = 'active'
+       AND t.organization_id = $2
+       AND t.archived_at IS NULL
+       AND u.organization_id = $2
+       AND u.status = 'active'
+     ORDER BY u.name ASC`,
+    [threadId, scopedOrganizationId]
+  );
+  const rows = await filterShipmentChatMemberRows(queryable, result.rows, { organizationId: scopedOrganizationId });
+  return rows.map(toUiChatMember);
+}
+
+async function upsertChatMember(queryable, { threadId, userId, organizationId, role = "member", actorUserId = null }) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "upsertChatMember");
+  const result = await queryable.query(
+    `INSERT INTO chat_thread_members (
+       id, organization_id, thread_id, user_id, role, status, added_by_id, removed_by_id, removed_at, unread_count, created_at
+     )
+     SELECT $1, $2, $3, u.id, $5, 'active', $6, NULL, NULL, 0, NOW()
+     FROM app_users u
+     WHERE u.id = $4
+       AND u.organization_id = $2
+       AND u.status = 'active'
+     ON CONFLICT (thread_id, user_id) DO UPDATE SET
+       organization_id = EXCLUDED.organization_id,
+       role = CASE
+         WHEN chat_thread_members.role = 'owner' THEN 'owner'
+         ELSE EXCLUDED.role
+       END,
+       status = 'active',
+       added_by_id = EXCLUDED.added_by_id,
+       removed_by_id = NULL,
+       removed_at = NULL
+     RETURNING user_id`,
+    [crypto.randomUUID(), scopedOrganizationId, threadId, userId, role, actorUserId]
+  );
+  if (!result.rows[0]) {
+    throw chatAccessError("Chat participant must be an active member of your organization.");
+  }
+  return result.rows[0].user_id;
+}
+
+async function insertChatEvent(queryable, { organizationId, threadId, messageId = null, actorUserId = null, eventType, metadata = {} }) {
+  await queryable.query(
+    `INSERT INTO chat_message_events (id, organization_id, thread_id, message_id, actor_user_id, event_type, metadata, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW())`,
+    [crypto.randomUUID(), organizationId, threadId, messageId, actorUserId, eventType, JSON.stringify(metadata)]
+  );
+}
+
+export async function listChatParticipants({ organizationId, search = "", limit = 100, excludeUserId = "" } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listChatParticipants");
+  const trimmedSearch = String(search || "").trim();
+  const values = [scopedOrganizationId, Math.min(Number(limit) || 100, 100)];
+  const searchClause = trimmedSearch
+    ? `AND (u.name ILIKE $${values.push(`%${trimmedSearch}%`)} OR u.email ILIKE $${values.length})`
+    : "";
+  const excludeClause = excludeUserId
+    ? `AND u.id <> $${values.push(excludeUserId)}`
+    : "";
+  const result = await pool.query(
+    `SELECT u.id, u.name, u.email, u.role, u.avatar, u.is_online, u.status
+     FROM app_users u
+     WHERE u.organization_id = $1
+       AND u.status = 'active'
+       ${excludeClause}
+       ${searchClause}
+     ORDER BY u.name ASC
+     LIMIT $2`,
+    values
+  );
+  return result.rows.map(toUiChatMember);
+}
+
+export async function listChatThreads(userId, { organizationId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listChatThreads");
+  await ensureAccessibleShipmentThreadMembershipsForUser(userId, { organizationId: scopedOrganizationId });
+  const result = await pool.query(
+    `SELECT t.*, m.unread_count, m.last_read_at,
+            s.shipment_code,
+            s.status AS shipment_status,
+            s.customer_name AS shipment_customer_name
+     FROM chat_threads t
+     JOIN chat_thread_members m ON m.thread_id = t.id
+     LEFT JOIN shipments s
+       ON s.id = t.shipment_id
+      AND s.organization_id = t.organization_id
+     WHERE t.organization_id = $1
+       AND t.archived_at IS NULL
+       AND m.organization_id = $1
+       AND m.user_id = $2
+       AND m.status = 'active'
      ORDER BY t.updated_at DESC`,
-    [userId]
+    [scopedOrganizationId, userId]
   );
   const threads = [];
   for (const row of result.rows) {
-    const members = await pool.query(
-      `SELECT u.id, u.name, u.email, u.role, u.avatar, u.is_online, u.status
-       FROM chat_thread_members m
-       JOIN app_users u ON u.id = m.user_id
-       WHERE m.thread_id = $1
-       ORDER BY u.name ASC`,
-      [row.id]
-    );
+    if (!(await chatThreadAccessAllowed(pool, row, userId, scopedOrganizationId))) continue;
+    const members = await activeChatMembers(pool, { threadId: row.id, organizationId: scopedOrganizationId });
     const last = await pool.query(
-      "SELECT * FROM chat_messages WHERE thread_id = $1 ORDER BY created_at DESC LIMIT 1",
-      [row.id]
+      `SELECT * FROM chat_messages
+       WHERE organization_id = $1
+         AND thread_id = $2
+         AND status = 'sent'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [scopedOrganizationId, row.id]
     );
-    threads.push(toUiChatThread(row, members.rows.map(toUiUser), last.rows[0] ? toUiChatMessage(last.rows[0]) : null));
+    const thread = toUiChatThread(row, members, last.rows[0] ? toUiChatMessage(last.rows[0]) : null);
+    if (thread.type === "DM" && !thread.name) {
+      const other = members.find((member) => member.userId !== userId);
+      thread.name = other?.displayName || "Direct chat";
+    }
+    threads.push(thread);
   }
   return threads;
 }
 
-export async function ensureDirectChat(userAId, userBId) {
+export async function getChatThreadForUser(threadId, userId, { organizationId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "getChatThreadForUser");
+  const result = await pool.query(
+    `SELECT t.*, m.unread_count, m.last_read_at,
+            s.shipment_code,
+            s.status AS shipment_status,
+            s.customer_name AS shipment_customer_name
+     FROM chat_threads t
+     JOIN chat_thread_members m ON m.thread_id = t.id
+     LEFT JOIN shipments s
+       ON s.id = t.shipment_id
+      AND s.organization_id = t.organization_id
+     WHERE t.id = $1
+       AND t.organization_id = $2
+       AND t.archived_at IS NULL
+       AND m.organization_id = $2
+       AND m.user_id = $3
+       AND m.status = 'active'
+     LIMIT 1`,
+    [threadId, scopedOrganizationId, userId]
+  );
+  const row = result.rows[0];
+  if (!row || !(await chatThreadAccessAllowed(pool, row, userId, scopedOrganizationId))) return null;
+  const members = await activeChatMembers(pool, { threadId: row.id, organizationId: scopedOrganizationId });
+  const last = await pool.query(
+    `SELECT * FROM chat_messages
+     WHERE organization_id = $1
+       AND thread_id = $2
+       AND status = 'sent'
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [scopedOrganizationId, row.id]
+  );
+  const thread = toUiChatThread(row, members, last.rows[0] ? toUiChatMessage(last.rows[0]) : null);
+  if (thread.type === "DM" && !thread.name) {
+    const other = members.find((member) => member.userId !== userId);
+    thread.name = other?.displayName || "Direct chat";
+  }
+  return thread;
+}
+
+export async function ensureDirectChat(userAId, userBId, { organizationId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "ensureDirectChat");
+  if (!userAId || !userBId || userAId === userBId) {
+    throw chatAccessError("Direct chat requires another active user.", 400, "CHAT_DIRECT_TARGET_REQUIRED");
+  }
   const ids = [userAId, userBId].sort();
-  const threadId = `dm-${ids[0]}-${ids[1]}`;
-  const user = await getUserById(userAId);
-  const organizationId = user?.organization_id || user?.organizationId || null;
-  const otherUser = await getUserById(userBId);
-  const otherOrganizationId = otherUser?.organization_id || otherUser?.organizationId || null;
-  if (!otherUser || otherOrganizationId !== organizationId) {
-    const error = new Error("Chat member must belong to your organization.");
-    error.statusCode = 403;
-    throw error;
-  }
-  await pool.query(
-    `INSERT INTO chat_threads (id, organization_id, type, name, updated_at)
-     VALUES ($1, $2, 'DM', $3, NOW())
-     ON CONFLICT (id) DO NOTHING`,
-    [threadId, organizationId, "Direct chat"]
-  );
-  for (const userId of ids) {
-    await pool.query(
-      `INSERT INTO chat_thread_members (id, thread_id, user_id)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (thread_id, user_id) DO NOTHING`,
-      [crypto.randomUUID(), threadId, userId]
+  const key = directChatKey(scopedOrganizationId, ids[0], ids[1]);
+  const threadId = directChatId(scopedOrganizationId, ids[0], ids[1]);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const users = await client.query(
+      `SELECT id
+       FROM app_users
+       WHERE id = ANY($1::text[])
+         AND organization_id = $2
+         AND status = 'active'`,
+      [ids, scopedOrganizationId]
     );
+    if (users.rows.length !== 2) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Chat participant must be an active member of your organization.");
+    }
+    const inserted = await client.query(
+      `INSERT INTO chat_threads (
+         id, organization_id, type, name, direct_key, owner_user_id, created_by_id, updated_at
+       )
+       VALUES ($1, $2, 'DM', 'Direct chat', $3, $4, $4, NOW())
+       ON CONFLICT (organization_id, direct_key) WHERE direct_key IS NOT NULL AND archived_at IS NULL
+       DO UPDATE SET updated_at = chat_threads.updated_at
+       RETURNING id`,
+      [threadId, scopedOrganizationId, key, userAId]
+    );
+    const id = inserted.rows[0]?.id || threadId;
+    for (const userId of ids) {
+      await upsertChatMember(client, {
+        threadId: id,
+        userId,
+        organizationId: scopedOrganizationId,
+        role: "member",
+        actorUserId: userAId,
+      });
+    }
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId: id,
+      actorUserId: userAId,
+      eventType: "thread.direct.ensure",
+      metadata: { participantCount: 2 },
+    });
+    await client.query("COMMIT");
+    return id;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
-  return threadId;
 }
 
-export async function createChatThread({ actorUserId, type = "GROUP", name, description, memberIds = [] }) {
+export async function ensureShipmentChatThread({ actorUserId, organizationId, shipmentId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "ensureShipmentChatThread");
+  if (!actorUserId || !shipmentId) {
+    throw chatAccessError("Shipment chat requires an active user and shipment.", 400, "SHIPMENT_CHAT_REQUIRED");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const shipmentResult = await client.query(
+      `SELECT id, organization_id, owner_user_id, assigned_manager_id, shipment_code, customer_name, status
+       FROM shipments
+       WHERE id = $1
+         AND organization_id = $2
+       LIMIT 1
+       FOR SHARE`,
+      [shipmentId, scopedOrganizationId]
+    );
+    const shipment = shipmentResult.rows[0];
+    if (!shipment) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Shipment was not found.", 404, "SHIPMENT_NOT_FOUND");
+    }
+    if (!(await userHasShipmentChatAccess(client, {
+      userId: actorUserId,
+      organizationId: scopedOrganizationId,
+      shipmentId,
+    }))) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Shipment chat access denied.");
+    }
+
+    const threadId = shipmentChatId(scopedOrganizationId, shipmentId);
+    const shipmentCode = shipment.shipment_code || shipment.id;
+    const inserted = await client.query(
+      `INSERT INTO chat_threads (
+         id, organization_id, owner_user_id, type, name, description, shipment_id, created_by_id, updated_at
+       )
+       VALUES ($1, $2, $3, 'SHIPMENT', $4, $5, $6, $3, NOW())
+       ON CONFLICT (organization_id, shipment_id)
+       WHERE shipment_id IS NOT NULL
+         AND type = 'SHIPMENT'
+         AND archived_at IS NULL
+       DO UPDATE SET
+         name = COALESCE(NULLIF(chat_threads.name, ''), EXCLUDED.name),
+         updated_at = chat_threads.updated_at
+       RETURNING id, (xmax = 0) AS inserted`,
+      [
+        threadId,
+        scopedOrganizationId,
+        actorUserId,
+        `Shipment ${shipmentCode}`,
+        `Internal shipment chat for ${shipmentCode}`,
+        shipmentId,
+      ]
+    );
+    const id = inserted.rows[0]?.id || threadId;
+    const created = inserted.rows[0]?.inserted === true || inserted.rows[0]?.inserted === "t";
+
+    const users = await client.query(
+      `SELECT id
+       FROM app_users
+       WHERE organization_id = $1
+         AND status = 'active'`,
+      [scopedOrganizationId]
+    );
+    let participantCount = 0;
+    for (const row of users.rows) {
+      if (!(await userHasShipmentChatAccess(client, {
+        userId: row.id,
+        organizationId: scopedOrganizationId,
+        shipmentId,
+      }))) {
+        continue;
+      }
+      await upsertChatMember(client, {
+        threadId: id,
+        userId: row.id,
+        organizationId: scopedOrganizationId,
+        role: row.id === actorUserId ? "owner" : "member",
+        actorUserId,
+      });
+      participantCount += 1;
+    }
+
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId: id,
+      actorUserId,
+      eventType: created ? "thread.shipment.create" : "thread.shipment.ensure",
+      metadata: { shipmentId, participantCount },
+    });
+    await client.query("COMMIT");
+    return { id, created, participantCount };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function createChatThread({ actorUserId, organizationId, type = "GROUP", name, description, memberIds = [], participantUserIds = [] }) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "createChatThread");
+  if (type !== "GROUP") throw chatAccessError("Only group threads can be created here.", 400, "CHAT_THREAD_TYPE_INVALID");
   const id = crypto.randomUUID();
-  const actor = await getUserById(actorUserId);
-  const organizationId = actor?.organization_id || actor?.organizationId || null;
-  const uniqueRequestedMemberIds = [...new Set([actorUserId, ...memberIds])].filter(Boolean);
-  const allowedMembers = await pool.query(
-    `SELECT id
-     FROM app_users
-     WHERE id = ANY($1::text[])
-       AND ($2::text IS NULL OR organization_id = $2)`,
-    [uniqueRequestedMemberIds, organizationId]
-  );
-  const allowedMemberIds = allowedMembers.rows.map((row) => row.id);
-  await pool.query(
-    `INSERT INTO chat_threads (id, organization_id, type, name, description, created_by_id, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-    [id, organizationId, type, name || "Group", description || null, actorUserId]
-  );
-  for (const userId of allowedMemberIds) {
-    await pool.query(
-      `INSERT INTO chat_thread_members (id, thread_id, user_id)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (thread_id, user_id) DO NOTHING`,
-      [crypto.randomUUID(), id, userId]
+  const requestedIds = [...memberIds, ...participantUserIds];
+  const uniqueRequestedMemberIds = [...new Set([actorUserId, ...requestedIds])].filter(Boolean);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const allowedMembers = await client.query(
+      `SELECT id
+       FROM app_users
+       WHERE id = ANY($1::text[])
+         AND organization_id = $2
+         AND status = 'active'`,
+      [uniqueRequestedMemberIds, scopedOrganizationId]
     );
-  }
-  return id;
-}
-
-export async function userCanAccessThread(userId, threadId) {
-  const result = await pool.query(
-    "SELECT 1 FROM chat_thread_members WHERE user_id = $1 AND thread_id = $2 LIMIT 1",
-    [userId, threadId]
-  );
-  return Boolean(result.rows[0]);
-}
-
-export async function listChatThreadMemberIds(threadId) {
-  const result = await pool.query(
-    "SELECT user_id FROM chat_thread_members WHERE thread_id = $1",
-    [threadId]
-  );
-  return result.rows.map(row => row.user_id);
-}
-
-export async function listChatMessages(threadId, userId, limit = 100) {
-  if (!(await userCanAccessThread(userId, threadId))) {
-    const error = new Error("Thread access denied.");
-    error.statusCode = 403;
+    const allowedMemberIds = allowedMembers.rows.map((row) => row.id);
+    if (allowedMemberIds.length !== uniqueRequestedMemberIds.length) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("All chat participants must be active members of your organization.");
+    }
+    await client.query(
+      `INSERT INTO chat_threads (
+         id, organization_id, owner_user_id, type, name, description, created_by_id, updated_at
+       )
+       VALUES ($1, $2, $3, 'GROUP', $4, $5, $3, NOW())`,
+      [id, scopedOrganizationId, actorUserId, name || "Group", description || null]
+    );
+    for (const userId of allowedMemberIds) {
+      await upsertChatMember(client, {
+        threadId: id,
+        userId,
+        organizationId: scopedOrganizationId,
+        role: userId === actorUserId ? "owner" : "member",
+        actorUserId,
+      });
+    }
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId: id,
+      actorUserId,
+      eventType: "thread.create",
+      metadata: { type: "GROUP", participantCount: allowedMemberIds.length },
+    });
+    await client.query("COMMIT");
+    return id;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
     throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function userCanAccessThread(userId, threadId, { organizationId } = {}) {
+  const values = [userId, threadId];
+  const organizationClause = organizationId ? `AND m.organization_id = $${values.push(organizationId)} AND t.organization_id = $${values.length}` : "";
+  const result = await pool.query(
+    `SELECT t.*
+     FROM chat_thread_members m
+     JOIN chat_threads t ON t.id = m.thread_id
+     WHERE m.user_id = $1
+       AND m.thread_id = $2
+       AND m.status = 'active'
+       AND t.archived_at IS NULL
+       ${organizationClause}
+     LIMIT 1`,
+    values
+  );
+  const row = result.rows[0];
+  if (!row) return false;
+  return chatThreadAccessAllowed(pool, row, userId, organizationId || row.organization_id);
+}
+
+export async function listChatThreadMemberIds(threadId, { organizationId } = {}) {
+  const values = [threadId];
+  const organizationClause = organizationId ? `AND m.organization_id = $${values.push(organizationId)} AND t.organization_id = $${values.length}` : "";
+  const result = await pool.query(
+    `SELECT m.user_id, t.type AS thread_type, t.shipment_id, t.organization_id
+     FROM chat_thread_members m
+     JOIN chat_threads t ON t.id = m.thread_id
+     WHERE m.thread_id = $1
+       AND m.status = 'active'
+       AND t.archived_at IS NULL
+       ${organizationClause}`,
+    values
+  );
+  const rows = await filterShipmentChatMemberRows(pool, result.rows.map((row) => ({ ...row, id: row.user_id })), {
+    organizationId: organizationId || result.rows[0]?.organization_id,
+  });
+  return rows.map(row => row.user_id);
+}
+
+export async function listChatMessages(threadId, userId, { organizationId, limit = 50, before = null } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listChatMessages");
+  await assertChatParticipant(pool, { threadId, userId, organizationId: scopedOrganizationId });
+  const values = [scopedOrganizationId, threadId, Math.min(Number(limit) || 50, 100)];
+  let beforeClause = "";
+  if (before) {
+    beforeClause = `AND created_at < COALESCE(
+      (SELECT created_at FROM chat_messages WHERE id = $${values.push(before)} AND organization_id = $1 AND thread_id = $2),
+      'infinity'::timestamptz
+    )`;
   }
   const result = await pool.query(
     `SELECT * FROM chat_messages
-     WHERE thread_id = $1
-     ORDER BY created_at ASC
+     WHERE organization_id = $1
+       AND thread_id = $2
+       AND status = 'sent'
+       ${beforeClause}
+     ORDER BY created_at DESC
+     LIMIT $3`,
+    values
+  );
+  const rows = result.rows.reverse();
+  const attachments = await listChatAttachmentsForMessages(pool, rows.map((row) => row.id), scopedOrganizationId);
+  return rows.map((row) => toUiChatMessage(row, attachments.get(row.id) || []));
+}
+
+export async function createChatMessage({ threadId, sender, organizationId, body, content, clientMessageId = null, legacyData = {} }) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "createChatMessage");
+  const messageBody = normalizeChatMessageBody(body ?? content);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await assertChatParticipant(client, {
+      threadId,
+      userId: sender.id,
+      organizationId: scopedOrganizationId,
+      lock: true,
+    });
+    const messageId = crypto.randomUUID();
+    const result = await client.query(
+      `INSERT INTO chat_messages (
+         id, organization_id, thread_id, sender_id, sender_name, content, body, body_format,
+         client_message_id, status, legacy_data, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $6, 'plain_text', $7, 'sent', $8::jsonb, NOW())
+       RETURNING *`,
+      [
+        messageId,
+        scopedOrganizationId,
+        threadId,
+        sender.id,
+        sender.name || sender.email || "User",
+        messageBody,
+        clientMessageId || null,
+        JSON.stringify({ ...legacyData, bodyFormat: "plain_text" }),
+      ]
+    );
+    await client.query(
+      "UPDATE chat_threads SET updated_at = NOW(), last_message_id = $1 WHERE id = $2 AND organization_id = $3",
+      [messageId, threadId, scopedOrganizationId]
+    );
+    await client.query(
+      `UPDATE chat_thread_members
+       SET unread_count = unread_count + 1
+       WHERE thread_id = $1
+         AND organization_id = $2
+         AND status = 'active'
+         AND user_id <> $3`,
+      [threadId, scopedOrganizationId, sender.id]
+    );
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId,
+      messageId,
+      actorUserId: sender.id,
+      eventType: "message.create",
+      metadata: { bodyLength: messageBody.length },
+    });
+    await client.query("COMMIT");
+    return toUiChatMessage(result.rows[0], []);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function createChatAttachmentMessage({
+  threadId,
+  sender,
+  organizationId,
+  caption = "",
+  clientMessageId = null,
+  attachment,
+  legacyData = {},
+}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "createChatAttachmentMessage");
+  if (!attachment) {
+    throw chatAccessError("Attachment is required.", 400, "CHAT_ATTACHMENT_REQUIRED");
+  }
+  const fallbackBody = attachment.originalFileName || attachment.sanitizedName || "Attachment";
+  const messageBody = normalizeChatMessageBody(caption || fallbackBody);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await assertChatParticipant(client, {
+      threadId,
+      userId: sender.id,
+      organizationId: scopedOrganizationId,
+      lock: true,
+    });
+    const messageId = crypto.randomUUID();
+    const messageResult = await client.query(
+      `INSERT INTO chat_messages (
+         id, organization_id, thread_id, sender_id, sender_name, content, body, body_format,
+         client_message_id, status, legacy_data, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $6, 'plain_text', $7, 'sent', $8::jsonb, NOW())
+       RETURNING *`,
+      [
+        messageId,
+        scopedOrganizationId,
+        threadId,
+        sender.id,
+        sender.name || sender.email || "User",
+        messageBody,
+        clientMessageId || null,
+        JSON.stringify({
+          ...legacyData,
+          bodyFormat: "plain_text",
+          hasAttachment: true,
+          attachmentType: attachment.attachmentType,
+        }),
+      ]
+    );
+    const attachmentId = crypto.randomUUID();
+    const attachmentResult = await client.query(
+      `INSERT INTO chat_message_attachments (
+         id, organization_id, thread_id, message_id, uploaded_by_id,
+         storage_provider, storage_bucket, storage_region, storage_key, object_key, local_path,
+         checksum_sha256, original_filename, file_name, content_type, size_bytes, attachment_type,
+         created_at
+       )
+       VALUES (
+         $1, $2, $3, $4, $5,
+         $6, $7, $8, $9, $10, $11,
+         $12, $13, $14, $15, $16, $17,
+         NOW()
+       )
+       RETURNING *`,
+      [
+        attachmentId,
+        scopedOrganizationId,
+        threadId,
+        messageId,
+        sender.id,
+        attachment.storageProvider || "local",
+        attachment.storageBucket || null,
+        attachment.storageRegion || null,
+        attachment.storageKey || null,
+        attachment.objectKey || null,
+        attachment.localPath || attachment.storageKey || null,
+        attachment.checksumSha256 || attachment.checksum || null,
+        attachment.originalFileName || attachment.sanitizedName || "attachment",
+        attachment.sanitizedName || attachment.originalFileName || null,
+        attachment.contentType || attachment.mimeType || "application/octet-stream",
+        Number(attachment.sizeBytes || 0),
+        attachment.attachmentType === "image" ? "image" : "document",
+      ]
+    );
+    await client.query(
+      "UPDATE chat_threads SET updated_at = NOW(), last_message_id = $1 WHERE id = $2 AND organization_id = $3",
+      [messageId, threadId, scopedOrganizationId]
+    );
+    await client.query(
+      `UPDATE chat_thread_members
+       SET unread_count = unread_count + 1
+       WHERE thread_id = $1
+         AND organization_id = $2
+         AND status = 'active'
+         AND user_id <> $3`,
+      [threadId, scopedOrganizationId, sender.id]
+    );
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId,
+      messageId,
+      actorUserId: sender.id,
+      eventType: "message.create",
+      metadata: { bodyLength: messageBody.length, hasAttachment: true },
+    });
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId,
+      messageId,
+      actorUserId: sender.id,
+      eventType: "chat.attachment.upload",
+      metadata: {
+        attachmentId,
+        attachmentType: attachment.attachmentType,
+        sizeBytes: Number(attachment.sizeBytes || 0),
+        contentType: attachment.contentType || attachment.mimeType || "application/octet-stream",
+        fileName: attachment.originalFileName || attachment.sanitizedName || "attachment",
+      },
+    });
+    await client.query("COMMIT");
+    return toUiChatMessage(messageResult.rows[0], [toUiChatAttachment(attachmentResult.rows[0])]);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function markChatThreadRead(threadId, userId, { organizationId, messageId = null } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "markChatThreadRead");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await assertChatParticipant(client, { threadId, userId, organizationId: scopedOrganizationId, lock: true });
+    const messageResult = messageId
+      ? await client.query(
+        `SELECT id
+         FROM chat_messages
+         WHERE id = $1
+           AND organization_id = $2
+           AND thread_id = $3
+           AND status = 'sent'
+         LIMIT 1`,
+        [messageId, scopedOrganizationId, threadId]
+      )
+      : await client.query(
+        `SELECT id
+         FROM chat_messages
+         WHERE organization_id = $1
+           AND thread_id = $2
+           AND status = 'sent'
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [scopedOrganizationId, threadId]
+      );
+    if (messageId && !messageResult.rows[0]) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Message was not found.", 404, "CHAT_MESSAGE_NOT_FOUND");
+    }
+    const readAt = new Date();
+    await client.query(
+      `UPDATE chat_thread_members
+       SET unread_count = 0, last_read_at = $4
+       WHERE thread_id = $1
+         AND organization_id = $2
+         AND user_id = $3
+         AND status = 'active'`,
+      [threadId, scopedOrganizationId, userId, readAt]
+    );
+    const readMessageId = messageResult.rows[0]?.id || null;
+    if (readMessageId) {
+      await client.query(
+        `INSERT INTO chat_message_read_receipts (id, organization_id, thread_id, message_id, user_id, read_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())
+         ON CONFLICT (message_id, user_id) DO UPDATE SET read_at = EXCLUDED.read_at`,
+        [crypto.randomUUID(), scopedOrganizationId, threadId, readMessageId, userId, readAt]
+      );
+      await insertChatEvent(client, {
+        organizationId: scopedOrganizationId,
+        threadId,
+        messageId: readMessageId,
+        actorUserId: userId,
+        eventType: "message.read",
+        metadata: {},
+      });
+    }
+    await client.query("COMMIT");
+    return { threadId, userId, messageId: readMessageId, readAt };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function addChatThreadMember(threadId, userId, { organizationId, actorUserId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "addChatThreadMember");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const thread = await assertChatParticipant(client, {
+      threadId,
+      userId: actorUserId,
+      organizationId: scopedOrganizationId,
+      lock: true,
+    });
+    if (thread.type === "DM" || thread.type === "SHIPMENT") {
+      await client.query("ROLLBACK");
+      throw chatAccessError("This chat's participants are managed by its source record.", 400, "CHAT_MEMBERS_IMMUTABLE");
+    }
+    await upsertChatMember(client, {
+      threadId,
+      userId,
+      organizationId: scopedOrganizationId,
+      role: "member",
+      actorUserId,
+    });
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId,
+      actorUserId,
+      eventType: "participant.add",
+      metadata: { userId },
+    });
+    await client.query("COMMIT");
+    return { threadId, userId };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function removeChatThreadMember(threadId, userId, { organizationId, actorUserId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "removeChatThreadMember");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const thread = await assertChatParticipant(client, {
+      threadId,
+      userId: actorUserId,
+      organizationId: scopedOrganizationId,
+      lock: true,
+    });
+    if (thread.type === "DM" || thread.type === "SHIPMENT") {
+      await client.query("ROLLBACK");
+      throw chatAccessError("This chat's participants are managed by its source record.", 400, "CHAT_MEMBERS_IMMUTABLE");
+    }
+    const target = await client.query(
+      `SELECT role
+       FROM chat_thread_members
+       WHERE thread_id = $1
+         AND organization_id = $2
+         AND user_id = $3
+         AND status = 'active'
+       LIMIT 1`,
+      [threadId, scopedOrganizationId, userId]
+    );
+    if (!target.rows[0]) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Chat participant was not found.", 404, "CHAT_PARTICIPANT_NOT_FOUND");
+    }
+    if (target.rows[0].role === "owner") {
+      const owners = await client.query(
+        `SELECT COUNT(*)::int AS count
+         FROM chat_thread_members
+         WHERE thread_id = $1
+           AND organization_id = $2
+           AND status = 'active'
+           AND role = 'owner'
+           AND user_id <> $3`,
+        [threadId, scopedOrganizationId, userId]
+      );
+      if (Number(owners.rows[0]?.count || 0) < 1) {
+        await client.query("ROLLBACK");
+        throw chatAccessError("At least one owner must remain in the group.", 400, "CHAT_LAST_OWNER_BLOCKED");
+      }
+    }
+    await client.query(
+      `UPDATE chat_thread_members
+       SET status = 'removed',
+           removed_by_id = $4,
+           removed_at = NOW(),
+           unread_count = 0
+       WHERE thread_id = $1
+         AND organization_id = $2
+         AND user_id = $3`,
+      [threadId, scopedOrganizationId, userId, actorUserId]
+    );
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId,
+      actorUserId,
+      eventType: "participant.remove",
+      metadata: { userId },
+    });
+    await client.query("COMMIT");
+    return { threadId, userId };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getChatAttachmentForDelivery(messageId, attachmentId, userId, { organizationId, previewOnly = false } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "getChatAttachmentForDelivery");
+  const result = await pool.query(
+    `SELECT a.*, m.sender_id, t.type AS thread_type, t.shipment_id
+     FROM chat_message_attachments a
+     JOIN chat_messages m
+       ON m.id = a.message_id
+      AND m.organization_id = a.organization_id
+      AND m.thread_id = a.thread_id
+     JOIN chat_threads t
+       ON t.id = a.thread_id
+      AND t.organization_id = a.organization_id
+     WHERE a.id = $1
+       AND a.message_id = $2
+       AND a.organization_id = $3
+       AND m.status = 'sent'
+       AND t.archived_at IS NULL
+     LIMIT 1`,
+    [attachmentId, messageId, scopedOrganizationId]
+  );
+  const attachment = result.rows[0];
+  if (!attachment) throw chatAccessError("Attachment was not found.", 404, "CHAT_ATTACHMENT_NOT_FOUND");
+  await assertChatParticipant(pool, {
+    threadId: attachment.thread_id,
+    userId,
+    organizationId: scopedOrganizationId,
+  });
+  if (attachment.deleted_at) {
+    throw chatAccessError("Attachment was deleted.", 404, "CHAT_ATTACHMENT_DELETED");
+  }
+  if (previewOnly && attachment.attachment_type !== "image") {
+    throw chatAccessError("Attachment preview is available for images only.", 415, "CHAT_ATTACHMENT_PREVIEW_UNSUPPORTED");
+  }
+  return attachment;
+}
+
+export async function listChatMediaAttachments({ organizationId, search = "", type, includeDeleted = false, limit = 100 } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listChatMediaAttachments");
+  const values = [scopedOrganizationId, Math.min(Math.max(Number(limit) || 100, 1), 100)];
+  const filters = ["a.organization_id = $1"];
+  if (!includeDeleted) filters.push("a.deleted_at IS NULL");
+  if (type) {
+    values.push(type);
+    filters.push(`a.attachment_type = $${values.length}`);
+  }
+  const trimmedSearch = String(search || "").trim();
+  if (trimmedSearch) {
+    values.push(`%${trimmedSearch}%`);
+    filters.push(`(a.original_filename ILIKE $${values.length} OR t.name ILIKE $${values.length} OR s.shipment_code ILIKE $${values.length})`);
+  }
+
+  const result = await pool.query(
+    `SELECT
+       a.*,
+       u.name AS uploaded_by_name,
+       u.email AS uploaded_by_email,
+       t.type AS thread_type,
+       t.name AS thread_name,
+       t.shipment_id,
+       s.shipment_code,
+       s.status AS shipment_status,
+       s.customer_name AS shipment_customer_name
+     FROM chat_message_attachments a
+     JOIN chat_threads t
+       ON t.id = a.thread_id
+      AND t.organization_id = a.organization_id
+     LEFT JOIN app_users u
+       ON u.id = a.uploaded_by_id
+      AND u.organization_id = a.organization_id
+     LEFT JOIN shipments s
+       ON s.id = t.shipment_id
+      AND s.organization_id = a.organization_id
+     WHERE ${filters.join(" AND ")}
+     ORDER BY a.created_at DESC
      LIMIT $2`,
-    [threadId, Math.min(Number(limit) || 100, 250)]
+    values
   );
-  return result.rows.map(toUiChatMessage);
+  return result.rows.map(toUiChatMediaAttachment);
 }
 
-export async function createChatMessage({ threadId, sender, content, legacyData = {} }) {
-  if (!(await userCanAccessThread(sender.id, threadId))) {
-    const error = new Error("Thread access denied.");
-    error.statusCode = 403;
+export async function deleteChatAttachment({ messageId, attachmentId, actorUserId, organizationId, reason = "", allowAny = false } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "deleteChatAttachment");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `SELECT a.*, m.sender_id, t.type AS thread_type, t.shipment_id
+       FROM chat_message_attachments a
+       JOIN chat_messages m
+         ON m.id = a.message_id
+        AND m.organization_id = a.organization_id
+        AND m.thread_id = a.thread_id
+       JOIN chat_threads t
+         ON t.id = a.thread_id
+        AND t.organization_id = a.organization_id
+       WHERE a.id = $1
+         AND a.message_id = $2
+         AND a.organization_id = $3
+         AND m.status = 'sent'
+         AND t.archived_at IS NULL
+       LIMIT 1
+       FOR UPDATE OF a`,
+      [attachmentId, messageId, scopedOrganizationId]
+    );
+    const before = result.rows[0];
+    if (!before) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Attachment was not found.", 404, "CHAT_ATTACHMENT_NOT_FOUND");
+    }
+    await assertChatParticipant(client, {
+      threadId: before.thread_id,
+      userId: actorUserId,
+      organizationId: scopedOrganizationId,
+    });
+    if (!allowAny && before.uploaded_by_id !== actorUserId) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Only the sender or a media manager can delete this attachment.");
+    }
+    if (before.deleted_at) {
+      await client.query("COMMIT");
+      return { before, after: before, ui: toUiChatAttachment(before), alreadyDeleted: true };
+    }
+
+    const updated = await client.query(
+      `UPDATE chat_message_attachments
+       SET deleted_at = NOW(),
+           deleted_by_id = $4,
+           deleted_reason = COALESCE(NULLIF($5, ''), 'deleted_by_manager')
+       WHERE id = $1
+         AND message_id = $2
+         AND organization_id = $3
+       RETURNING *`,
+      [attachmentId, messageId, scopedOrganizationId, actorUserId, reason || ""]
+    );
+    const after = updated.rows[0];
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId: before.thread_id,
+      messageId: before.message_id,
+      actorUserId,
+      eventType: "chat.attachment.delete",
+      metadata: {
+        attachmentId: before.id,
+        attachmentType: before.attachment_type,
+        sizeBytes: Number(before.size_bytes || 0),
+        contentType: before.content_type,
+        fileName: before.original_filename,
+        managerDelete: Boolean(allowAny),
+      },
+    });
+    await client.query("COMMIT");
+    return { before, after, ui: toUiChatAttachment(after), alreadyDeleted: false };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
     throw error;
+  } finally {
+    client.release();
   }
-  const result = await pool.query(
-    `INSERT INTO chat_messages (id, organization_id, thread_id, sender_id, sender_name, content, legacy_data)
-     VALUES ($1, (SELECT organization_id FROM chat_threads WHERE id = $2), $2, $3, $4, $5, $6::jsonb)
-     RETURNING *`,
-    [crypto.randomUUID(), threadId, sender.id, sender.name, content, JSON.stringify(legacyData)]
-  );
-  await pool.query("UPDATE chat_threads SET updated_at = NOW() WHERE id = $1", [threadId]);
+}
+
+export async function markChatAttachmentStorageCleanup(attachmentId, { organizationId, error = null } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "markChatAttachmentStorageCleanup");
   await pool.query(
-    `UPDATE chat_thread_members
-     SET unread_count = unread_count + 1
-     WHERE thread_id = $1 AND user_id <> $2`,
-    [threadId, sender.id]
+    `UPDATE chat_message_attachments
+     SET storage_deleted_at = CASE WHEN $3::text IS NULL THEN NOW() ELSE storage_deleted_at END,
+         storage_delete_error = $3
+     WHERE id = $1
+       AND organization_id = $2`,
+    [attachmentId, scopedOrganizationId, error ? String(error).slice(0, 500) : null]
   );
-  return toUiChatMessage(result.rows[0]);
 }
 
-export async function markChatThreadRead(threadId, userId) {
-  if (!(await userCanAccessThread(userId, threadId))) {
-    const error = new Error("Thread access denied.");
-    error.statusCode = 403;
+export async function createChatMessageNotifications({ organizationId, threadId, messageId, senderId, senderName, recipientUserIds = [] } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "createChatMessageNotifications");
+  const uniqueRecipientIds = [...new Set(recipientUserIds)].filter((id) => id && id !== senderId);
+  if (!uniqueRecipientIds.length) return [];
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const recipients = await client.query(
+      `SELECT id
+       FROM app_users
+       WHERE organization_id = $1
+         AND status = 'active'
+         AND id = ANY($2::text[])
+         AND COALESCE(notification_preferences->>'chatMessages', 'true') <> 'false'`,
+      [scopedOrganizationId, uniqueRecipientIds]
+    );
+    const created = [];
+    for (const row of recipients.rows) {
+      const notificationId = crypto.randomUUID();
+      const result = await client.query(
+        `INSERT INTO notifications (
+           id, organization_id, user_id, title, body, type, source_type, source_id, legacy_data, created_at
+         )
+         VALUES ($1, $2, $3, $4, $5, 'INFO', 'CHAT', $6, $7::jsonb, NOW())
+         RETURNING *`,
+        [
+          notificationId,
+          scopedOrganizationId,
+          row.id,
+          "New chat message",
+          `${senderName || "A teammate"} sent you a message.`,
+          messageId || threadId,
+          JSON.stringify({ link: `/chat?threadId=${encodeURIComponent(threadId)}`, threadId }),
+        ]
+      );
+      await syncNotificationUserRecord(client, row.id, result.rows[0]);
+      created.push(result.rows[0]);
+    }
+    await client.query("COMMIT");
+    return created;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
     throw error;
+  } finally {
+    client.release();
   }
-  await pool.query(
-    `UPDATE chat_thread_members
-     SET unread_count = 0, last_read_at = NOW()
-     WHERE thread_id = $1 AND user_id = $2`,
-    [threadId, userId]
-  );
-  return { threadId, userId };
-}
-
-export async function addChatThreadMember(threadId, userId) {
-  const result = await pool.query(
-    `INSERT INTO chat_thread_members (id, thread_id, user_id)
-     SELECT $1, $2, $3
-     FROM chat_threads t
-     JOIN app_users u ON u.id = $3
-     WHERE t.id = $2
-       AND (t.organization_id IS NULL OR u.organization_id = t.organization_id)
-     ON CONFLICT (thread_id, user_id) DO NOTHING`,
-    [crypto.randomUUID(), threadId, userId]
-  );
-  if (result.rowCount === 0) {
-    const error = new Error("Chat member must belong to the thread organization.");
-    error.statusCode = 403;
-    throw error;
-  }
-}
-
-export async function removeChatThreadMember(threadId, userId) {
-  await pool.query("DELETE FROM chat_thread_members WHERE thread_id = $1 AND user_id = $2", [threadId, userId]);
 }
 
 const AUDIT_REDACTED = "[redacted]";
@@ -8268,39 +9516,7 @@ async function insertBridgeChangeLog(client, {
 }
 
 async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId, collection, records) {
-  if (collection === "customers") {
-    await client.query("DELETE FROM customers WHERE owner_user_id = $1", [ownerUserId]);
-    for (const customer of records) {
-      await client.query(
-        `INSERT INTO customers (
-           id, organization_id, owner_user_id, company_name, contact_name, email, phone, address, legacy_data, created_by_id, archived_at, updated_at
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $3, $10, NOW())
-         ON CONFLICT (id) DO UPDATE SET
-           organization_id = EXCLUDED.organization_id,
-           company_name = EXCLUDED.company_name,
-           contact_name = EXCLUDED.contact_name,
-           email = EXCLUDED.email,
-           phone = EXCLUDED.phone,
-           address = EXCLUDED.address,
-           archived_at = EXCLUDED.archived_at,
-           legacy_data = EXCLUDED.legacy_data,
-           updated_at = NOW()`,
-        [
-          customer.id,
-          ownerOrganizationId,
-          ownerUserId,
-          customer.company || customer.name || "Unknown customer",
-          customer.name || null,
-          customer.email || null,
-          customer.phone || null,
-          customer.address || null,
-          JSON.stringify(customer),
-          customer.isArchived ? new Date() : null,
-        ]
-      );
-    }
-  }
+  if (collection === "customers") return;
 
   if (collection === "shipments") {
     const existingAccessResult = await client.query(
@@ -8819,7 +10035,7 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
            organization_id = EXCLUDED.organization_id,
            customer_id = EXCLUDED.customer_id,
            customer_name = EXCLUDED.customer_name,
-           customer_phone = EXCLUDED.customer_phone,
+           customer_phone = COALESCE(NULLIF(EXCLUDED.customer_phone, ''), quotations.customer_phone),
            origin_city = EXCLUDED.origin_city,
            destination_city = EXCLUDED.destination_city,
            cargo_type = EXCLUDED.cargo_type,

@@ -20,7 +20,6 @@ const protectedRoutes = [
   "/compliance-meetings",
   "/cheques",
   "/commercial-cards",
-  "/quotations",
   "/archive",
   "/search",
   "/changelog",
@@ -135,7 +134,10 @@ test.describe.serial("client-readiness route smoke", () => {
         await page.goto("/compliance", { waitUntil: "domcontentloaded" });
         await expect(page).toHaveURL(/\/compliance-meetings$/);
         await page.goto("/quotage", { waitUntil: "domcontentloaded" });
-        await expect(page).toHaveURL(/\/quotations$/);
+        await expect(page).toHaveURL(/\/dashboard$/);
+        await page.goto("/quotations", { waitUntil: "domcontentloaded" });
+        await expect(page).toHaveURL(/\/dashboard$/);
+        await expect(page.locator('a[href="/quotations"]')).toHaveCount(0);
 
         expect(consoleErrors).toEqual([]);
         await context.close();

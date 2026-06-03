@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { pricingPlans } from "../src/lib/pricing.ts";
+import { DEFAULT_SHIPMENT_FORM_TEMPLATE_DEFINITIONS } from "../src/shared/shipment-form-fields.js";
 import { DEFAULT_SMS_TEMPLATES } from "../src/server/sms-templates.js";
 
 const { Client } = pg;
@@ -27,6 +28,7 @@ const permissionKeys = [
   "shipments.create",
   "shipments.update",
   "shipments.archive",
+  "shipment_forms.manage",
   "shipment_steps.update",
   "customers.view",
   "customers.create",
@@ -42,6 +44,8 @@ const permissionKeys = [
   "changes.view",
   "chat.use",
   "chat.manage_groups",
+  "chat.media.view",
+  "chat.media.delete",
   "users.manage",
   "users.promote",
   "cheques.manage",
@@ -80,7 +84,7 @@ const companyOperationalPermissions = [
 
 const rolePermissions = {
   CEO: permissionKeys,
-  MANAGER: permissionKeys.filter((key) => key !== "users.promote"),
+  MANAGER: permissionKeys.filter((key) => !["users.promote", "chat.media.view", "chat.media.delete"].includes(key)),
   OPERATIONS: ["dashboard.view", ...companyOperationalPermissions],
   CUSTOMER_SERVICE: ["dashboard.view", ...companyOperationalPermissions],
   FINANCE: ["dashboard.view", "cheques.manage", ...companyOperationalPermissions],
@@ -280,6 +284,123 @@ async function seedRolesAndPermissions(client: Client) {
      ON CONFLICT (user_id, permission_id) DO NOTHING`,
     [ownerUserId]
   );
+}
+
+function shipmentTemplateId(typeCode: string) {
+  return `shipment-form-template-${typeCode.toLowerCase().replace(/_/g, "-")}`;
+}
+
+function shipmentTemplateSectionId(typeCode: string, sectionKey: string) {
+  return `${shipmentTemplateId(typeCode)}-section-${sectionKey}`;
+}
+
+function shipmentTemplateFieldId(typeCode: string, fieldKey: string) {
+  return `${shipmentTemplateId(typeCode)}-field-${fieldKey}`;
+}
+
+async function seedShipmentFormTemplates(client: Client) {
+  for (const template of DEFAULT_SHIPMENT_FORM_TEMPLATE_DEFINITIONS) {
+    const templateId = shipmentTemplateId(template.shipmentTypeCode);
+    await client.query(
+      `INSERT INTO shipment_form_templates (
+         id, organization_id, code, shipment_type_code, title_fa, description,
+         is_system, is_active, version, created_at, updated_at
+       )
+       VALUES ($1, NULL, $2, $3, $4, $5, TRUE, TRUE, 1, NOW(), NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         code = EXCLUDED.code,
+         shipment_type_code = EXCLUDED.shipment_type_code,
+         title_fa = EXCLUDED.title_fa,
+         description = EXCLUDED.description,
+         is_system = TRUE,
+         is_active = TRUE,
+         archived_at = NULL,
+         updated_at = NOW()`,
+      [
+        templateId,
+        template.code,
+        template.shipmentTypeCode,
+        template.titleFa,
+        template.description || "",
+      ]
+    );
+
+    for (const section of template.sections) {
+      const sectionId = shipmentTemplateSectionId(template.shipmentTypeCode, section.sectionKey);
+      await client.query(
+        `INSERT INTO shipment_form_template_sections (
+           id, template_id, section_key, title_fa, description, sort_order,
+           is_collapsed_by_default, created_at, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+         ON CONFLICT (template_id, section_key) DO UPDATE SET
+           title_fa = EXCLUDED.title_fa,
+           description = EXCLUDED.description,
+           sort_order = EXCLUDED.sort_order,
+           is_collapsed_by_default = EXCLUDED.is_collapsed_by_default,
+           updated_at = NOW()`,
+        [
+          sectionId,
+          templateId,
+          section.sectionKey,
+          section.titleFa,
+          section.description || "",
+          section.sortOrder || 0,
+          Boolean(section.isCollapsedByDefault),
+        ]
+      );
+
+      for (const field of section.fields) {
+        await client.query(
+          `INSERT INTO shipment_form_template_fields (
+             id, template_id, section_id, field_key, field_source, field_type, label_fa,
+             helper_text, placeholder, sort_order, is_visible, is_required, is_important,
+             show_in_shipment_detail, show_in_daily_status, show_in_create_form,
+             validation_json, options_json, created_at, updated_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18::jsonb, NOW(), NOW())
+           ON CONFLICT (template_id, field_key) DO UPDATE SET
+             section_id = EXCLUDED.section_id,
+             field_source = EXCLUDED.field_source,
+             field_type = EXCLUDED.field_type,
+             label_fa = EXCLUDED.label_fa,
+             helper_text = EXCLUDED.helper_text,
+             placeholder = EXCLUDED.placeholder,
+             sort_order = EXCLUDED.sort_order,
+             is_visible = EXCLUDED.is_visible,
+             is_required = EXCLUDED.is_required,
+             is_important = EXCLUDED.is_important,
+             show_in_shipment_detail = EXCLUDED.show_in_shipment_detail,
+             show_in_daily_status = EXCLUDED.show_in_daily_status,
+             show_in_create_form = EXCLUDED.show_in_create_form,
+             validation_json = EXCLUDED.validation_json,
+             options_json = EXCLUDED.options_json,
+             archived_at = NULL,
+             updated_at = NOW()`,
+          [
+            shipmentTemplateFieldId(template.shipmentTypeCode, field.fieldKey),
+            templateId,
+            sectionId,
+            field.fieldKey,
+            field.fieldSource,
+            field.fieldType,
+            field.labelFa,
+            field.helperText || "",
+            field.placeholder || "",
+            field.sortOrder || 0,
+            field.isVisible !== false,
+            Boolean(field.isRequired),
+            Boolean(field.isImportant),
+            field.showInShipmentDetail !== false,
+            field.showInDailyStatus !== false,
+            Boolean(field.showInCreateForm),
+            JSON.stringify(field.validationJson || {}),
+            JSON.stringify(field.optionsJson || []),
+          ]
+        );
+      }
+    }
+  }
 }
 
 async function bridgeUsers(client: Client, users: any[]) {
@@ -667,65 +788,11 @@ async function bridgeQuotations(client: Client, quotes: any[]) {
 }
 
 async function bridgeChat(client: Client, channels: any[], messages: any[]) {
-  const users = await client.query("SELECT id, role FROM app_users WHERE status = 'active'");
-  for (const channel of channels) {
-    await client.query(
-      `INSERT INTO chat_threads (id, owner_user_id, type, name, description, role_limit, icon, legacy_channel_id, updated_at)
-       VALUES ($1, $2, 'CHANNEL', $3, $4, $5, $6, $1, NOW())
-       ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name,
-         description = EXCLUDED.description,
-         role_limit = EXCLUDED.role_limit,
-         icon = EXCLUDED.icon,
-         updated_at = NOW()`,
-      [channel.id, ownerUserId, channel.name, channel.description || null, channel.roleLimit || null, channel.icon || null]
-    );
-    for (const user of users.rows) {
-      if (!channel.roleLimit || user.role === "CEO" || user.role === channel.roleLimit) {
-        await client.query(
-          `INSERT INTO chat_thread_members (id, thread_id, user_id)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (thread_id, user_id) DO NOTHING`,
-          [crypto.randomUUID(), channel.id, user.id]
-        );
-      }
-    }
-  }
-
-  for (const message of messages) {
-    const threadId = message.isGroup
-      ? message.groupId
-      : `dm-${[message.senderId, message.receiverId].sort().join("-")}`;
-    if (!threadId) continue;
-    await client.query(
-      `INSERT INTO chat_threads (id, type, name, updated_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (id) DO NOTHING`,
-      [threadId, message.isGroup ? "CHANNEL" : "DM", message.isGroup ? "Channel" : "Direct chat"]
-    );
-    for (const userId of [message.senderId, message.receiverId].filter(Boolean)) {
-      await client.query(
-        `INSERT INTO chat_thread_members (id, thread_id, user_id)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (thread_id, user_id) DO NOTHING`,
-        [crypto.randomUUID(), threadId, userId]
-      );
-    }
-    await client.query(
-      `INSERT INTO chat_messages (id, thread_id, sender_id, sender_name, content, legacy_data, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, COALESCE($7, NOW()))
-       ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, legacy_data = EXCLUDED.legacy_data`,
-      [
-        message.id,
-        threadId,
-        message.senderId,
-        message.senderName || "User",
-        message.content || "",
-        asJson(message),
-        parseLegacyDate(message.createdAt),
-      ]
-    );
-  }
+  // Live chat is now a canonical, tenant-scoped feature. Do not import legacy
+  // channels/messages into chat tables; that can resurrect demo-era data.
+  void client;
+  void channels;
+  void messages;
 }
 
 async function bridgeActivityLogs(client: Client, logs: any[]) {
@@ -771,6 +838,7 @@ async function bridge() {
     await client.query(schema);
     await seedSaasFoundation(client);
     await seedRolesAndPermissions(client);
+    await seedShipmentFormTemplates(client);
 
     const users = await getCollection(client, "users");
     const customers = await getCollection(client, "customers");

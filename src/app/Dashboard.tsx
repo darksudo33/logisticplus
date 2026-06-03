@@ -84,6 +84,11 @@ const getRiskMeta = (days: number) => {
   return { label: "تحت کنترل", className: "bg-blue-500 text-white", bar: "bg-primary" };
 };
 
+function safeNumber(value: unknown, fallback = 0) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
 type DashboardApiData = {
   summary?: {
     activeShipments?: number;
@@ -252,7 +257,7 @@ export default function Dashboard() {
           daysRem = 5;
         }
 
-        return { ...s, daysRemaining: Math.max(0, daysRem) };
+        return { ...s, daysRemaining: Math.max(0, safeNumber(daysRem, 5)) };
       })
       .sort((a, b) => a.daysRemaining - b.daysRemaining)
       .slice(0, 3);
@@ -312,9 +317,11 @@ export default function Dashboard() {
         ) : (
           <div className="grid auto-rows-fr grid-cols-1 gap-3 lg:grid-cols-3">
             {criticalShipments.map((shipment) => {
-            const days = Math.floor(shipment.daysRemaining);
-            const hours = Math.floor((shipment.daysRemaining % 1) * 24);
-            const progress = Math.min(100, Math.max(8, 100 - (shipment.daysRemaining / (shipment.freeTimeDays || 14)) * 100));
+            const daysRemaining = Math.max(0, safeNumber(shipment.daysRemaining, 0));
+            const freeTimeDays = Math.max(1, safeNumber(shipment.freeTimeDays, 14));
+            const days = Math.floor(daysRemaining);
+            const hours = Math.floor((daysRemaining % 1) * 24);
+            const progress = Math.min(100, Math.max(8, 100 - (daysRemaining / freeTimeDays) * 100));
             const risk = getRiskMeta(days);
 
             return (

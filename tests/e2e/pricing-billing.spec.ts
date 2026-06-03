@@ -1,35 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { USER_PASSWORD, apiContext, disposeContexts, loginApi, readOk, uniqueEmail } from "./helpers";
+import { extraUsagePricing, formatIrr, pricingPlans } from "../../src/lib/pricing";
 
-const expectedPlans = {
-  starter: {
-    name: "اقتصادی",
-    monthlyPriceIrr: 34900000,
-    annualPriceIrr: 349000000,
-    users: 3,
-    monthlyShipments: 5,
-    storageMb: 2048,
-    smsNotifications: false,
-  },
-  business: {
-    name: "حرفه‌ای",
-    monthlyPriceIrr: 59000000,
-    annualPriceIrr: 590000000,
-    users: 10,
-    monthlyShipments: 20,
-    storageMb: 5120,
-    smsNotifications: true,
-  },
-  enterprise: {
-    name: "سازمانی",
-    monthlyPriceIrr: 99000000,
-    annualPriceIrr: 990000000,
-    users: 30,
-    monthlyShipments: 0,
-    storageMb: 51200,
-    smsNotifications: true,
-  },
-} as const;
+const expectedPlans = Object.fromEntries(pricingPlans.map((plan) => [plan.id, plan])) as Record<string, (typeof pricingPlans)[number]>;
 
 function normalizeDigits(value: string) {
   const persian = "۰۱۲۳۴۵۶۷۸۹";
@@ -49,21 +22,16 @@ test("pricing page shows updated plan names, prices, limits, and add-ons", async
   await expect(page.locator("h1").first()).toBeVisible();
 
   const body = await normalizedBodyText(page);
-  expect(body).toContain("اقتصادی");
-  expect(body).toContain("حرفه‌ای");
-  expect(body).toContain("سازمانی");
-  expect(body).toContain("34900000 ریال");
-  expect(body).toContain("59000000 ریال");
-  expect(body).toContain("99000000 ریال");
-  expect(body).toContain("تا 5 محموله در ماه");
-  expect(body).toContain("تا 20 محموله در ماه");
-  expect(body).toContain("محموله ماهانه نامحدود");
-  expect(body).toContain("2 گیگابایت فضای اسناد");
-  expect(body).toContain("5 گیگابایت فضای اسناد");
-  expect(body).toContain("50 گیگابایت فضای اسناد");
-  expect(body).toContain("هر کاربر اضافه: 4000000 ریال در ماه");
-  expect(body).toContain("هر 10 ظرفیت محموله اضافه: 5000000 ریال در ماه");
-  expect(body).toContain("هر 1 گیگابایت فضای اسناد اضافه: 1800000 ریال در ماه");
+  for (const plan of pricingPlans) {
+    expect(body).toContain(plan.name);
+    expect(body).toContain(normalizeDigits(formatIrr(plan.monthlyPriceIrr)));
+    for (const feature of plan.summaryFeatures) {
+      expect(body).toContain(normalizeDigits(feature));
+    }
+  }
+  for (const usagePrice of extraUsagePricing) {
+    expect(body).toContain(normalizeDigits(usagePrice));
+  }
 });
 
 for (const [planId, plan] of Object.entries(expectedPlans)) {
@@ -73,7 +41,7 @@ for (const [planId, plan] of Object.entries(expectedPlans)) {
 
     const body = await normalizedBodyText(page);
     expect(body).toContain(plan.name);
-    expect(body).toContain(`${plan.monthlyPriceIrr} ریال`);
+    expect(body).toContain(normalizeDigits(formatIrr(plan.monthlyPriceIrr)));
   });
 }
 
@@ -87,10 +55,10 @@ test("/api/plans returns updated prices, limits, and SMS feature flags", async (
     expect(plan.name).toBe(expected.name);
     expect(plan.monthlyPriceIrr).toBe(expected.monthlyPriceIrr);
     expect(plan.annualPriceIrr).toBe(expected.annualPriceIrr);
-    expect(plan.limits.users).toBe(expected.users);
-    expect(plan.limits.monthlyShipments).toBe(expected.monthlyShipments);
-    expect(plan.limits.storageMb).toBe(expected.storageMb);
-    expect(plan.features.smsNotifications).toBe(expected.smsNotifications);
+    expect(plan.limits.users).toBe(expected.limits.users);
+    expect(plan.limits.monthlyShipments).toBe(expected.limits.monthlyShipments);
+    expect(plan.limits.storageMb).toBe(expected.limits.storageMb);
+    expect(plan.features.smsNotifications).toBe(expected.backendFeatures.smsNotifications);
   }
 
   await disposeContexts(context);

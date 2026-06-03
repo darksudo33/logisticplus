@@ -3,17 +3,10 @@ import { useParams, useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import { useAppDataStore, useMockStore } from "@/src/store/useMockStore";
 import { 
-  Tabs, 
-  TabsList, 
-  TabsTrigger, 
-  TabsContent 
-} from "@/components/ui/tabs";
-import { 
   ArrowRight, 
   Ship, 
   MapPin, 
   Calendar, 
-  Truck, 
   UserPlus, 
   Users,
   CheckCircle2, 
@@ -42,7 +35,10 @@ import {
   Link2,
   RefreshCw,
   ShieldCheck,
-  EyeOff
+  EyeOff,
+  Loader2,
+  MessageSquare,
+  Send
 } from "lucide-react";
 import { format, addDays } from "date-fns-jalali";
 import { Button } from "@/components/ui/button";
@@ -65,8 +61,10 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { shipmentApi } from "@/src/lib/shipmentApi";
 import {
   DocumentType,
+  Shipment,
   ShipmentStatus,
   ShipmentWorkflowBlocker,
   ShipmentWorkflowRoute,
@@ -80,6 +78,7 @@ import { getShipmentProgress } from "@/src/lib/shipmentWorkflow";
 import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
 import { IranImportProgressTimeline } from "@/src/components/shipments/IranImportProgressTimeline";
 import { RelatedShipmentTasksPanel } from "@/src/components/shipments/RelatedShipmentTasksPanel";
+import { ShipmentDailyStatusPanel } from "@/src/components/shipments/ShipmentDailyStatusPanel";
 import { ShipmentProgressBlockerDialog } from "@/src/components/shipments/ShipmentProgressBlockerDialog";
 import { ShipmentProgressUpdateDialog } from "@/src/components/shipments/ShipmentProgressUpdateDialog";
 import { TaskAssignDialog } from "@/src/components/tasks/TaskAssignDialog";
@@ -715,6 +714,359 @@ const CustomerAccessPanel = ({ shipmentId, trackingNumber }: { shipmentId: strin
   );
 };
 
+type ShipmentChatThread = {
+  id: string;
+  shipmentCode?: string;
+};
+
+type ShipmentChatMessage = {
+  id: string;
+  threadId: string;
+  senderId: string;
+  senderName: string;
+  body?: string;
+  content?: string;
+  createdAt: string;
+};
+
+const shipmentChatMessageText = (message: ShipmentChatMessage) => message.body || message.content || "";
+const SHIPMENT_CHAT_MESSAGE_PAGE_SIZE = 20;
+const SHIPMENT_CHAT_HISTORY_TOP_THRESHOLD_PX = 48;
+const SHIPMENT_CHAT_BOTTOM_THRESHOLD_PX = 80;
+
+const ShipmentChatPanel = ({ shipmentId, shipmentCode }: { shipmentId: string; shipmentCode: string }) => {
+  const navigate = useNavigate();
+  const currentUser = useMockStore((state) => state.currentUser);
+  const canUseChat = Boolean(currentUser?.permissions?.includes("chat.use"));
+  const [thread, setThread] = React.useState<ShipmentChatThread | null>(null);
+  const [messages, setMessages] = React.useState<ShipmentChatMessage[]>([]);
+  const [draft, setDraft] = React.useState("");
+  const [isLoading, setIsLoading] = React.useState(false);
+  const [isSending, setIsSending] = React.useState(false);
+  const [error, setError] = React.useState("");
+  const [hasMoreMessages, setHasMoreMessages] = React.useState(false);
+  const wsRef = React.useRef<WebSocket | null>(null);
+  const messageListRef = React.useRef<HTMLDivElement | null>(null);
+  const messagesEndRef = React.useRef<HTMLDivElement | null>(null);
+  const historyLoadingRef = React.useRef(false);
+  const historyScrollRestoreRef = React.useRef<{ previousHeight: number; previousTop: number } | null>(null);
+  const pendingBottomScrollRef = React.useRef<ScrollBehavior | null>(null);
+  const initialBottomScrolledThreadRef = React.useRef("");
+
+  const loadMessages = React.useCallback(async (
+    threadId: string,
+    options: { before?: string; mode?: "initial" | "history" } = {}
+  ) => {
+    const params = new URLSearchParams({ limit: String(SHIPMENT_CHAT_MESSAGE_PAGE_SIZE) });
+    if (options.before) params.set("before", options.before);
+    const response = await fetch(`/api/chat/threads/${encodeURIComponent(threadId)}/messages?${params.toString()}`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) throw new Error(payload.error?.message || "Could not load shipment chat messages.");
+    const nextMessages = (payload.data || []) as ShipmentChatMessage[];
+    setHasMoreMessages(nextMessages.length === SHIPMENT_CHAT_MESSAGE_PAGE_SIZE);
+    if (options.mode === "history") {
+      setMessages((items) => {
+        const existingIds = new Set(items.map((item) => item.id));
+        const olderMessages = nextMessages.filter((message) => !existingIds.has(message.id));
+        return olderMessages.length ? [...olderMessages, ...items] : items;
+      });
+      return nextMessages;
+    }
+    pendingBottomScrollRef.current = "auto";
+    setMessages(nextMessages);
+    return nextMessages;
+  }, []);
+
+  const isMessageListNearBottom = () => {
+    const list = messageListRef.current;
+    if (!list) return true;
+    return list.scrollHeight - list.scrollTop - list.clientHeight <= SHIPMENT_CHAT_BOTTOM_THRESHOLD_PX;
+  };
+
+  const scrollMessageListToBottom = (behavior: ScrollBehavior) => {
+    const applyScroll = () => {
+      const list = messageListRef.current;
+      messagesEndRef.current?.scrollIntoView({ behavior, block: "end" });
+      if (!list) return;
+      if (behavior === "smooth") {
+        list.scrollTo({ top: list.scrollHeight, behavior });
+        return;
+      }
+      list.scrollTop = list.scrollHeight;
+    };
+    applyScroll();
+    window.requestAnimationFrame(() => {
+      applyScroll();
+      window.requestAnimationFrame(applyScroll);
+    });
+  };
+
+  const loadOlderMessages = async () => {
+    const oldestMessage = messages[0];
+    if (!thread?.id || !oldestMessage || !hasMoreMessages || historyLoadingRef.current) return;
+    const list = messageListRef.current;
+    historyScrollRestoreRef.current = list
+      ? { previousHeight: list.scrollHeight, previousTop: list.scrollTop }
+      : null;
+    historyLoadingRef.current = true;
+    try {
+      const olderMessages = await loadMessages(thread.id, { before: oldestMessage.id, mode: "history" });
+      if (!olderMessages?.length) {
+        historyScrollRestoreRef.current = null;
+      }
+    } catch (nextError) {
+      historyScrollRestoreRef.current = null;
+      setError(nextError instanceof Error ? nextError.message : "Could not load older shipment chat messages.");
+    } finally {
+      historyLoadingRef.current = false;
+    }
+  };
+
+  const handleMessageListScroll = () => {
+    const list = messageListRef.current;
+    if (!list || list.scrollHeight <= list.clientHeight) return;
+    if (list.scrollTop <= SHIPMENT_CHAT_HISTORY_TOP_THRESHOLD_PX) {
+      void loadOlderMessages();
+    }
+  };
+
+  React.useEffect(() => {
+    if (!canUseChat) return;
+    let cancelled = false;
+    setIsLoading(true);
+    setError("");
+    setMessages([]);
+    setHasMoreMessages(false);
+    historyLoadingRef.current = false;
+    historyScrollRestoreRef.current = null;
+    pendingBottomScrollRef.current = "auto";
+    initialBottomScrolledThreadRef.current = "";
+    fetch(`/api/shipments/${encodeURIComponent(shipmentId)}/chat-thread`)
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.ok) throw new Error(payload.error?.message || "Could not open shipment chat.");
+        if (cancelled) return null;
+        setThread(payload.data);
+        await loadMessages(payload.data.id);
+        if (!cancelled) {
+          window.setTimeout(() => scrollMessageListToBottom("auto"), 0);
+          window.setTimeout(() => scrollMessageListToBottom("auto"), 150);
+        }
+        return payload.data;
+      })
+      .catch((nextError) => {
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : "Could not open shipment chat.");
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canUseChat, loadMessages, shipmentId]);
+
+  React.useEffect(() => {
+    if (!canUseChat || !thread?.id) return;
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/chat`);
+    wsRef.current = ws;
+    ws.onmessage = (event) => {
+      const incoming = JSON.parse(event.data);
+      if (incoming.type === "connection.ready") {
+        ws.send(JSON.stringify({ type: "thread.join", payload: { threadId: thread.id } }));
+        return;
+      }
+      if (incoming.type === "message.created" && incoming.payload?.threadId === thread.id) {
+        const message = incoming.payload as ShipmentChatMessage;
+        const shouldScrollToBottom = message.senderId === currentUser?.id || isMessageListNearBottom();
+        setMessages((items) => {
+          if (items.some((item) => item.id === message.id)) return items;
+          if (shouldScrollToBottom) pendingBottomScrollRef.current = "smooth";
+          return [...items, message];
+        });
+        return;
+      }
+      if (incoming.type === "message.ack") {
+        setIsSending(false);
+        setDraft("");
+        setError("");
+        return;
+      }
+      if (incoming.type === "error") {
+        setIsSending(false);
+        setError(incoming.error?.message || "Shipment chat action failed.");
+      }
+    };
+    ws.onclose = () => {
+      wsRef.current = null;
+      setIsSending(false);
+    };
+    return () => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "thread.leave", payload: { threadId: thread.id } }));
+      }
+      ws.close();
+      wsRef.current = null;
+    };
+  }, [canUseChat, currentUser?.id, thread?.id]);
+
+  React.useLayoutEffect(() => {
+    const list = messageListRef.current;
+    if (!list || messages.length === 0) return;
+    const restore = historyScrollRestoreRef.current;
+    if (restore) {
+      list.scrollTop = list.scrollHeight - restore.previousHeight + restore.previousTop;
+      historyScrollRestoreRef.current = null;
+    }
+  }, [messages]);
+
+  React.useEffect(() => {
+    if (!thread?.id || messages.length === 0) return;
+    if (initialBottomScrolledThreadRef.current !== thread.id) {
+      scrollMessageListToBottom("auto");
+      pendingBottomScrollRef.current = null;
+      initialBottomScrolledThreadRef.current = thread.id;
+      return;
+    }
+    const behavior = pendingBottomScrollRef.current;
+    if (!behavior) return;
+    scrollMessageListToBottom(behavior);
+    pendingBottomScrollRef.current = null;
+  }, [messages, thread?.id]);
+
+  React.useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    if (!thread?.id || !lastMessage) return;
+    fetch(`/api/chat/threads/${encodeURIComponent(thread.id)}/read`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messageId: lastMessage.id }),
+    }).catch(() => {});
+  }, [messages, thread?.id]);
+
+  if (!canUseChat) return null;
+
+  const sendMessage = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const body = draft.trim();
+    if (!body || !thread?.id || isSending) return;
+    setIsSending(true);
+    setError("");
+    const clientMessageId = `shipment-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const socket = wsRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: "message.send",
+        requestId: clientMessageId,
+        payload: { threadId: thread.id, body, clientMessageId },
+      }));
+      return;
+    }
+    try {
+      const response = await fetch(`/api/chat/threads/${encodeURIComponent(thread.id)}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body, clientMessageId }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.ok) throw new Error(payload.error?.message || "Could not send shipment chat message.");
+      pendingBottomScrollRef.current = "smooth";
+      setMessages((items) => items.some((item) => item.id === payload.data.id) ? items : [...items, payload.data]);
+      setDraft("");
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Could not send shipment chat message.");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  return (
+    <Card className="overflow-hidden rounded-2xl border-border/70 bg-card shadow-sm" data-testid="shipment-chat-panel">
+      <CardHeader className="border-b border-border/50 bg-muted/20 p-4">
+        <CardTitle className="flex items-center justify-between gap-3 text-sm font-black">
+          <span className="flex min-w-0 items-center gap-2">
+            <MessageSquare className="h-4 w-4 shrink-0 text-primary" />
+            <span className="truncate">گفتگوی محموله</span>
+          </span>
+          {thread?.id && (
+            <Button
+              type="button"
+              variant="outline"
+              className="h-8 shrink-0 rounded-lg px-3 text-[11px] font-black"
+              onClick={() => navigate(`/chat?threadId=${encodeURIComponent(thread.id)}`)}
+              data-testid="shipment-chat-full-link"
+            >
+              مشاهده گفتگوی کامل
+            </Button>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 p-4">
+        <div className="rounded-xl bg-muted/25 p-3">
+          <div className="mb-2 flex items-center justify-between gap-3 text-[11px] font-bold text-muted-foreground">
+            <span className="truncate">محموله {thread?.shipmentCode || shipmentCode}</span>
+            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+          </div>
+          <div
+            ref={messageListRef}
+            className="max-h-48 space-y-2 overflow-y-auto pr-1"
+            data-testid="shipment-chat-message-list"
+            onScroll={handleMessageListScroll}
+          >
+            {!isLoading && messages.length === 0 && (
+              <p className="py-6 text-center text-xs font-bold text-muted-foreground">هنوز پیامی ثبت نشده است.</p>
+            )}
+            {messages.map((message) => {
+              const isMine = message.senderId === currentUser?.id;
+              return (
+                <div key={message.id} className={cn("flex flex-col", isMine ? "items-start" : "items-end")}>
+                  {!isMine && <span className="mb-1 text-[10px] font-black text-muted-foreground">{message.senderName}</span>}
+                  <div
+                    className={cn(
+                      "max-w-[90%] whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-[11px] font-bold leading-5 [overflow-wrap:anywhere]",
+                      isMine ? "bg-primary text-primary-foreground" : "border border-border bg-background text-foreground"
+                    )}
+                    data-testid="shipment-chat-message-bubble"
+                  >
+                    {shipmentChatMessageText(message)}
+                  </div>
+                </div>
+              );
+            })}
+            <div ref={messagesEndRef} />
+          </div>
+        </div>
+        {error && (
+          <div className="rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[11px] font-bold text-destructive">
+            {error}
+          </div>
+        )}
+        <form onSubmit={sendMessage} className="flex items-center gap-2">
+          <Input
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            disabled={!thread?.id || isLoading}
+            maxLength={3000}
+            placeholder="پیام داخلی محموله..."
+            className="h-10 min-w-0 flex-1 rounded-lg text-xs font-bold"
+            data-testid="shipment-chat-message-input"
+          />
+          <Button
+            type="submit"
+            size="icon"
+            className="h-10 w-10 shrink-0 rounded-lg"
+            disabled={!thread?.id || !draft.trim() || isSending || isLoading}
+            data-testid="shipment-chat-send-button"
+            aria-label="ارسال پیام محموله"
+          >
+            {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+};
+
 export default function ShipmentDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -737,7 +1089,12 @@ export default function ShipmentDetail() {
   const assignTask = useAppDataStore(state => state.assignTask);
   const updateTaskStatusRemote = useAppDataStore(state => state.updateTaskStatusRemote);
   
-  const shipment = React.useMemo(() => shipments.find(s => s.id === id), [shipments, id]);
+  const storeShipment = React.useMemo(() => shipments.find(s => s.id === id), [shipments, id]);
+  const [remoteShipmentResult, setRemoteShipmentResult] = useState<{ routeId: string; shipment: Shipment | null } | null>(null);
+  const [isShipmentLoading, setIsShipmentLoading] = useState(false);
+  const [shipmentLoadError, setShipmentLoadError] = useState("");
+  const remoteShipment = remoteShipmentResult?.routeId === id ? remoteShipmentResult.shipment : null;
+  const shipment = storeShipment || remoteShipment;
   const steps = React.useMemo(() => 
     shipmentSteps.filter(s => s.shipmentId === id).sort((a, b) => a.order - b.order),
     [shipmentSteps, id]
@@ -799,6 +1156,57 @@ export default function ShipmentDetail() {
       console.error("Could not load organization members.", error);
     });
   }, [id, refreshShipmentProgress, refreshTasks, loadWorkflowMembers]);
+
+  React.useEffect(() => {
+    if (!id) return;
+    if (storeShipment) {
+      setIsShipmentLoading(false);
+      setShipmentLoadError("");
+      return;
+    }
+
+    let isCancelled = false;
+    setIsShipmentLoading(true);
+    setShipmentLoadError("");
+
+    shipmentApi.get(id)
+      .then((record) => {
+        if (isCancelled) return;
+        setRemoteShipmentResult({ routeId: id, shipment: record });
+      })
+      .catch((error) => {
+        if (isCancelled) return;
+        setRemoteShipmentResult({ routeId: id, shipment: null });
+        setShipmentLoadError(error instanceof Error ? error.message : "Could not load shipment.");
+      })
+      .finally(() => {
+        if (!isCancelled) setIsShipmentLoading(false);
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [id, storeShipment]);
+
+  const visibleShipments = React.useMemo(() => {
+    if (!shipment || shipments.some(s => s.id === shipment.id)) return shipments;
+    return [shipment, ...shipments];
+  }, [shipments, shipment]);
+  const customer = React.useMemo(() => customers.find(c => c.id === shipment?.customerId), [customers, shipment?.customerId]);
+  const customerShipments = React.useMemo(
+    () => visibleShipments.filter(s => s.customerId === shipment?.customerId),
+    [visibleShipments, shipment?.customerId]
+  );
+  const [isCustomerSummaryOpen, setIsCustomerSummaryOpen] = useState(false);
+
+  if (!shipment && id && (isShipmentLoading || !shipmentLoadError)) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[600px] text-slate-500 font-sans">
+        <ActionSkeleton className="mb-4 h-12 w-12 rounded-full" />
+        <h2 className="text-xl font-bold">در حال بارگیری محموله...</h2>
+      </div>
+    );
+  }
 
   if (!shipment) {
     return (
@@ -1048,10 +1456,6 @@ export default function ShipmentDetail() {
     }
   };
 
-  const customer = React.useMemo(() => customers.find(c => c.id === shipment?.customerId), [customers, shipment?.customerId]);
-  const customerShipments = React.useMemo(() => shipments.filter(s => s.customerId === shipment?.customerId), [shipments, shipment?.customerId]);
-  const [isCustomerSummaryOpen, setIsCustomerSummaryOpen] = useState(false);
-
   return (
     <div className="app-page space-y-6 font-sans text-right text-foreground" dir="rtl">
       {/* Header */}
@@ -1211,7 +1615,9 @@ export default function ShipmentDetail() {
       <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_20rem] xl:grid-cols-[minmax(0,1fr)_22rem]">
         {/* Left Column - Details */}
         <div className="order-2 min-w-0 space-y-4 md:space-y-6 lg:order-1">
-          <Card className="overflow-hidden rounded-2xl border-border/70 bg-card shadow-sm">
+          <ShipmentChatPanel shipmentId={shipment.id} shipmentCode={shipment.trackingNumber} />
+
+          <Card className="overflow-hidden rounded-2xl border-border/70 bg-card shadow-sm" data-testid="shipment-documents-panel">
             <CardContent className="p-4 md:p-6">
               <DocumentView shipmentId={shipment.id} />
             </CardContent>
@@ -1240,243 +1646,14 @@ export default function ShipmentDetail() {
             onStatusChange={handleRelatedTaskStatus}
           />
 
-          <Tabs defaultValue="steps" className="w-full">
-            <TabsContent value="steps" className="space-y-4 md:space-y-6 focus-visible:outline-none">
-              {/* Progress Overview */}
-              <Card className="bg-card border-border rounded-xl overflow-hidden shadow-sm border-t-2 border-t-primary/20">
-                <CardHeader className="p-4 border-b border-border/50 flex flex-row items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Truck className="w-4 h-4 md:w-5 md:h-5 text-primary" />
-                    <h3 className="font-bold text-xs md:text-base text-foreground/90">پیشرفت لجستیک</h3>
-                  </div>
-                  <TabsList className="bg-muted p-0.5 rounded-lg h-8">
-                    <TabsTrigger value="steps" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-md px-3 h-7 text-[9px] md:text-xs font-black">
-                      مراحل
-                    </TabsTrigger>
-                    <TabsTrigger value="info" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-md px-3 h-7 text-[9px] md:text-xs font-black">
-                      جزییات
-                    </TabsTrigger>
-                  </TabsList>
-                </CardHeader>
-                <CardContent className="p-4 md:p-6 focus-visible:outline-none">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-[10px] text-muted-foreground">درصد تکمیل فرآیند</span>
-                    <span className="text-xl md:text-2xl font-black text-primary">{progressPercent}%</span>
-                  </div>
-                  <Progress value={progressPercent} className="h-2 md:h-3 bg-muted" />
-                  <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-4 gap-2 md:gap-4 mt-6 md:mt-8">
-                    <div className="bg-muted/30 p-2 md:p-3 rounded-xl border border-border/30">
-                      <p className="text-[8px] md:text-[10px] text-muted-foreground mb-0.5 md:mb-1 uppercase tracking-wider">مبداء</p>
-                      <p className="text-[10px] md:text-sm font-bold truncate">{shipment.origin}</p>
-                    </div>
-                    <div className="bg-muted/30 p-2 md:p-3 rounded-xl border border-border/30">
-                      <p className="text-[8px] md:text-[10px] text-muted-foreground mb-0.5 md:mb-1 uppercase tracking-wider">مقصد</p>
-                      <p className="text-[10px] md:text-sm font-bold truncate">{shipment.destination}</p>
-                    </div>
-                    <div className="bg-muted/30 p-2 md:p-3 rounded-xl border border-border/30">
-                      <p className="text-[8px] md:text-[10px] text-muted-foreground mb-0.5 md:mb-1 uppercase tracking-wider">ثبت</p>
-                      <p className="text-[10px] md:text-sm font-bold truncate">{shipment.createdAt}</p>
-                    </div>
-                    <div className="bg-muted/30 p-2 md:p-3 rounded-xl border border-border/30 ring-1 ring-primary/20">
-                      <p className="text-[8px] md:text-[10px] text-primary mb-0.5 md:mb-1 uppercase tracking-wider font-black">زمان تحویل</p>
-                      <p className="text-[10px] md:text-sm font-bold truncate text-primary">{shipment.estimatedDelivery}</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Shipment Timeline / Steps */}
-              <Card className="bg-card border-border rounded-xl shadow-sm">
-                <CardHeader className="p-4 border-b border-border/50">
-                  <CardTitle className="text-sm md:text-lg font-bold flex items-center gap-2 text-foreground">
-                    <Package className="w-4 h-4 md:w-5 md:h-5 text-muted-foreground" />
-                    فرآیند حمل و ترخیص
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="p-4 md:p-6">
-                  <div className="relative">
-                    {/* Vertical Line */}
-                    <div className="absolute top-0 bottom-0 right-[13px] md:right-4 w-0.5 bg-border" />
-                    
-                    <div className="space-y-6 md:space-y-8 relative">
-                      {steps.map((step, index) => {
-                        const linkedTasks = shipmentTasks.filter(t => t.title.includes(step.name));
-                        return (
-                          <div key={step.id} className="flex gap-3 md:gap-6">
-                            <div className="relative flex flex-col items-center">
-                              <div className={cn(
-                                "w-7 h-7 md:w-8 md:h-8 rounded-full flex items-center justify-center z-10 border-4 border-card shrink-0",
-                                step.status === "COMPLETED" ? "bg-emerald-500 text-white" : 
-                                step.status === "IN_PROGRESS" ? "bg-primary text-primary-foreground animate-pulse" : 
-                                "bg-muted text-muted-foreground"
-                              )}>
-                                {step.status === "COMPLETED" ? <CheckCircle2 className="w-3.5 h-3.5 md:w-4 md:h-4" /> : 
-                                 step.status === "IN_PROGRESS" ? <Clock className="w-3.5 h-3.5 md:w-4 md:h-4" /> : 
-                                 <div className="w-1.5 h-1.5 rounded-full bg-current" />}
-                              </div>
-                            </div>
-                            <div className="flex-1 bg-muted/30 rounded-2xl p-2.5 md:p-4 border border-border/20 hover:border-primary/30 transition-all group">
-                              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2.5 md:gap-3">
-                                <div className="min-w-0">
-                                  <div className="flex flex-col sm:flex-row sm:items-center gap-1 md:gap-2 mb-1">
-                                    <h4 className={cn(
-                                      "font-black text-[10px] md:text-sm truncate",
-                                      step.status === "COMPLETED" ? "text-foreground" : 
-                                      step.status === "IN_PROGRESS" ? "text-primary" : 
-                                      "text-muted-foreground"
-                                    )}>
-                                      {step.name}
-                                    </h4>
-                                    {step.completedAt && (
-                                      <span className="text-[8px] md:text-[10px] text-muted-foreground font-mono shrink-0">{step.completedAt}</span>
-                                    )}
-                                  </div>
-                                  <p className="text-[9px] md:text-xs text-muted-foreground group-hover:text-foreground/80 leading-relaxed max-w-lg transition-colors">
-                                    {step.notes || `فرآیند عملیاتی مربوط به مرحله ${step.name} در محموله لجستیکی.`}
-                                  </p>
-                                  
-                                  {linkedTasks.length > 0 && (
-                                    <div className="mt-2 flex flex-wrap gap-1">
-                                      {linkedTasks.map(task => (
-                                        <Badge key={task.id} variant="outline" className="bg-background/50 text-[7px] md:text-[10px] gap-1 py-0 px-1 md:px-2 border-border rounded-md">
-                                          <div className={cn("w-1 h-1 md:w-1.5 md:h-1.5 rounded-full", task.status === "DONE" ? "bg-emerald-500" : "bg-primary")} />
-                                          {task.assignedToName}
-                                        </Badge>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                                
-                                   <div className="flex items-center justify-start sm:justify-end gap-1.5 shrink-0 border-t border-border/50 sm:border-t-0 pt-2.5 sm:pt-0">
-                                     <Button 
-                                       variant="ghost" 
-                                       size="icon" 
-                                       className="h-6 w-6 md:h-8 md:w-8 text-muted-foreground hover:text-primary rounded-lg"
-                                       onClick={() => {
-                                         setSelectedStep(step);
-                                         setEditingNote(step.notes || "");
-                                         setIsNoteDialogOpen(true);
-                                       }}
-                                     >
-                                       <FileText className="w-3.5 h-3.5 md:w-4 md:h-4" />
-                                     </Button>
-
-                                     {step.status !== "COMPLETED" ? (
-                                       <Button 
-                                         variant="ghost" 
-                                         size="sm" 
-                                         className="h-6 md:h-8 text-[8px] md:text-[11px] font-black text-emerald-500 hover:bg-emerald-500/10 px-2 md:px-3 rounded-lg border border-emerald-500/20"
-                                         onClick={() => patchShipmentStep(step.id, { 
-                                           status: "COMPLETED", 
-                                           completedAt: new Date().toLocaleDateString("fa-IR") 
-                                         }).catch(error => toast.error(error instanceof Error ? error.message : "Could not update step."))}
-                                       >
-                                         <Check className="w-3 md:w-3.5 h-3 md:h-3.5 ml-1 md:ml-1.5" />
-                                         تکمیل مرحله
-                                       </Button>
-                                     ) : (
-                                       <Button 
-                                         variant="ghost" 
-                                         size="sm" 
-                                         className="h-6 md:h-8 text-[8px] md:text-[11px] font-black text-muted-foreground hover:bg-muted/50 px-2 md:px-3 rounded-lg"
-                                         onClick={() => patchShipmentStep(step.id, { status: "IN_PROGRESS" }).catch(error => toast.error(error instanceof Error ? error.message : "Could not update step."))}
-                                       >
-                                         <Clock className="w-3 md:w-3.5 h-3 md:h-3.5 ml-1 md:ml-1.5" />
-                                         بازنشانی
-                                       </Button>
-                                     )}
-                                     
-                                     {EMPLOYEE_MANAGED_STEPS.includes(step.name) && step.status !== "COMPLETED" && (
-                                     <Button 
-                                       variant="ghost" 
-                                       size="sm" 
-                                       className="h-6 md:h-8 text-[8px] md:text-[11px] font-black text-primary hover:bg-primary/10 px-2 md:px-3 rounded-lg"
-                                       onClick={() => {
-                                         setSelectedStep(step);
-                                         setIsAssignDialogOpen(true);
-                                       }}
-                                     >
-                                       <UserPlus className="w-3 md:w-3.5 h-3 md:h-3.5 ml-1 md:ml-1.5" />
-                                       ارجاع
-                                     </Button>
-                                   )}
-                                   <Button variant="ghost" size="icon" className="h-6 w-6 md:h-8 md:w-8 text-muted-foreground hover:text-foreground rounded-lg">
-                                     <MoreVertical className="w-3 h-3 md:w-4 md:h-4" />
-                                   </Button>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            <TabsContent value="info" className="focus-visible:outline-none">
-              <Card className="bg-card border-border rounded-xl shadow-sm border-t-2 border-t-primary/20 ">
-                <CardHeader className="p-4 border-b border-border/50 flex flex-row items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Info className="w-4 h-4 md:w-5 md:h-5 text-primary" />
-                    <h3 className="font-bold text-xs md:text-base text-foreground/90">اطلاعات تکمیلی بار</h3>
-                  </div>
-                  <TabsList className="bg-muted p-0.5 rounded-lg h-8">
-                    <TabsTrigger value="steps" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-md px-3 h-7 text-[9px] md:text-xs font-black">
-                      مراحل
-                    </TabsTrigger>
-                    <TabsTrigger value="info" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-md px-3 h-7 text-[9px] md:text-xs font-black">
-                      جزییات
-                    </TabsTrigger>
-                  </TabsList>
-                </CardHeader>
-                <CardContent className="p-4 md:p-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
-                    <div className="space-y-4">
-                      <h4 className="text-xs md:text-sm font-bold text-primary border-r-2 border-primary pr-3">مشخصات کانتینر</h4>
-                      <div className="grid grid-cols-2 gap-3 md:gap-4">
-                        <div className="bg-muted/20 p-2.5 md:p-3 rounded-xl border border-border/20">
-                          <p className="text-[9px] md:text-[10px] text-muted-foreground mb-0.5 md:mb-1">نوع کانتینر</p>
-                          <p className="text-[11px] md:text-xs font-bold text-foreground">40ft High Cube</p>
-                        </div>
-                        <div className="bg-muted/20 p-2.5 md:p-3 rounded-xl border border-border/20">
-                          <p className="text-[9px] md:text-[10px] text-muted-foreground mb-0.5 md:mb-1">تعداد واحد</p>
-                          <p className="text-[11px] md:text-xs font-bold text-foreground">۲ دستگاه</p>
-                        </div>
-                        <div className="bg-muted/20 p-2.5 md:p-3 rounded-xl border border-border/20">
-                          <p className="text-[9px] md:text-[10px] text-muted-foreground mb-0.5 md:mb-1">وزن کل</p>
-                          <p className="text-[11px] md:text-xs font-bold text-foreground">۱۲,۴۰۰ کیلوگرم</p>
-                        </div>
-                        <div className="bg-muted/20 p-2.5 md:p-3 rounded-xl border border-border/20">
-                          <p className="text-[9px] md:text-[10px] text-muted-foreground mb-0.5 md:mb-1">حجم (CBM)</p>
-                          <p className="text-[11px] md:text-xs font-bold text-foreground">۱۲۰ متر مکعب</p>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="space-y-4">
-                      <h4 className="text-xs md:text-sm font-bold text-primary border-r-2 border-primary pr-3">اطلاعات گمرکی</h4>
-                      <div className="space-y-2 md:space-y-3">
-                        <div className="flex items-center justify-between p-2.5 md:p-3 bg-muted/20 rounded-xl border border-border/20">
-                          <span className="text-[11px] md:text-xs text-muted-foreground">کد تعرفه (HS)</span>
-                          <span className="text-[11px] md:text-xs font-mono font-bold text-foreground">8471.30.00</span>
-                        </div>
-                        <div className="flex items-center justify-between p-2.5 md:p-3 bg-muted/20 rounded-xl border border-border/20">
-                          <span className="text-[11px] md:text-xs text-muted-foreground">کشور سازنده</span>
-                          <span className="text-[11px] md:text-xs font-bold text-foreground">چین</span>
-                        </div>
-                        <div className="flex items-center justify-between p-2.5 md:p-3 bg-muted/20 rounded-xl border border-border/20">
-                          <span className="text-[11px] md:text-xs text-muted-foreground">ارزش اظهاری</span>
-                          <span className="text-[11px] md:text-xs font-bold text-emerald-500">$۴۵,۰۰۰ USD</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-          </Tabs>
+          <ShipmentDailyStatusPanel
+            shipmentId={shipment.id}
+            shipmentCode={shipment.trackingNumber}
+            shipmentStatus={shipment.status}
+            customerName={shipment.customerName}
+            origin={shipment.origin}
+            destination={shipment.destination}
+          />
         </div>
 
         {/* Summary Column */}

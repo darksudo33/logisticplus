@@ -33,14 +33,18 @@ export interface User {
 
 export interface Customer {
   id: string;
+  organization_id?: string;
+  organizationId?: string;
   name: string;
   company: string;
   phone: string;
   email: string;
   address: string;
+  referrer?: string;
   notes?: string;
   status?: string;
   isArchived?: boolean;
+  canViewPrivateDetails?: boolean;
   shipmentsCount: number;
   createdAt: string;
 }
@@ -54,6 +58,9 @@ export interface Shipment {
   origin: string;
   destination: string;
   status: ShipmentStatus;
+  shipmentDirection?: "import" | "export" | "transit" | "domestic";
+  transportMode?: "sea" | "air" | "land" | "rail" | "";
+  shipmentTypeCode?: string;
   createdAt: string;
   estimatedDelivery: string;
   actualDelivery?: string;
@@ -297,6 +304,245 @@ export interface CommercialCard {
   createdAt: string;
   updatedAt: string;
 }
+
+export type DailyStatusCustomsRoute = "green" | "yellow" | "red";
+export type DailyStatusCommonStatus =
+  | "not_started"
+  | "pending"
+  | "in_progress"
+  | "completed"
+  | "blocked"
+  | "not_required";
+export type DailyStatusCustomsStatus =
+  | "not_started"
+  | "declaration_registered"
+  | "in_customs_review"
+  | "documents_required"
+  | "inspection"
+  | "duties_pending"
+  | "ready_for_release"
+  | "released"
+  | "exited"
+  | "blocked";
+export type DailyStatusTaxPaymentStatus = DailyStatusCommonStatus | "paid";
+export type DailyStatusReleaseStatus = "not_released" | "ready" | "released" | "exited" | "blocked";
+
+export interface DailyStatusKootajProfile {
+  commercialCardId: string | null;
+  orderRegistrationNumber: string;
+  orderRegistrationDate: string | null;
+  orderRegistrationExpiryDate: string | null;
+  orderRegistrationStatus: DailyStatusCommonStatus | null;
+  proformaNumber: string;
+  proformaDate: string | null;
+  foreignSellerName: string;
+  foreignSellerCode: string;
+  goodsIdSummary: string;
+  hsCodeSummary: string;
+  orderPermitStatus: DailyStatusCommonStatus | null;
+  fxSourceStatus: DailyStatusCommonStatus | null;
+  currencyType: string;
+  currencyAmount: number | null;
+  bankName: string;
+  bankTrackingNumber: string;
+  fxAllocationDate: string | null;
+  bankProcessStatus: DailyStatusCommonStatus | null;
+  insuranceNumber: string;
+  inspectionCertificateNumber: string;
+  bookingNumber: string;
+  billOfLadingNumber: string;
+  transportDocumentNumber: string;
+  preAlertDate: string | null;
+  cotageNumber: string;
+  customsStatus: DailyStatusCustomsStatus | null;
+  customsRoute: DailyStatusCustomsRoute | null;
+  customsOffice: string;
+  declarationReference: string;
+  declarationDate: string | null;
+  cotageDate: string | null;
+  containerSummary: string;
+  goodsSummary: string;
+  packageCount: number | null;
+  grossWeightKg: number | null;
+  netWeightKg: number | null;
+  arrivalNoticeNumber: string;
+  arrivalDate: string | null;
+  manifestNumber: string;
+  deliveryOrderNumber: string;
+  warehouseName: string;
+  warehouseReceiptNumber: string;
+  warehouseReceiptDate: string | null;
+  evaluatorName: string;
+  expertName: string;
+  documentControlStatus: DailyStatusCommonStatus | null;
+  physicalInspectionStatus: DailyStatusCommonStatus | null;
+  physicalInspectionDate: string | null;
+  labStatus: DailyStatusCommonStatus | null;
+  labResultDate: string | null;
+  tariffReviewStatus: DailyStatusCommonStatus | null;
+  valuationStatus: DailyStatusCommonStatus | null;
+  legalPermitStatus: DailyStatusCommonStatus | null;
+  standardPermitStatus: DailyStatusCommonStatus | null;
+  healthPermitStatus: DailyStatusCommonStatus | null;
+  quarantinePermitStatus: DailyStatusCommonStatus | null;
+  otherPermitNotes: string;
+  taxPaymentStatus: DailyStatusTaxPaymentStatus | null;
+  customsPaymentStatus: DailyStatusCommonStatus | null;
+  dutiesAmount: number | null;
+  taxAmount: number | null;
+  customsPaymentDate: string | null;
+  paymentReference: string;
+  cashierConfirmationStatus: DailyStatusCommonStatus | null;
+  warehouseChargesStatus: DailyStatusCommonStatus | null;
+  terminalChargesStatus: DailyStatusCommonStatus | null;
+  demurrageStatus: DailyStatusCommonStatus | null;
+  loadingPermitNumber: string;
+  loadingPermitDate: string | null;
+  truckPlate: string;
+  driverName: string;
+  gatePassNumber: string;
+  exitGateStatus: DailyStatusCommonStatus | null;
+  releaseStatus: DailyStatusReleaseStatus | null;
+  exitDate: string | null;
+  deliveryDate: string | null;
+  internalNote: string;
+  customFields: Record<string, unknown>;
+  updatedAt: string | null;
+  updatedById: string | null;
+}
+
+export interface DailyStatusBoardRow {
+  id: string;
+  shipment: {
+    id: string;
+    code: string;
+    status: ShipmentStatus | string;
+    origin: string;
+    destination: string;
+    shipmentTypeCode?: string;
+    shipmentDirection?: string;
+    transportMode?: string;
+    assignedManagerId: string | null;
+    assignedManagerName: string;
+    updatedAt: string;
+  };
+  customer: {
+    id: string;
+    name: string;
+  } | null;
+  kootaj: DailyStatusKootajProfile;
+  commercialCard: {
+    id: string;
+    displayName: string;
+    cardNumber: string;
+    status: CommercialCardStatus | string | null;
+  } | null;
+  workflow: {
+    currentPhase: string;
+    currentStepCode: string | null;
+    currentStepLabel: string;
+    route: DailyStatusCustomsRoute | null;
+    completedCount: number;
+    totalCount: number;
+  } | null;
+  tasks: {
+    openCount: number;
+    overdueCount: number;
+    assignedUserNames: string[];
+  };
+  documents: {
+    totalCount: number;
+    customerVisibleCount: number;
+    missingRequiredCount: number;
+  };
+  links: {
+    shipmentDetailUrl: string;
+    customerDetailUrl: string | null;
+    commercialCardDetailUrl: string | null;
+  };
+}
+
+export type DailyStatusPatch = Partial<{
+  commercialCardId: string | null;
+  orderRegistrationNumber: string | null;
+  orderRegistrationDate: string | null;
+  orderRegistrationExpiryDate: string | null;
+  orderRegistrationStatus: DailyStatusCommonStatus | null;
+  proformaNumber: string | null;
+  proformaDate: string | null;
+  foreignSellerName: string | null;
+  foreignSellerCode: string | null;
+  goodsIdSummary: string | null;
+  hsCodeSummary: string | null;
+  orderPermitStatus: DailyStatusCommonStatus | null;
+  fxSourceStatus: DailyStatusCommonStatus | null;
+  currencyType: string | null;
+  currencyAmount: number | string | null;
+  bankName: string | null;
+  bankTrackingNumber: string | null;
+  fxAllocationDate: string | null;
+  bankProcessStatus: DailyStatusCommonStatus | null;
+  insuranceNumber: string | null;
+  inspectionCertificateNumber: string | null;
+  bookingNumber: string | null;
+  billOfLadingNumber: string | null;
+  transportDocumentNumber: string | null;
+  preAlertDate: string | null;
+  cotageNumber: string | null;
+  customsStatus: DailyStatusCustomsStatus | null;
+  customsRoute: DailyStatusCustomsRoute | null;
+  customsOffice: string | null;
+  declarationReference: string | null;
+  declarationDate: string | null;
+  cotageDate: string | null;
+  containerSummary: string | null;
+  goodsSummary: string | null;
+  packageCount: number | string | null;
+  grossWeightKg: number | string | null;
+  netWeightKg: number | string | null;
+  arrivalNoticeNumber: string | null;
+  arrivalDate: string | null;
+  manifestNumber: string | null;
+  deliveryOrderNumber: string | null;
+  warehouseName: string | null;
+  warehouseReceiptNumber: string | null;
+  warehouseReceiptDate: string | null;
+  evaluatorName: string | null;
+  expertName: string | null;
+  documentControlStatus: DailyStatusCommonStatus | null;
+  physicalInspectionStatus: DailyStatusCommonStatus | null;
+  physicalInspectionDate: string | null;
+  labStatus: DailyStatusCommonStatus | null;
+  labResultDate: string | null;
+  tariffReviewStatus: DailyStatusCommonStatus | null;
+  valuationStatus: DailyStatusCommonStatus | null;
+  legalPermitStatus: DailyStatusCommonStatus | null;
+  standardPermitStatus: DailyStatusCommonStatus | null;
+  healthPermitStatus: DailyStatusCommonStatus | null;
+  quarantinePermitStatus: DailyStatusCommonStatus | null;
+  otherPermitNotes: string | null;
+  taxPaymentStatus: DailyStatusTaxPaymentStatus | null;
+  customsPaymentStatus: DailyStatusCommonStatus | null;
+  dutiesAmount: number | string | null;
+  taxAmount: number | string | null;
+  customsPaymentDate: string | null;
+  paymentReference: string | null;
+  cashierConfirmationStatus: DailyStatusCommonStatus | null;
+  warehouseChargesStatus: DailyStatusCommonStatus | null;
+  terminalChargesStatus: DailyStatusCommonStatus | null;
+  demurrageStatus: DailyStatusCommonStatus | null;
+  loadingPermitNumber: string | null;
+  loadingPermitDate: string | null;
+  truckPlate: string | null;
+  driverName: string | null;
+  gatePassNumber: string | null;
+  exitGateStatus: DailyStatusCommonStatus | null;
+  releaseStatus: DailyStatusReleaseStatus | null;
+  exitDate: string | null;
+  deliveryDate: string | null;
+  internalNote: string | null;
+  customFields: Record<string, unknown>;
+}>;
 
 export interface Channel {
   id: string;

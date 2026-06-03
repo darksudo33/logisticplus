@@ -32,6 +32,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { EmptyState, resetFiltersAction } from "@/src/components/EmptyState";
+import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
 
 const statusMeta: Record<ChequeStatus, { label: string; color: string; bar: string }> = {
   ACTIVE: { label: "در جریان", color: "text-blue-600 border-blue-200 bg-blue-50", bar: "bg-blue-600" },
@@ -79,6 +80,7 @@ export default function ChequeManagement() {
   const [filterStatus, setFilterStatus] = useState<ChequeStatus | "ALL">("ALL");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingCheque, setEditingCheque] = useState<Cheque | null>(null);
+  const [chequePendingArchive, setChequePendingArchive] = useState<Cheque | null>(null);
 
   const [formData, setFormData] = useState({
     bankName: "",
@@ -428,9 +430,15 @@ export default function ChequeManagement() {
                       <Button variant="ghost" size="icon" className="h-8 w-8 md:h-10 md:w-10 rounded-lg md:rounded-2xl hover:bg-primary/10 hover:text-primary" onClick={() => handleOpenEdit(chq)}>
                          <Edit3 className="w-4 h-4 md:w-5 md:h-5" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 md:h-10 md:w-10 rounded-lg md:rounded-2xl hover:bg-rose-500/10 hover:text-rose-500" onClick={async () => { await saveCheque(`/api/cheques/${chq.id}/archive`, { method: "POST" }); toast.error("چک با موفقیت حذف شد."); }}>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 md:h-10 md:w-10 rounded-lg md:rounded-2xl hover:bg-rose-500/10 hover:text-rose-500"
+                        aria-label={`Delete cheque ${chq.id}`}
+                        onClick={() => setChequePendingArchive(chq)}
+                      >
                          <Trash2 className="w-4 h-4 md:w-5 md:h-5" />
-                      </Button>
+                       </Button>
                     </div>
                   </div>
                 </Card>
@@ -557,6 +565,20 @@ export default function ChequeManagement() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <DeleteConfirmDialog
+        isOpen={Boolean(chequePendingArchive)}
+        onClose={() => setChequePendingArchive(null)}
+        onConfirm={async () => {
+          if (!chequePendingArchive) return;
+          await saveCheque(`/api/cheques/${chequePendingArchive.id}/archive`, { method: "POST" });
+          toast.error("چک با موفقیت حذف شد.");
+        }}
+        title="بایگانی چک"
+        description="این چک از فهرست فعال خارج می‌شود و در بخش بایگانی قابل بازیابی خواهد بود."
+        itemName={chequePendingArchive?.chequeNumber || chequePendingArchive?.bankName}
+        confirmLabel="انتقال به بایگانی"
+        pendingLabel="در حال بایگانی..."
+      />
     </div>
   );
 }

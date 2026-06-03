@@ -41,6 +41,9 @@ import { Customer, ShipmentStep, ShipmentStatus, Task } from "../types";
 import { apiGet } from "@/src/lib/api";
 import { useApiResource } from "@/src/lib/resourceState";
 import { shipmentApi } from "@/src/lib/shipmentApi";
+import { shipmentFormTemplatesApi } from "@/src/lib/shipmentFormTemplatesApi";
+import type { ShipmentTypeOption } from "@/src/lib/shipmentFormTemplatesApi";
+import { useAppDataStore } from "@/src/store/useMockStore";
 
 const StatusBadge = ({ status }: { status: string }) => {
   const styles: Record<string, string> = {
@@ -66,33 +69,141 @@ const StatusBadge = ({ status }: { status: string }) => {
   return <Badge className={`${styles[status] || ""} border-none py-0.5 px-2 text-[10px] font-bold`}>{labels[status] || status}</Badge>;
 };
 
+type ShipmentOperation = "import" | "export" | "transit" | "domestic";
+type ShipmentTransportMethod = "sea" | "lenj" | "air" | "land";
+
+type ShipmentCreateState = {
+  shipmentDirection: ShipmentOperation;
+  transportMethod: ShipmentTransportMethod;
+  shipmentTypeCode: string;
+  trackingNumber: string;
+  customerId: string;
+  customerName: string;
+  origin: string;
+  destination: string;
+  estimatedDelivery: string;
+  goodsSummary: string;
+  assignedManagerId: string;
+  containerCount: string;
+};
+
+const DEFAULT_CREATE_SHIPMENT_TYPE = "IMPORT_SEA_CONTAINER";
+
+const createInitialShipmentState = (): ShipmentCreateState => ({
+  shipmentDirection: "import",
+  transportMethod: "sea",
+  shipmentTypeCode: DEFAULT_CREATE_SHIPMENT_TYPE,
+  trackingNumber: "",
+  customerId: "",
+  customerName: "",
+  origin: "",
+  destination: "",
+  estimatedDelivery: "",
+  goodsSummary: "",
+  assignedManagerId: "",
+  containerCount: "",
+});
+
+const shipmentWizardSteps = [
+  "نوع عملیات",
+  "روش حمل",
+  "نوع محموله",
+  "اطلاعات پایه",
+  "بررسی",
+];
+
+const operationOptions: Array<{ value: ShipmentOperation; label: string; description: string }> = [
+  { value: "import", label: "واردات", description: "ورود کالا به کشور و ادامه تا ترخیص یا تحویل" },
+  { value: "export", label: "صادرات", description: "خروج کالا از کشور و پیگیری حمل و تحویل" },
+  { value: "transit", label: "ترانزیت", description: "عبور کالا از مسیر داخلی یا مرزی" },
+  { value: "domestic", label: "داخلی", description: "حمل و پیگیری داخل کشور" },
+];
+
+const transportMethodOptions: Array<{ value: ShipmentTransportMethod; label: string; description: string; icon: typeof Ship }> = [
+  { value: "sea", label: "دریایی", description: "کانتینری، فله یا جنرال کارگو", icon: Ship },
+  { value: "lenj", label: "لنج", description: "حمل سبک بندری با لنج", icon: Ship },
+  { value: "air", label: "هوایی", description: "بار هوایی و AWB", icon: Activity },
+  { value: "land", label: "زمینی", description: "کامیون، CMR و مرزهای زمینی", icon: Truck },
+];
+
+function shipmentMethodForType(type: ShipmentTypeOption): ShipmentTransportMethod {
+  const code = type.code.toUpperCase();
+  if (code.includes("LENJ")) return "lenj";
+  if (type.transportMode === "air") return "air";
+  if (type.transportMode === "land" || type.transportMode === "rail") return "land";
+  return "sea";
+}
+
+function filterShipmentTypes(
+  shipmentTypes: ShipmentTypeOption[],
+  operation: ShipmentOperation,
+  method: ShipmentTransportMethod
+) {
+  return shipmentTypes.filter((type) => type.direction === operation && shipmentMethodForType(type) === method);
+}
+
+function availableTransportMethods(shipmentTypes: ShipmentTypeOption[], operation: ShipmentOperation) {
+  return transportMethodOptions.filter((option) =>
+    shipmentTypes.some((type) => type.direction === operation && shipmentMethodForType(type) === option.value)
+  );
+}
+
+function isSeaContainerShipment(typeCode: string) {
+  return typeCode.toUpperCase().includes("SEA_CONTAINER");
+}
+
 export default function Shipments() {
   const navigate = useNavigate();
   const shipmentsResource = useApiResource(React.useCallback(() => shipmentApi.list(), []), []);
   const customersResource = useApiResource(React.useCallback(() => apiGet<Customer[]>("/api/customers"), []), []);
   const tasksResource = useApiResource(React.useCallback(() => apiGet<Task[]>("/api/tasks"), []), []);
+  const shipmentTypesResource = useApiResource(React.useCallback(() => shipmentFormTemplatesApi.listTypes(), []), []);
+  const shipmentTemplatesResource = useApiResource(React.useCallback(() => shipmentFormTemplatesApi.list(), []), []);
   const shipments = shipmentsResource.data;
   const customers = customersResource.data;
   const tasks = tasksResource.data;
+  const shipmentTypes = shipmentTypesResource.data;
+  const shipmentTemplates = shipmentTemplatesResource.data;
+  const refreshStoreShipments = useAppDataStore(state => state.refreshShipments);
+  const users = useAppDataStore(state => state.users);
   const [shipmentSteps, setShipmentSteps] = useState<ShipmentStep[]>([]);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
+  const [createStep, setCreateStep] = useState(0);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [shipmentToDelete, setShipmentToDelete] = useState<string | null>(null);
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
   
-  // New Shipment Form State
-  const [newShipment, setNewShipment] = useState({
-    trackingNumber: "",
-    containerNumber: "",
-    customerId: "",
-    customerName: "",
-    origin: "",
-    destination: "",
-    estimatedDelivery: "",
-  });
+  const [newShipment, setNewShipment] = useState<ShipmentCreateState>(() => createInitialShipmentState());
+
+  useEffect(() => {
+    if (!shipmentTypes.length) return;
+    setNewShipment((current) => {
+      const currentType = shipmentTypes.find((type) => type.code === current.shipmentTypeCode);
+      if (
+        currentType &&
+        currentType.direction === current.shipmentDirection &&
+        shipmentMethodForType(currentType) === current.transportMethod
+      ) {
+        return current;
+      }
+
+      const methods = availableTransportMethods(shipmentTypes, current.shipmentDirection);
+      const transportMethod = methods.some((method) => method.value === current.transportMethod)
+        ? current.transportMethod
+        : methods[0]?.value || current.transportMethod;
+      const shipmentTypeCode =
+        filterShipmentTypes(shipmentTypes, current.shipmentDirection, transportMethod)[0]?.code ||
+        current.shipmentTypeCode;
+
+      if (transportMethod === current.transportMethod && shipmentTypeCode === current.shipmentTypeCode) {
+        return current;
+      }
+      return { ...current, transportMethod, shipmentTypeCode };
+    });
+  }, [shipmentTypes]);
 
   useEffect(() => {
     let isMounted = true;
@@ -114,37 +225,80 @@ export default function Shipments() {
     };
   }, [shipments]);
 
-  const handleAddShipment = async () => {
-    const customer = customers.find(c => c.id === newShipment.customerId);
+  const refreshShipmentViews = React.useCallback(async () => {
+    await shipmentsResource.refresh();
     try {
-      await shipmentApi.create({
-      ...newShipment,
-      customerName: customer?.name || "مشتری متفرقه",
-      status: "PENDING",
-      freeTimeDays: 7
-    });
-      await shipmentsResource.refresh();
-      toast.success("محموله ثبت شد.");
+      await refreshStoreShipments();
+    } catch (error) {
+      console.error("Could not refresh shared shipment store.", error);
+    }
+  }, [refreshStoreShipments, shipmentsResource.refresh]);
+
+  const handleCreateDialogOpenChange = (open: boolean) => {
+    setIsAddDialogOpen(open);
+    setCreateStep(0);
+    if (!open) {
+      setNewShipment(createInitialShipmentState());
+    }
+  };
+
+  const handleOperationSelect = (shipmentDirection: ShipmentOperation) => {
+    const methods = availableTransportMethods(shipmentTypes, shipmentDirection);
+    const transportMethod = methods[0]?.value || "sea";
+    const shipmentTypeCode = filterShipmentTypes(shipmentTypes, shipmentDirection, transportMethod)[0]?.code || "";
+    setNewShipment((current) => ({ ...current, shipmentDirection, transportMethod, shipmentTypeCode }));
+  };
+
+  const handleTransportMethodSelect = (transportMethod: ShipmentTransportMethod) => {
+    const shipmentTypeCode = filterShipmentTypes(shipmentTypes, newShipment.shipmentDirection, transportMethod)[0]?.code || "";
+    setNewShipment((current) => ({ ...current, transportMethod, shipmentTypeCode }));
+  };
+
+  const handleShipmentTypeSelect = (shipmentTypeCode: string) => {
+    setNewShipment((current) => ({ ...current, shipmentTypeCode }));
+  };
+
+  const handleCustomerSelect = (customerId: string) => {
+    const customer = customers.find((item) => item.id === customerId);
+    setNewShipment((current) => ({ ...current, customerId, customerName: customer?.name || "" }));
+  };
+
+  const handleAddShipment = async () => {
+    const customer = customers.find((item) => item.id === newShipment.customerId);
+    const selectedType = shipmentTypes.find((type) => type.code === newShipment.shipmentTypeCode);
+    const trackingNumber = newShipment.trackingNumber.trim() || `LP-${Date.now()}`;
+    const containerCount = newShipment.containerCount.trim() ? Number(newShipment.containerCount) : undefined;
+
+    try {
+      const created = await shipmentApi.create({
+        trackingNumber,
+        shipmentTypeCode: newShipment.shipmentTypeCode,
+        shipmentDirection: selectedType?.direction || newShipment.shipmentDirection,
+        transportMode: selectedType?.transportMode || (newShipment.transportMethod === "air" ? "air" : newShipment.transportMethod === "land" ? "land" : "sea"),
+        customerId: newShipment.customerId || undefined,
+        customerName: customer?.name || newShipment.customerName || "مشتری متفرقه",
+        origin: newShipment.origin.trim(),
+        destination: newShipment.destination.trim(),
+        estimatedDelivery: newShipment.estimatedDelivery || undefined,
+        assignedManagerId: newShipment.assignedManagerId || undefined,
+        containerCount: isSeaContainerShipment(newShipment.shipmentTypeCode) ? containerCount : undefined,
+        notes: newShipment.goodsSummary.trim() || undefined,
+        status: "PENDING",
+        freeTimeDays: 7,
+      });
+      await refreshShipmentViews();
+      toast.success("محموله ایجاد شد. اکنون می‌توانید اطلاعات تکمیلی را ثبت کنید.");
+      handleCreateDialogOpenChange(false);
+      navigate(`/shipments/${created.id}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "ثبت محموله ناموفق بود.");
-      return;
     }
-    setIsAddDialogOpen(false);
-    setNewShipment({
-      trackingNumber: "",
-      containerNumber: "",
-      customerId: "",
-      customerName: "",
-      origin: "",
-      destination: "",
-      estimatedDelivery: "",
-    });
   };
 
   const handleArchiveShipment = async (id: string) => {
     try {
       await shipmentApi.archive(id);
-      await shipmentsResource.refresh();
+      await refreshShipmentViews();
       toast.success("محموله به بایگانی منتقل شد.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "بایگانی محموله ناموفق بود.");
@@ -154,7 +308,7 @@ export default function Shipments() {
   const handleShipmentStatus = async (id: string, status: ShipmentStatus) => {
     try {
       await shipmentApi.updateOperationalFields(id, { status });
-      await shipmentsResource.refresh();
+      await refreshShipmentViews();
       toast.success("وضعیت محموله بروزرسانی شد.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "بروزرسانی وضعیت ناموفق بود.");
@@ -223,6 +377,29 @@ export default function Shipments() {
     { value: "DELIVERED", label: "تحویل نهایی" },
   ];
 
+  const selectedShipmentType = shipmentTypes.find((type) => type.code === newShipment.shipmentTypeCode) || null;
+  const selectedShipmentTemplate = shipmentTemplates.find((template) => template.shipmentTypeCode === newShipment.shipmentTypeCode) || null;
+  const createTemplateFields = selectedShipmentTemplate?.sections
+    .flatMap((section) => section.fields)
+    .filter((field) => field.isVisible && (field.showInCreateForm || field.isImportant))
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .slice(0, 8) || [];
+  const createProgress = ((createStep + 1) / shipmentWizardSteps.length) * 100;
+  const visibleTransportMethods = availableTransportMethods(shipmentTypes, newShipment.shipmentDirection);
+  const visibleShipmentTypes = filterShipmentTypes(shipmentTypes, newShipment.shipmentDirection, newShipment.transportMethod);
+  const activeOperation = operationOptions.find((option) => option.value === newShipment.shipmentDirection);
+  const activeTransportMethod = transportMethodOptions.find((option) => option.value === newShipment.transportMethod);
+  const selectedCustomer = customers.find((customer) => customer.id === newShipment.customerId);
+  const activeUsers = users.filter((user) => user.status !== "suspended");
+  const basicInfoComplete = Boolean(newShipment.customerId && newShipment.origin.trim() && newShipment.destination.trim());
+  const currentStepCanContinue =
+    createStep === 0 ||
+    (createStep === 1 && visibleTransportMethods.length > 0) ||
+    (createStep === 2 && Boolean(newShipment.shipmentTypeCode)) ||
+    (createStep === 3 && basicInfoComplete) ||
+    createStep === 4;
+  const showContainerCount = isSeaContainerShipment(newShipment.shipmentTypeCode);
+
   return (
     <div className="app-page space-y-5 font-sans">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-xl border border-border bg-card p-4 shadow-sm">
@@ -231,94 +408,340 @@ export default function Shipments() {
           <p className="text-[12px] text-muted-foreground">لیست کامل و وضعیت جزئی بارهای در جریان.</p>
         </div>
         
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+        <Dialog open={isAddDialogOpen} onOpenChange={handleCreateDialogOpenChange}>
           <DialogTrigger
             render={(triggerProps) => (
-              <Button {...triggerProps} className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 h-10 w-full sm:w-auto text-xs font-bold px-4 rounded-xl">
+              <Button {...triggerProps} data-testid="open-shipment-dialog" className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 h-10 w-full sm:w-auto text-xs font-bold px-4 rounded-xl">
                 <Plus className="w-3.5 h-3.5" />
                 ثبت محموله جدید
               </Button>
             )}
           />
-          <DialogContent className="bg-card border-border text-foreground text-right" dir="rtl">
+          <DialogContent className="max-h-[calc(100vh-2rem)] overflow-hidden bg-card border-border text-foreground text-right sm:max-w-3xl" dir="rtl">
             <DialogHeader>
-              <DialogTitle className="text-lg font-bold">افزودن محموله جدید</DialogTitle>
+              <DialogTitle className="text-lg font-bold">ثبت محموله جدید</DialogTitle>
               <DialogDescription className="text-muted-foreground text-xs text-right">
-                جزئیات محموله جدید را برای رهگیری در سیستم وارد کنید.
+                ابتدا نوع عملیات و روش حمل را انتخاب کنید؛ جزئیات تخصصی بعد از ایجاد محموله در صفحه جزئیات تکمیل می‌شود.
               </DialogDescription>
             </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="tracking" className="text-xs text-muted-foreground">شماره رهگیری (B/L)</Label>
-                  <Input 
-                    id="tracking" 
-                    placeholder="شماره رهگیری را وارد کنید" 
-                    className="bg-muted border-border text-xs h-9 ltr" 
-                    value={newShipment.trackingNumber}
-                    onChange={e => setNewShipment({...newShipment, trackingNumber: e.target.value})}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="container" className="text-xs text-muted-foreground">شماره کانتینر</Label>
-                  <Input 
-                    id="container" 
-                    placeholder="شماره کانتینر را وارد کنید" 
-                    className="bg-muted border-border text-xs h-9 ltr" 
-                    value={newShipment.containerNumber}
-                    onChange={e => setNewShipment({...newShipment, containerNumber: e.target.value})}
-                  />
-                </div>
+
+            <div data-testid="shipment-wizard-step" className="min-h-0 space-y-4">
+              <div className="grid grid-cols-5 gap-1.5 sm:gap-2">
+                {shipmentWizardSteps.map((step, index) => (
+                  <div
+                    key={step}
+                    className={cn(
+                      "min-w-0 rounded-md border px-2 py-2 text-center text-[10px] font-black transition-colors",
+                      index === createStep
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : index < createStep
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : "border-border bg-muted/60 text-muted-foreground"
+                    )}
+                  >
+                    <span className="block text-[11px] sm:hidden">{index + 1}</span>
+                    <span className="hidden truncate sm:block">{step}</span>
+                  </div>
+                ))}
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="customer" className="text-xs text-muted-foreground">مشتری</Label>
-                <select 
-                  id="customer"
-                  className="w-full bg-muted border-border text-xs h-9 rounded-md px-3 outline-none focus:ring-1 focus:ring-primary/50"
-                  value={newShipment.customerId}
-                  onChange={e => setNewShipment({...newShipment, customerId: e.target.value})}
-                >
-                  <option value="">انتخاب مشتری...</option>
-                  {customers.filter((customer) => !customer.isArchived).map(c => (
-                    <option key={c.id} value={c.id}>{c.name} ({c.company})</option>
-                  ))}
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="origin" className="text-xs text-muted-foreground">مبداء</Label>
-                  <Input 
-                    id="origin" 
-                    className="bg-muted border-border text-xs h-9" 
-                    value={newShipment.origin}
-                    onChange={e => setNewShipment({...newShipment, origin: e.target.value})}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="destination" className="text-xs text-muted-foreground">مقصد (بندر)</Label>
-                  <Input 
-                    id="destination" 
-                    className="bg-muted border-border text-xs h-9" 
-                    value={newShipment.destination}
-                    onChange={e => setNewShipment({...newShipment, destination: e.target.value})}
-                  />
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="eta" className="text-xs text-muted-foreground">تاریخ تحویل تخمینی (ETA)</Label>
-                <Input 
-                  id="eta" 
-                  placeholder="۱۴۰۳/۰۴/۱۵"
-                  className="bg-muted border-border text-xs h-9" 
-                  value={newShipment.estimatedDelivery}
-                  onChange={e => setNewShipment({...newShipment, estimatedDelivery: e.target.value})}
-                />
+              <Progress value={createProgress} className="gap-1" />
+
+              <div className="max-h-[min(58vh,520px)] overflow-y-auto pr-1">
+                {createStep === 0 ? (
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-sm font-black text-foreground">نوع عملیات</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">مسیر کلی پرونده را انتخاب کنید تا روش‌های حمل مرتبط نمایش داده شود.</p>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {operationOptions.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          data-testid={"shipment-operation-" + option.value}
+                          aria-pressed={newShipment.shipmentDirection === option.value}
+                          onClick={() => handleOperationSelect(option.value)}
+                          className={cn(
+                            "rounded-lg border p-3 text-right transition-colors",
+                            newShipment.shipmentDirection === option.value
+                              ? "border-primary bg-primary/10 ring-1 ring-primary/40"
+                              : "border-border bg-muted/40 hover:bg-muted"
+                          )}
+                        >
+                          <span className="block text-sm font-black text-foreground">{option.label}</span>
+                          <span className="mt-1 block text-[11px] leading-5 text-muted-foreground">{option.description}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {createStep === 1 ? (
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-sm font-black text-foreground">روش حمل</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">برای {activeOperation?.label || "این عملیات"} روش حمل را انتخاب کنید.</p>
+                    </div>
+                    {shipmentTypesResource.isLoading ? (
+                      <div className="rounded-lg border border-border bg-muted/40 p-4 text-xs font-bold text-muted-foreground">در حال دریافت روش‌های حمل...</div>
+                    ) : visibleTransportMethods.length ? (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {visibleTransportMethods.map((option) => {
+                          const Icon = option.icon;
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              data-testid={"shipment-method-" + option.value}
+                              aria-pressed={newShipment.transportMethod === option.value}
+                              onClick={() => handleTransportMethodSelect(option.value)}
+                              className={cn(
+                                "flex items-start gap-3 rounded-lg border p-3 text-right transition-colors",
+                                newShipment.transportMethod === option.value
+                                  ? "border-primary bg-primary/10 ring-1 ring-primary/40"
+                                  : "border-border bg-muted/40 hover:bg-muted"
+                              )}
+                            >
+                              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-background text-primary">
+                                <Icon className="h-4 w-4" />
+                              </span>
+                              <span className="min-w-0">
+                                <span className="block text-sm font-black text-foreground">{option.label}</span>
+                                <span className="mt-1 block text-[11px] leading-5 text-muted-foreground">{option.description}</span>
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div data-testid="shipment-method-empty" className="rounded-lg border border-dashed border-border bg-muted/30 p-4 text-xs font-bold leading-5 text-muted-foreground">
+                        برای این نوع عملیات هنوز قالب فعال تعریف نشده است. واردات و صادرات آماده استفاده هستند.
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+
+                {createStep === 2 ? (
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-sm font-black text-foreground">نوع محموله</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">قالب اطلاعاتی محموله بر اساس انتخاب این مرحله فعال می‌شود.</p>
+                    </div>
+                    <div className="grid gap-2">
+                      {visibleShipmentTypes.map((type) => (
+                        <button
+                          key={type.code}
+                          type="button"
+                          data-testid={"shipment-type-" + type.code}
+                          aria-pressed={newShipment.shipmentTypeCode === type.code}
+                          onClick={() => handleShipmentTypeSelect(type.code)}
+                          className={cn(
+                            "rounded-lg border p-3 text-right transition-colors",
+                            newShipment.shipmentTypeCode === type.code
+                              ? "border-primary bg-primary/10 ring-1 ring-primary/40"
+                              : "border-border bg-muted/40 hover:bg-muted"
+                          )}
+                        >
+                          <span className="block text-sm font-black text-foreground">{type.labelFa}</span>
+                          {type.description ? <span className="mt-1 block text-[11px] leading-5 text-muted-foreground">{type.description}</span> : null}
+                        </button>
+                      ))}
+                    </div>
+                    {selectedShipmentType && createTemplateFields.length ? (
+                      <div className="rounded-lg border border-border bg-muted/50 p-3">
+                        <div className="mb-2 flex items-center gap-2">
+                          <ListChecks className="h-4 w-4 text-primary" />
+                          <p className="text-xs font-black text-foreground">فیلدهای مهمی که در جزئیات فعال می‌شود</p>
+                        </div>
+                        <div className="grid gap-1.5 sm:grid-cols-2">
+                          {createTemplateFields.map((field) => (
+                            <div key={field.id} className="flex min-w-0 items-center justify-between gap-2 rounded-md bg-background px-2 py-1.5">
+                              <span className="truncate text-[11px] font-bold text-foreground">{field.labelFa}</span>
+                              {field.isRequired ? <Badge variant="outline" className="shrink-0 text-[10px] font-black">اجباری</Badge> : null}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {createStep === 3 ? (
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-sm font-black text-foreground">اطلاعات پایه محموله</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">فقط اطلاعات لازم برای ایجاد پرونده را وارد کنید. شماره رهگیری اختیاری است و در صورت خالی بودن خودکار ساخته می‌شود.</p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5 sm:col-span-2">
+                        <Label htmlFor="customer" className="text-xs text-muted-foreground">مشتری</Label>
+                        <select
+                          id="customer"
+                          data-testid="shipment-create-customer"
+                          className="h-9 w-full rounded-md border border-border bg-muted px-3 text-xs outline-none focus:ring-1 focus:ring-primary/50"
+                          value={newShipment.customerId}
+                          onChange={(event) => handleCustomerSelect(event.target.value)}
+                        >
+                          <option value="">انتخاب مشتری...</option>
+                          {customers.filter((customer) => !customer.isArchived).map((customer) => (
+                            <option key={customer.id} value={customer.id}>{customer.name} ({customer.company})</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="origin" className="text-xs text-muted-foreground">مبدا</Label>
+                        <Input
+                          id="origin"
+                          data-testid="shipment-create-origin"
+                          className="h-9 border-border bg-muted text-xs"
+                          value={newShipment.origin}
+                          onChange={(event) => setNewShipment({ ...newShipment, origin: event.target.value })}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="destination" className="text-xs text-muted-foreground">مقصد</Label>
+                        <Input
+                          id="destination"
+                          data-testid="shipment-create-destination"
+                          className="h-9 border-border bg-muted text-xs"
+                          value={newShipment.destination}
+                          onChange={(event) => setNewShipment({ ...newShipment, destination: event.target.value })}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="tracking" className="text-xs text-muted-foreground">شماره رهگیری / مرجع</Label>
+                        <Input
+                          id="tracking"
+                          data-testid="shipment-create-tracking"
+                          placeholder="اختیاری"
+                          className="h-9 border-border bg-muted text-xs ltr"
+                          value={newShipment.trackingNumber}
+                          onChange={(event) => setNewShipment({ ...newShipment, trackingNumber: event.target.value })}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="eta" className="text-xs text-muted-foreground">تاریخ تقریبی تحویل</Label>
+                        <Input
+                          id="eta"
+                          type="date"
+                          data-testid="shipment-create-date"
+                          className="h-9 border-border bg-muted text-xs"
+                          value={newShipment.estimatedDelivery}
+                          onChange={(event) => setNewShipment({ ...newShipment, estimatedDelivery: event.target.value })}
+                        />
+                      </div>
+                      {showContainerCount ? (
+                        <div className="space-y-1.5">
+                          <Label htmlFor="container-count" className="text-xs text-muted-foreground">تعداد کانتینر</Label>
+                          <Input
+                            id="container-count"
+                            type="number"
+                            min="0"
+                            data-testid="shipment-create-container-count"
+                            className="h-9 border-border bg-muted text-xs"
+                            value={newShipment.containerCount}
+                            onChange={(event) => setNewShipment({ ...newShipment, containerCount: event.target.value })}
+                          />
+                        </div>
+                      ) : null}
+                      <div className="space-y-1.5">
+                        <Label htmlFor="assigned-manager" className="text-xs text-muted-foreground">مسئول پرونده</Label>
+                        <select
+                          id="assigned-manager"
+                          data-testid="shipment-create-assigned-manager"
+                          className="h-9 w-full rounded-md border border-border bg-muted px-3 text-xs outline-none focus:ring-1 focus:ring-primary/50"
+                          value={newShipment.assignedManagerId}
+                          onChange={(event) => setNewShipment({ ...newShipment, assignedManagerId: event.target.value })}
+                        >
+                          <option value="">بدون مسئول مشخص</option>
+                          {activeUsers.map((user) => (
+                            <option key={user.id} value={user.id}>{user.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1.5 sm:col-span-2">
+                        <Label htmlFor="goods-summary" className="text-xs text-muted-foreground">خلاصه کالا / یادداشت اولیه</Label>
+                        <textarea
+                          id="goods-summary"
+                          data-testid="shipment-create-goods-summary"
+                          rows={3}
+                          className="w-full resize-none rounded-md border border-border bg-muted px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-primary/50"
+                          value={newShipment.goodsSummary}
+                          onChange={(event) => setNewShipment({ ...newShipment, goodsSummary: event.target.value })}
+                        />
+                      </div>
+                    </div>
+                    {!basicInfoComplete ? (
+                      <p className="text-[11px] font-bold text-amber-600">برای ادامه، مشتری، مبدا و مقصد را وارد کنید.</p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {createStep === 4 ? (
+                  <div data-testid="shipment-wizard-review" className="space-y-3">
+                    <div>
+                      <p className="text-sm font-black text-foreground">بررسی و ایجاد محموله</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">بعد از ایجاد، صفحه جزئیات باز می‌شود تا اطلاعات تخصصی و قالب کامل را تکمیل کنید.</p>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {[
+                        ["نوع عملیات", activeOperation?.label],
+                        ["روش حمل", activeTransportMethod?.label],
+                        ["نوع محموله", selectedShipmentType?.labelFa],
+                        ["مشتری", selectedCustomer?.name],
+                        ["مبدا", newShipment.origin],
+                        ["مقصد", newShipment.destination],
+                        ["شماره رهگیری", newShipment.trackingNumber || "ایجاد خودکار"],
+                        ["تاریخ تحویل", newShipment.estimatedDelivery || "ثبت نشده"],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-md border border-border bg-muted/40 p-3">
+                          <p className="text-[10px] font-bold text-muted-foreground">{label}</p>
+                          <p className="mt-1 min-h-5 break-words text-xs font-black text-foreground">{value || "-"}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
-            <DialogFooter>
-              <Button onClick={() => void handleAddShipment()} className="w-full bg-primary text-primary-foreground font-bold h-10">
-                ایجاد محموله
+
+            <DialogFooter className="-mx-5 -mb-5 flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+              <Button
+                type="button"
+                variant="outline"
+                data-testid="shipment-wizard-back"
+                className="h-10 w-full sm:w-auto"
+                onClick={() => {
+                  if (createStep === 0) {
+                    handleCreateDialogOpenChange(false);
+                    return;
+                  }
+                  setCreateStep((step) => Math.max(step - 1, 0));
+                }}
+              >
+                {createStep === 0 ? "انصراف" : "مرحله قبل"}
               </Button>
+              {createStep < shipmentWizardSteps.length - 1 ? (
+                <Button
+                  type="button"
+                  data-testid="shipment-wizard-next"
+                  disabled={!currentStepCanContinue}
+                  className="h-10 w-full bg-primary text-primary-foreground font-bold sm:w-auto"
+                  onClick={() => setCreateStep((step) => Math.min(step + 1, shipmentWizardSteps.length - 1))}
+                >
+                  مرحله بعد
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  data-testid="submit-shipment"
+                  disabled={!currentStepCanContinue || !selectedShipmentType}
+                  onClick={() => void handleAddShipment()}
+                  className="h-10 w-full bg-primary text-primary-foreground font-bold sm:w-auto"
+                >
+                  ایجاد محموله
+                </Button>
+              )}
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -520,7 +943,7 @@ export default function Shipments() {
             title={shipments.length === 0 ? "هنوز محموله‌ای ثبت نشده" : "محموله‌ای با این فیلترها پیدا نشد"}
             description={shipments.length === 0 ? "برای شروع عملیات، ابتدا مشتری را ثبت کنید و سپس اولین محموله را بسازید." : "جستجو یا وضعیت انتخاب‌شده را تغییر دهید تا محموله‌های موجود نمایش داده شوند."}
             primaryAction={shipments.length === 0 ? { label: "ثبت مشتری", to: "/customers", icon: UserPlus } : resetFiltersAction(resetShipmentFilters)}
-            secondaryAction={shipments.length === 0 ? { label: "ثبت محموله", onClick: () => setIsAddDialogOpen(true), icon: Plus, variant: "outline" } : undefined}
+            secondaryAction={shipments.length === 0 ? { label: "ثبت محموله", onClick: () => handleCreateDialogOpenChange(true), icon: Plus, variant: "outline" } : undefined}
           />
         )}
       </div>
@@ -674,7 +1097,7 @@ export default function Shipments() {
                       title={shipments.length === 0 ? "هنوز محموله‌ای ثبت نشده" : "محموله‌ای با این فیلترها پیدا نشد"}
                       description={shipments.length === 0 ? "برای شروع عملیات، ابتدا مشتری را ثبت کنید و سپس اولین محموله را بسازید." : "جستجو یا وضعیت انتخاب‌شده را تغییر دهید تا محموله‌های موجود نمایش داده شوند."}
                       primaryAction={shipments.length === 0 ? { label: "ثبت مشتری", to: "/customers", icon: UserPlus } : resetFiltersAction(resetShipmentFilters)}
-                      secondaryAction={shipments.length === 0 ? { label: "ثبت محموله", onClick: () => setIsAddDialogOpen(true), icon: Plus, variant: "outline" } : undefined}
+                      secondaryAction={shipments.length === 0 ? { label: "ثبت محموله", onClick: () => handleCreateDialogOpenChange(true), icon: Plus, variant: "outline" } : undefined}
                       compact
                     />
                   </EmptyTableRow>

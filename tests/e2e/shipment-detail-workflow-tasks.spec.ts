@@ -30,6 +30,7 @@ async function cleanupShipmentWorkflow(client: DbClient) {
     [shipmentId]
   );
   await client.query("DELETE FROM shipment_workflow_instances WHERE shipment_id = $1", [shipmentId]);
+  await client.query("DELETE FROM chat_threads WHERE shipment_id = $1", [shipmentId]);
   await client.query("DELETE FROM shipment_status_events WHERE shipment_id = $1 AND public_label LIKE 'E2E shipment detail public%'", [shipmentId]);
   await client.query(
     `UPDATE shipments
@@ -91,6 +92,42 @@ async function saveLegacyBootstrapRecords(owner: Awaited<ReturnType<typeof login
     data: { records: bootstrapPayload.records || {} },
   });
   expect(saveResponse.status(), await saveResponse.text()).toBeLessThan(400);
+}
+
+async function insertShipmentChatHistory({
+  organizationId,
+  threadId,
+  senderId,
+  senderName,
+  prefix,
+  count,
+}: {
+  organizationId: string;
+  threadId: string;
+  senderId: string;
+  senderName: string;
+  prefix: string;
+  count: number;
+}) {
+  for (let index = 0; index < count; index += 1) {
+    await client.query(
+      `INSERT INTO chat_messages (
+         id, organization_id, thread_id, sender_id, sender_name, content, body, body_format,
+         client_message_id, status, legacy_data, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $6, 'plain_text', $7, 'sent', '{}'::jsonb, NOW() - ($8::int * INTERVAL '1 minute'))`,
+      [
+        `e2e-shipment-chat-history-${Date.now()}-${index}-${Math.random().toString(36).slice(2)}`,
+        organizationId,
+        threadId,
+        senderId,
+        senderName,
+        `${prefix} ${index} ${"history ".repeat(10)}`,
+        `${prefix}-${index}`,
+        count + 60 - index,
+      ]
+    );
+  }
 }
 
 test.describe.serial("shipment detail workflow and task controls", () => {
@@ -474,6 +511,99 @@ test.describe.serial("shipment detail workflow and task controls", () => {
     }).toEqual({ current: "002", first: "completed", second: "active" });
 
     expect(serverErrors).toEqual([]);
+  });
+
+  test("shipment detail opens the canonical shipment chat and links to full chat", async ({ page }) => {
+    const owner = await loginApi();
+    const ownerAuth = await readOk<any>(await owner.get("/api/auth/me"));
+    const thread = await readOk<{ id: string }>(await owner.get(`/api/shipments/${shipmentId}/chat-thread`));
+    await insertShipmentChatHistory({
+      organizationId: ownerAuth.user.organizationId,
+      threadId: thread.id,
+      senderId: ownerAuth.user.id,
+      senderName: ownerAuth.user.name || ownerAuth.user.email,
+      prefix: "shipment compact message",
+      count: 45,
+    });
+    await disposeContexts(owner);
+
+    const messageRequestUrls: string[] = [];
+    page.on("request", (request) => {
+      const url = request.url();
+      if (url.includes(`/api/chat/threads/${encodeURIComponent(thread.id)}/messages`)) {
+        messageRequestUrls.push(url);
+      }
+    });
+
+    await loginViaUi(page);
+    await page.goto(`/shipments/${shipmentId}`);
+
+    await expect(page.getByTestId("shipment-chat-panel")).toBeVisible();
+    await expect(page.getByTestId("shipment-documents-panel")).toBeVisible();
+    const panelOrder = await page.evaluate(() => {
+      const chat = document.querySelector('[data-testid="shipment-chat-panel"]') as HTMLElement;
+      const documents = document.querySelector('[data-testid="shipment-documents-panel"]') as HTMLElement;
+      return {
+        chatTop: chat.getBoundingClientRect().top,
+        documentsTop: documents.getBoundingClientRect().top,
+      };
+    });
+    expect(panelOrder.chatTop).toBeLessThan(panelOrder.documentsTop);
+    await expect(page.getByTestId("shipment-chat-message-bubble")).toHaveCount(20);
+    await expect(page.getByTestId("shipment-chat-message-bubble").filter({ hasText: "shipment compact message 44" })).toBeVisible();
+    await expect(page.getByTestId("shipment-chat-message-bubble").filter({ hasText: "shipment compact message 0" })).toHaveCount(0);
+
+    const beforeHistory = await page.evaluate(() => {
+      const list = document.querySelector('[data-testid="shipment-chat-message-list"]') as HTMLElement;
+      const previousHeight = list.scrollHeight;
+      list.scrollTop = 0;
+      list.dispatchEvent(new Event("scroll"));
+      return { previousHeight };
+    });
+    await expect(page.getByTestId("shipment-chat-message-bubble")).toHaveCount(40);
+    await expect(page.getByTestId("shipment-chat-message-bubble").filter({ hasText: "shipment compact message 24" })).toBeVisible();
+    const afterHistory = await page.evaluate(() => {
+      const list = document.querySelector('[data-testid="shipment-chat-message-list"]') as HTMLElement;
+      return { scrollHeight: list.scrollHeight, scrollTop: list.scrollTop };
+    });
+    expect(afterHistory.scrollTop).toBeGreaterThan(0);
+    expect(Math.abs(afterHistory.scrollTop - (afterHistory.scrollHeight - beforeHistory.previousHeight))).toBeLessThanOrEqual(24);
+
+    const initialRequest = messageRequestUrls.find((url) => !new URL(url).searchParams.has("before"));
+    const historyRequest = messageRequestUrls.find((url) => new URL(url).searchParams.has("before"));
+    expect(initialRequest).toBeTruthy();
+    expect(historyRequest).toBeTruthy();
+    expect(new URL(initialRequest as string).searchParams.get("limit")).toBe("20");
+    expect(new URL(historyRequest as string).searchParams.get("limit")).toBe("20");
+    await expect(page.getByText("گفتگوی محموله")).toBeVisible();
+
+    const body = `shipment detail chat ${Date.now()}`;
+    await page.getByTestId("shipment-chat-message-input").fill(body);
+    await page.getByTestId("shipment-chat-send-button").click();
+    await expect(page.getByTestId("shipment-chat-message-bubble").filter({ hasText: body })).toBeVisible();
+    await expect.poll(async () => page.evaluate(() => {
+      const list = document.querySelector('[data-testid="shipment-chat-message-list"]') as HTMLElement;
+      return Math.round(list.scrollHeight - list.scrollTop - list.clientHeight);
+    })).toBeLessThanOrEqual(8);
+
+    const threadRow = await client.query(
+      `SELECT id
+       FROM chat_threads
+       WHERE shipment_id = $1
+         AND type = 'SHIPMENT'
+         AND archived_at IS NULL`,
+      [shipmentId]
+    );
+    expect(threadRow.rows).toHaveLength(1);
+    const threadId = threadRow.rows[0].id;
+    const messages = await client.query(
+      "SELECT body FROM chat_messages WHERE thread_id = $1 AND status = 'sent'",
+      [threadId]
+    );
+    expect(messages.rows.map((row) => row.body)).toContain(body);
+
+    await page.getByTestId("shipment-chat-full-link").click();
+    await expect(page).toHaveURL(new RegExp(`/chat\\?threadId=${threadId}$`));
   });
 
   test("shipment detail task status and customer access buttons work from the UI", async ({ page }) => {

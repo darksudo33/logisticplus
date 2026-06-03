@@ -34,6 +34,7 @@ export default function CustomerDetail() {
   const navigate = useNavigate();
   const customers = useMockStore(state => state.customers);
   const shipments = useMockStore(state => state.shipments);
+  const currentUser = useMockStore(state => state.currentUser);
   const [remoteShipments, setRemoteShipments] = React.useState<any[]>([]);
 
   React.useEffect(() => {
@@ -74,6 +75,7 @@ export default function CustomerDetail() {
   }
 
   const activeShipments = customerShipments.filter(s => s.status !== "DELIVERED" && s.status !== "CLOSED" && !s.isArchived);
+  const canViewPrivateDetails = currentUser?.role === "CEO" && customer.canViewPrivateDetails !== false;
 
   return (
     <div className="app-page space-y-6 text-foreground">
@@ -94,7 +96,7 @@ export default function CustomerDetail() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Customer Information Card */}
-        <Card className="bg-card border-border rounded-2xl shadow-none">
+        {canViewPrivateDetails ? <Card className="bg-card border-border rounded-2xl shadow-none">
           <CardHeader>
             <CardTitle className="text-sm font-bold text-foreground">اطلاعات تماس و آدرس</CardTitle>
           </CardHeader>
@@ -129,6 +131,15 @@ export default function CustomerDetail() {
                 </div>
               </div>
             ) : null}
+            {customer.referrer ? (
+              <div className="flex items-start gap-3 p-3 bg-muted/40 rounded-xl">
+                <StickyNote className="w-4 h-4 text-primary mt-1" />
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-muted-foreground font-bold uppercase">معرف</span>
+                  <span className="text-xs text-foreground leading-relaxed">{customer.referrer}</span>
+                </div>
+              </div>
+            ) : null}
             <div className="flex items-center gap-3 p-3 bg-muted/40 rounded-xl">
               <Calendar className="w-4 h-4 text-primary" />
               <div className="flex flex-col">
@@ -137,10 +148,10 @@ export default function CustomerDetail() {
               </div>
             </div>
           </CardContent>
-        </Card>
+        </Card> : null}
 
         {/* Statistics Summary */}
-        <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className={cn(canViewPrivateDetails ? "lg:col-span-2" : "lg:col-span-3", "grid grid-cols-1 md:grid-cols-3 gap-4")}>
           <Card className="bg-card border-border rounded-2xl shadow-none p-5 flex flex-col items-center justify-center text-center">
              <div className="w-12 h-12 bg-blue-500/10 rounded-2xl flex items-center justify-center mb-3">
                <Package className="w-6 h-6 text-blue-500" />

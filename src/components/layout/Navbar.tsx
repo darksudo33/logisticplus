@@ -7,8 +7,9 @@ import React, { useState, useEffect } from "react";
 import { format } from "date-fns-jalali";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { LayoutDashboard, Ship, Users, CheckSquare, MessageSquare, ChevronRight, ChevronLeft, LogOut, Search, Bell, FileText, History, Settings as SettingsIcon, Menu, ShieldCheck, CreditCard, Archive, Calculator, X, Sun, Moon, IdCard } from "lucide-react";
+import { LayoutDashboard, Ship, Users, CheckSquare, MessageSquare, ChevronRight, ChevronLeft, LogOut, Search, Bell, FileText, History, Settings as SettingsIcon, Menu, ShieldCheck, CreditCard, Archive, Calculator, X, Sun, Moon, IdCard, ClipboardList } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { QUOTATIONS_UI_ENABLED } from "@/src/config/features";
 import { useMockStore } from "../../store/useMockStore";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -34,16 +35,26 @@ const sidebarItems = [
   { icon: Users, label: "مراجعات حضوری", path: "/compliance-meetings" },
   { icon: CreditCard, label: "مدیریت چک‌ها", path: "/cheques" },
   { icon: IdCard, label: "کارت‌های بازرگانی", path: "/commercial-cards" },
+  { icon: ClipboardList, label: "وضعیت روزانه", path: "/daily-status" },
   { icon: Ship, label: "محموله‌ها", path: "/shipments" },
-  { icon: Calculator, label: "مدیریت کوتاژ", path: "/quotations" },
+  { icon: SettingsIcon, label: "فرم‌های نوع محموله", path: "/admin/shipment-form-templates", permission: "shipment_forms.manage" },
+  ...(QUOTATIONS_UI_ENABLED ? [{ icon: Calculator, label: "مدیریت کوتاژ", path: "/quotations" }] : []),
   { icon: Users, label: "مشتریان", path: "/customers" },
   { icon: Archive, label: "بایگانی", path: "/archive" },
   { icon: ShieldCheck, label: "مدیریت کاربران", path: "/management", ceoOnly: true },
   { icon: CheckSquare, label: "وظایف", path: "/tasks" },
   { icon: FileText, label: "اسناد", path: "/documents" },
   { icon: History, label: "تغییرات", path: "/changelog" },
-  { icon: MessageSquare, label: "چت", path: "/chat" },
+  { icon: MessageSquare, label: "چت", path: "/chat", permission: "chat.use" },
 ];
+
+function canShowSidebarItem(item: (typeof sidebarItems)[number], currentUser: any) {
+  if ((item as any).platformOnly) return false;
+  if ((item as any).ceoOnly && currentUser?.role !== "CEO") return false;
+  const permission = (item as any).permission;
+  if (!permission) return true;
+  return Array.isArray(currentUser?.permissions) && currentUser.permissions.includes(permission);
+}
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
@@ -53,11 +64,7 @@ export function Sidebar() {
   const setCurrentUser = useMockStore(state => state.setCurrentUser);
   const { isPlatformAdmin } = useCurrentUserPermissions();
 
-  const menuItems = sidebarItems.filter(item => {
-    if ((item as any).platformOnly) return false;
-    if ((item as any).ceoOnly && currentUser?.role !== "CEO") return false;
-    return true;
-  });
+  const menuItems = sidebarItems.filter(item => canShowSidebarItem(item, currentUser));
 
   const handleLogout = () => {
     fetch("/api/auth/logout", { method: "POST" }).catch((error) => {
@@ -199,11 +206,7 @@ export function TopBar() {
     if (link) navigate(link);
   };
 
-  const menuItems = sidebarItems.filter(item => {
-    if ((item as any).platformOnly) return false;
-    if ((item as any).ceoOnly && currentUser?.role !== "CEO") return false;
-    return true;
-  });
+  const menuItems = sidebarItems.filter(item => canShowSidebarItem(item, currentUser));
 
   const [currentTime, setCurrentTime] = useState(new Date());
 

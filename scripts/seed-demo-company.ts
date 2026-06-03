@@ -83,6 +83,7 @@ const permissionKeys = [
   "shipments.create",
   "shipments.update",
   "shipments.archive",
+  "shipment_forms.manage",
   "shipment_steps.update",
   "customers.view",
   "customers.create",

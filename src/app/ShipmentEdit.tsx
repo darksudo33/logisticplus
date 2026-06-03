@@ -15,16 +15,34 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { shipmentApi } from "@/src/lib/shipmentApi";
+import { shipmentFormTemplatesApi, type ShipmentTypeOption } from "@/src/lib/shipmentFormTemplatesApi";
 import { Shipment, ShipmentStatus } from "@/src/types";
 import { toast } from "sonner";
+
+type ShipmentEditFormData = {
+  shipmentTypeCode: string;
+  shipmentDirection: NonNullable<Shipment["shipmentDirection"]>;
+  transportMode: Exclude<Shipment["transportMode"], undefined>;
+  trackingNumber: string;
+  containerNumber: string;
+  origin: string;
+  destination: string;
+  status: ShipmentStatus;
+  estimatedDelivery: string;
+  freeTimeDays: number;
+};
 
 export function ShipmentEdit() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [shipment, setShipment] = useState<Shipment | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [shipmentTypes, setShipmentTypes] = useState<ShipmentTypeOption[]>([]);
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<ShipmentEditFormData>({
+    shipmentTypeCode: "IMPORT_SEA_CONTAINER",
+    shipmentDirection: "import",
+    transportMode: "sea",
     trackingNumber: "",
     containerNumber: "",
     origin: "",
@@ -43,6 +61,9 @@ export function ShipmentEdit() {
         if (!isMounted) return;
         setShipment(loaded);
       setFormData({
+          shipmentTypeCode: loaded.shipmentTypeCode || "IMPORT_SEA_CONTAINER",
+          shipmentDirection: loaded.shipmentDirection || "import",
+          transportMode: loaded.transportMode || "sea",
           trackingNumber: loaded.trackingNumber,
           containerNumber: loaded.containerNumber,
           origin: loaded.origin,
@@ -63,6 +84,20 @@ export function ShipmentEdit() {
     };
   }, [id]);
 
+  useEffect(() => {
+    let isMounted = true;
+    shipmentFormTemplatesApi.listTypes()
+      .then((loaded) => {
+        if (isMounted) setShipmentTypes(loaded);
+      })
+      .catch((error) => {
+        console.error("Shipment types failed:", error);
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   if (isLoading) {
     return <div className="app-page text-sm text-muted-foreground">در حال بارگذاری...</div>;
   }
@@ -80,8 +115,13 @@ export function ShipmentEdit() {
   }
 
   const saveShipment = async () => {
+    const selectedType = shipmentTypes.find((type) => type.code === formData.shipmentTypeCode);
     try {
-      const updated = await shipmentApi.updateOperationalFields(shipment.id, formData);
+      const updated = await shipmentApi.updateOperationalFields(shipment.id, {
+        ...formData,
+        shipmentDirection: selectedType?.direction || formData.shipmentDirection,
+        transportMode: selectedType?.transportMode || formData.transportMode,
+      });
       setShipment(updated);
       toast.success("محموله بروزرسانی شد.");
       navigate(`/shipments/${shipment.id}`);
@@ -105,6 +145,7 @@ export function ShipmentEdit() {
     { value: "DELIVERED", label: "تحویل داده شده" },
     { value: "CLOSED", label: "بسته شده" },
   ];
+  const selectedType = shipmentTypes.find((type) => type.code === formData.shipmentTypeCode) || null;
 
   return (
     <div className="app-page space-y-6 text-foreground" dir="rtl">
@@ -240,10 +281,35 @@ export function ShipmentEdit() {
                     ))}
                   </select>
                 </div>
+
+                <div className="space-y-2">
+                  <Label className="text-[10px] uppercase tracking-wider font-bold text-muted-foreground pr-1">نوع محموله</Label>
+                  <select
+                    className="w-full bg-background border border-border rounded-xl h-11 text-xs px-3 focus:ring-1 focus:ring-primary outline-none text-foreground"
+                    value={formData.shipmentTypeCode}
+                    onChange={e => {
+                      const nextType = shipmentTypes.find((type) => type.code === e.target.value);
+                      setFormData({
+                        ...formData,
+                        shipmentTypeCode: e.target.value,
+                        shipmentDirection: nextType?.direction || formData.shipmentDirection,
+                        transportMode: nextType?.transportMode || formData.transportMode,
+                      });
+                    }}
+                    data-testid="shipment-edit-type-select"
+                  >
+                    {shipmentTypes.map((type) => (
+                      <option key={type.code} value={type.code}>{type.labelFa}</option>
+                    ))}
+                  </select>
+                  {selectedType ? (
+                    <p className="text-[10px] font-bold leading-5 text-muted-foreground">{selectedType.description}</p>
+                  ) : null}
+                </div>
                 
                 <div className="p-4 bg-emerald-500/5 rounded-2xl border border-emerald-500/20 text-center">
-                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold mb-1 italic">وضعیت سیستم</p>
-                  <p className="text-[11px] text-muted-foreground">تمامی اطلاعات در حافظه موقت (Mock) ذخیره می‌شوند.</p>
+                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold mb-1 italic">قالب فرم</p>
+                  <p className="text-[11px] text-muted-foreground">تغییر نوع محموله قالب نمایش و ویرایش را عوض می‌کند، اما داده‌های قبلی کوتاژ و فیلدهای اختصاصی حذف نمی‌شوند.</p>
                 </div>
               </div>
             </CardContent>

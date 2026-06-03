@@ -30,6 +30,7 @@ import {
 import { Label } from "@/components/ui/label";
 
 type CustomerFormState = Pick<Customer, "name" | "company" | "email" | "phone" | "address"> & {
+  referrer: string;
   notes: string;
 };
 
@@ -39,12 +40,14 @@ const emptyCustomerForm: CustomerFormState = {
   email: "",
   phone: "",
   address: "",
+  referrer: "",
   notes: "",
 };
 
 export default function Customers() {
   const navigate = useNavigate();
   const customers = useMockStore(state => state.customers);
+  const currentUser = useMockStore(state => state.currentUser);
   const loadCurrentUserRecords = useMockStore(state => state.loadCurrentUserRecords);
   const [searchTerm, setSearchTerm] = useState("");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -52,6 +55,7 @@ export default function Customers() {
   const [isSavingCustomer, setIsSavingCustomer] = useState(false);
   const [customerToDelete, setCustomerToDelete] = useState<string | null>(null);
   const [newCustomer, setNewCustomer] = useState<CustomerFormState>(emptyCustomerForm);
+  const isCeo = currentUser?.role === "CEO";
 
   const saveCustomer = async (url: string, options: RequestInit = {}) => {
     const response = await fetch(url, {
@@ -76,6 +80,7 @@ export default function Customers() {
       email: newCustomer.email.trim(),
       phone: newCustomer.phone.trim(),
       address: newCustomer.address.trim(),
+      referrer: newCustomer.referrer.trim(),
       notes: newCustomer.notes.trim(),
     };
 
@@ -105,31 +110,32 @@ export default function Customers() {
     const term = searchTerm.trim().toLowerCase();
     if (!term) return activeCustomers;
     return activeCustomers.filter((customer) => {
-      const searchable = [
-        customer.name,
-        customer.company,
-        customer.email,
-        customer.phone,
-        customer.address,
-        customer.notes,
-      ].join(" ").toLowerCase();
+      const searchableFields = isCeo
+        ? [customer.name, customer.company, customer.email, customer.phone, customer.address, customer.referrer, customer.notes]
+        : [customer.name, customer.company];
+      const searchable = searchableFields.join(" ").toLowerCase();
       return searchable.includes(term);
     });
-  }, [activeCustomers, searchTerm]);
+  }, [activeCustomers, isCeo, searchTerm]);
   const resetCustomerFilters = () => setSearchTerm("");
 
   const customerStats = React.useMemo(() => {
     const totalShipments = activeCustomers.reduce((sum, customer) => sum + ((customer as any).shipmentsCount || 0), 0);
     const withEmail = activeCustomers.filter(customer => Boolean(customer.email)).length;
     const withPhone = activeCustomers.filter(customer => Boolean(customer.phone)).length;
-    return [
+    const baseStats = [
       { label: "کل مشتریان", value: activeCustomers.length, icon: Building2, tone: "blue" },
       { label: "مجموع محموله ها", value: totalShipments, icon: Calendar, tone: "emerald" },
+    ];
+    if (!isCeo) return baseStats;
+    return [
+      ...baseStats,
       { label: "ایمیل ثبت شده", value: withEmail, icon: Mail, tone: "indigo" },
       { label: "شماره تماس", value: withPhone, icon: Phone, tone: "amber" },
     ];
-  }, [activeCustomers]);
+  }, [activeCustomers, isCeo]);
   const selectedCustomer = activeCustomers.find(c => c.id === customerToDelete);
+  const tableColumnCount = isCeo ? 6 : 5;
   const handleAddDialogOpenChange = (open: boolean) => {
     if (isSavingCustomer) return;
     setIsAddDialogOpen(open);
@@ -144,6 +150,7 @@ export default function Customers() {
           <p className="text-[12px] text-muted-foreground">مدیریت اطلاعات و تاریخچه همکاری با شرکای تجاری.</p>
         </div>
         
+        {isCeo ? (
         <Dialog open={isAddDialogOpen} onOpenChange={handleAddDialogOpenChange}>
           <DialogTrigger
             render={
@@ -176,6 +183,10 @@ export default function Customers() {
                 <Input id="phone" type="tel" inputMode="tel" autoComplete="tel" dir="ltr" className="bg-muted border-border text-xs h-9 text-left" value={newCustomer.phone} onChange={(e) => setNewCustomer({ ...newCustomer, phone: e.target.value })} />
               </div>
               <div className="grid gap-1.5 sm:col-span-2">
+                <Label htmlFor="referrer" className="text-xs text-muted-foreground">معرف</Label>
+                <Input id="referrer" className="bg-muted border-border text-xs h-9" value={newCustomer.referrer} onChange={(e) => setNewCustomer({ ...newCustomer, referrer: e.target.value })} />
+              </div>
+              <div className="grid gap-1.5 sm:col-span-2">
                 <Label htmlFor="address" className="text-xs text-muted-foreground">آدرس</Label>
                 <Input id="address" autoComplete="street-address" className="bg-muted border-border text-xs h-9" value={newCustomer.address} onChange={(e) => setNewCustomer({ ...newCustomer, address: e.target.value })} />
               </div>
@@ -203,6 +214,7 @@ export default function Customers() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        ) : null}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -233,8 +245,8 @@ export default function Customers() {
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 bg-card p-3 rounded-xl border border-border shadow-sm">
         <div className="relative flex-1">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-          <Input 
-            placeholder="جستجوی نام، شرکت، ایمیل یا شماره تماس..." 
+          <Input
+            placeholder={isCeo ? "جستجوی نام، شرکت، ایمیل یا شماره تماس..." : "جستجوی نام یا شرکت..."}
             className="bg-muted border-border pr-10 h-10 text-xs focus-visible:ring-primary/50 rounded-xl"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -250,7 +262,7 @@ export default function Customers() {
                 <tr className="border-b border-border bg-muted/50">
                   <th className="px-5 py-4 font-medium text-muted-foreground">نام کامل</th>
                   <th className="px-5 py-4 font-medium text-muted-foreground">شرکت</th>
-                  <th className="px-5 py-4 font-medium text-muted-foreground">اطلاعات تماس</th>
+                  {isCeo ? <th className="px-5 py-4 font-medium text-muted-foreground">اطلاعات تماس</th> : null}
                   <th className="px-5 py-4 font-medium text-muted-foreground">تعداد محموله</th>
                   <th className="px-5 py-4 font-medium text-muted-foreground">تاریخ ایجاد</th>
                   <th className="px-5 py-4 font-medium text-muted-foreground">عملیات</th>
@@ -258,12 +270,12 @@ export default function Customers() {
               </thead>
               <tbody className="divide-y divide-border">
                 {filteredCustomers.length === 0 ? (
-                  <EmptyTableRow colSpan={6}>
+                  <EmptyTableRow colSpan={tableColumnCount}>
                     <EmptyState
                       icon={UserPlus}
                       title={activeCustomers.length === 0 ? "هنوز مشتری ثبت نشده" : "مشتری‌ای با این جستجو پیدا نشد"}
                       description={activeCustomers.length === 0 ? "اولین مشتری را اضافه کنید تا بتوانید محموله، سند و لینک رهگیری را به او وصل کنید." : "عبارت جستجو را تغییر دهید یا فیلترها را پاک کنید."}
-                      primaryAction={activeCustomers.length === 0 ? { label: "ثبت مشتری جدید", onClick: () => setIsAddDialogOpen(true), icon: UserPlus } : resetFiltersAction(resetCustomerFilters)}
+                      primaryAction={isCeo && activeCustomers.length === 0 ? { label: "ثبت مشتری جدید", onClick: () => setIsAddDialogOpen(true), icon: UserPlus } : resetFiltersAction(resetCustomerFilters)}
                       compact
                     />
                   </EmptyTableRow>
@@ -274,7 +286,7 @@ export default function Customers() {
                       <div className="font-bold text-foreground">{customer.name || customer.company}</div>
                     </td>
                     <td className="px-5 py-4 text-foreground font-medium">{customer.company || "ثبت نشده"}</td>
-                    <td className="px-5 py-4">
+                    {isCeo ? <td className="px-5 py-4">
                       <div className="flex flex-col gap-0.5">
                         {customer.email ? (
                           <div className="flex items-center gap-1.5 text-[11px] text-primary" dir="ltr">
@@ -291,11 +303,16 @@ export default function Customers() {
                             <MapPin className="w-3 h-3" /> <span className="max-w-[220px] truncate">{customer.address}</span>
                           </div>
                         ) : null}
-                        {!customer.email && !customer.phone && !customer.address ? (
+                        {customer.referrer ? (
+                          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                            <UserPlus className="w-3 h-3" /> <span className="max-w-[220px] truncate">معرف: {customer.referrer}</span>
+                          </div>
+                        ) : null}
+                        {!customer.email && !customer.phone && !customer.address && !customer.referrer ? (
                           <span className="text-[11px] font-bold text-muted-foreground">اطلاعات تماس ثبت نشده</span>
                         ) : null}
                       </div>
-                    </td>
+                    </td> : null}
                     <td className="px-5 py-4 text-center">
                       <Badge className="bg-primary/10 text-primary border-none h-5 px-2 py-0 text-[10px] font-bold">
                         {(customer as any).shipmentsCount || 0}
@@ -313,7 +330,7 @@ export default function Customers() {
                         >
                           <Eye className="w-3.5 h-3.5" />
                         </Button>
-                        <DropdownMenu>
+                        {isCeo ? <DropdownMenu>
                           <DropdownMenuTrigger
                             render={
                               <Button
@@ -338,7 +355,7 @@ export default function Customers() {
                               حذف مشتری
                             </DropdownMenuItem>
                           </DropdownMenuContent>
-                        </DropdownMenu>
+                        </DropdownMenu> : null}
                       </div>
                     </td>
                   </tr>

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { User, Customer, Shipment, Task, Message, ActivityLog, Demurrage, ShipmentStep, ShipmentStatus, TaskStatus, ShipmentDocument, Channel, Notification, Appointment, AppointmentStatus, Cheque, Quote, CommercialCard, OrganizationMemberOption, ShipmentWorkflowProgress, TaskEvent } from "../types";
+import { QUOTATIONS_UI_ENABLED } from "../config/features";
 import { buildShipmentWorkflowSteps, ensureShipmentWorkflowSteps } from "../lib/shipmentWorkflow";
 
 const CURRENT_USER_STORAGE_KEY = "logisticplus.currentUser";
@@ -51,7 +52,10 @@ const COLLECTION_KEYS = [
 // Compatibility bridge only: collections migrated to canonical APIs must not be
 // persisted back through /api/users/:id/records, or stale frontend state can
 // overwrite the canonical tables.
-const CANONICAL_API_COLLECTIONS = new Set<string>(["shipments"]);
+const CANONICAL_API_COLLECTIONS = new Set<string>(["shipments", "customers", "messages", "channels"]);
+const DISABLED_UI_COLLECTIONS = new Set<string>(QUOTATIONS_UI_ENABLED ? [] : ["quotes"]);
+const filterDisabledDeletedItems = <T extends { entityType?: string }>(items: T[]) =>
+  QUOTATIONS_UI_ENABLED ? items : items.filter((item) => String(item.entityType || "").toUpperCase() !== "QUOTE");
 
 const normalizeUser = (user: LoginUser | null): User | null => {
   if (!user) return null;
@@ -83,6 +87,9 @@ const normalizeShipmentRecord = (record: any): Shipment => {
     origin: record.origin || legacy.origin || "",
     destination: record.destination || legacy.destination || "",
     status: normalizeShipmentStatus(record.status || legacy.status),
+    shipmentDirection: record.shipmentDirection || record.shipment_direction || legacy.shipmentDirection || legacy.shipment_direction || "import",
+    transportMode: record.transportMode || record.transport_mode || legacy.transportMode || legacy.transport_mode || "",
+    shipmentTypeCode: record.shipmentTypeCode || record.shipment_type_code || legacy.shipmentTypeCode || legacy.shipment_type_code || "IMPORT_SEA_CONTAINER",
     createdAt: record.createdAt || record.created_at || legacy.createdAt || new Date().toISOString(),
     estimatedDelivery: record.estimatedDelivery || record.estimated_delivery_at || legacy.estimatedDelivery || "",
     actualDelivery: record.actualDelivery || record.actual_delivery_at || legacy.actualDelivery || undefined,
@@ -319,8 +326,8 @@ export const useMockStore = create<MockStore>((set) => ({
       notifications: records.notifications || [],
       appointments: records.appointments || [],
       cheques: records.cheques || [],
-      quotes: records.quotes || [],
-      deletedItems: records.deletedItems || [],
+      quotes: QUOTATIONS_UI_ENABLED ? records.quotes || [] : [],
+      deletedItems: filterDisabledDeletedItems(records.deletedItems || []),
       defaultSteps,
       hasHydratedFromDatabase: true,
       isHydratingFromDatabase: false,
@@ -1336,6 +1343,7 @@ export const useMockStore = create<MockStore>((set) => ({
   })),
 
   addQuote: (quote) => set((state) => {
+    if (!QUOTATIONS_UI_ENABLED) return state;
     const newQuote: Quote = {
       ...quote,
       id: `q${Date.now()}`,
@@ -1357,6 +1365,7 @@ export const useMockStore = create<MockStore>((set) => ({
   }),
 
   updateQuote: (id, updates) => set((state) => {
+    if (!QUOTATIONS_UI_ENABLED) return state;
     const quote = state.quotes.find(q => q.id === id);
     const log: ActivityLog = {
       id: `l${Date.now()}-quote-upd`,
@@ -1374,6 +1383,7 @@ export const useMockStore = create<MockStore>((set) => ({
   }),
 
   deleteQuote: (id) => set((state) => {
+    if (!QUOTATIONS_UI_ENABLED) return state;
     const quote = state.quotes.find(q => q.id === id);
     const log: ActivityLog = {
       id: `l${Date.now()}-quote-del`,
@@ -1394,6 +1404,7 @@ export const useMockStore = create<MockStore>((set) => ({
 const buildDatabasePayload = (state: MockStore) => {
   return COLLECTION_KEYS.reduce((records, key) => {
     if (CANONICAL_API_COLLECTIONS.has(key)) return records;
+    if (DISABLED_UI_COLLECTIONS.has(key)) return records;
     records[key] = (state as any)[key] || [];
     return records;
   }, {} as Record<string, any[]>);

@@ -56,7 +56,7 @@ test.describe.serial("delete buttons confirm before archiving", () => {
     await expect(page.getByText(`جلسه تست حذف ${suffix}`)).toHaveCount(0);
   });
 
-  test("quotation delete button opens confirmation and archives the quotation", async ({ page }) => {
+  test("quotation UI archive action stays disabled while backend archive remains available", async ({ page }) => {
     const api = await loginApi();
     const suffix = Date.now();
     const quotation = await readOk<any>(
@@ -84,13 +84,15 @@ test.describe.serial("delete buttons confirm before archiving", () => {
         },
       })
     );
+    await readOk<any>(await api.post(`/api/quotations/${quotation.id}/archive`));
+    const archivedQuotations = await readOk<any[]>(await api.get("/api/quotations?includeArchived=true"));
+    expect(archivedQuotations.find((item) => item.id === quotation.id)?.status).toBe("ARCHIVED");
     await api.dispose();
 
     await loginViaUi(page);
     await page.goto("/quotations");
-    await page.getByLabel(`Archive quotation ${quotation.id}`).first().click();
-    await expect(page.getByRole("dialog")).toContainText("بایگانی استعلام قیمت");
-    await page.getByRole("dialog").getByRole("button", { name: archiveConfirmButton }).click();
-    await expect(page.locator("tbody tr", { hasText: `مشتری تست حذف ${suffix}` })).toHaveCount(0);
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page.getByLabel(`Archive quotation ${quotation.id}`)).toHaveCount(0);
+    await expect(page.getByText(`مشتری تست حذف ${suffix}`)).toHaveCount(0);
   });
 });

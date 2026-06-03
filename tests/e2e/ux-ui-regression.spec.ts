@@ -81,36 +81,80 @@ async function collectConsoleErrors(page: Page) {
   page.on("console", (message) => {
     const text = message.text();
     if (message.type() === "error" && !text.includes("/@vite/client") && !text.includes("WebSocket")) {
-      errors.push(text);
+      errors.push(`${new URL(page.url()).pathname}: ${text}`);
     }
   });
   page.on("pageerror", (error) => {
-    if (!error.message.includes("WebSocket closed without opened")) errors.push(error.message);
+    if (!error.message.includes("WebSocket closed without opened")) errors.push(`${new URL(page.url()).pathname}: ${error.message}`);
   });
   return errors;
+}
+
+async function createShipmentFromWizard(page: Page, trackingNumber: string) {
+  await page.getByTestId("open-shipment-dialog").click();
+  await expect(page.getByTestId("shipment-wizard-step")).toBeVisible();
+  await expect(page.locator("#container")).toHaveCount(0);
+  await expect(page.getByTestId("shamsi-date-time-trigger")).toHaveCount(0);
+
+  await page.getByTestId("shipment-operation-import").click();
+  await page.getByTestId("shipment-wizard-next").click();
+  await page.getByTestId("shipment-method-sea").click();
+  await page.getByTestId("shipment-wizard-next").click();
+  await page.getByTestId("shipment-type-IMPORT_SEA_CONTAINER").click();
+  await page.getByTestId("shipment-wizard-next").click();
+
+  await page.getByTestId("shipment-create-tracking").fill(trackingNumber);
+  await page.getByTestId("shipment-create-customer").selectOption({ index: 1 });
+  await page.getByTestId("shipment-create-origin").fill("Tehran");
+  await page.getByTestId("shipment-create-destination").fill("Bandar Abbas");
+  await page.getByTestId("shipment-create-container-count").fill("1");
+  await page.getByTestId("shipment-wizard-next").click();
+  await page.getByTestId("submit-shipment").click();
 }
 
 test.describe.serial("UX/UI regression sweep", () => {
   test("new shipments get workflow steps and numeric progress immediately", async ({ page }) => {
     await loginViaUi(page);
     await page.goto("/shipments");
-    await page.getByTestId("open-shipment-dialog").click();
 
     const trackingNumber = `UX-${Date.now()}`;
-    await page.locator("#tracking").fill(trackingNumber);
-    await page.locator("#container").fill(`CONT-${Date.now()}`);
-    await page.locator("#customer").selectOption({ index: 1 });
-    await page.locator("#origin").fill("Tehran");
-    await page.locator("#destination").fill("Bandar Abbas");
-    await page.getByTestId("submit-shipment").click();
+    await createShipmentFromWizard(page, trackingNumber);
 
-    await expect(page.getByRole("table").getByText(trackingNumber)).toBeVisible();
-    await expect(page.getByText("NaN%")).toHaveCount(0);
-    await page.locator("tr", { hasText: trackingNumber }).locator("button").first().click();
-    await expect(page).toHaveURL(/\/shipments\/s/);
+    await expect(page).toHaveURL(/\/shipments\/[^/]+$/);
+    await expect(page.getByRole("heading", { name: trackingNumber })).toBeVisible();
     await expect(page.getByText("NaN%")).toHaveCount(0);
     expect(await page.locator('[data-slot="progress"]').count()).toBeGreaterThan(0);
     await expect(page.locator("body")).toContainText("%");
+  });
+
+  test("shipment detail loads records created after the page list was hydrated", async ({ page }) => {
+    await loginViaUi(page);
+
+    const api = await loginApi();
+    const trackingNumber = `UX-STALE-${Date.now()}`;
+    try {
+      const shipment = await readOk<any>(
+        await api.post("/api/shipments", {
+          data: {
+            trackingNumber,
+            containerNumber: `CONT-${Date.now()}`,
+            customerId: "c1",
+            customerName: "Stale Hydration Customer",
+            origin: "Tehran",
+            destination: "Bandar Abbas",
+            status: "PENDING",
+            estimatedDelivery: "1405/04/01 09:00",
+            freeTimeDays: 7,
+          },
+        })
+      );
+
+      await page.goto(`/shipments/${shipment.id}`);
+      await expect(page.getByRole("heading", { name: trackingNumber })).toBeVisible();
+      await expect(page.getByText("Shipment was not found.")).toHaveCount(0);
+    } finally {
+      await api.dispose();
+    }
   });
 
   test("legacy missing-organization shipment can generate customer tracking access", async () => {
@@ -146,6 +190,132 @@ test.describe.serial("UX/UI regression sweep", () => {
     expect(await page.locator('[data-slot="progress"]').count()).toBeGreaterThan(0);
   });
 
+  test("customer tracking renders safe portal timeline, route, and documents without the removed support CTA", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.route("**/api/public/track/customer-portal-token", async (route) => {
+      await route.fulfill({
+        json: {
+          ok: true,
+          data: {
+            shipment: {
+              code: "PUBLIC-PORTAL-TRACK",
+              publicStatusLabel: "Shipment is in transit",
+              publicStatusDescription: "Your shipment is being handled by our operations team.",
+              origin: "Bushehr",
+              destination: "Shiraz",
+              estimatedDelivery: "1405/11/15",
+              lastPublicUpdate: "2026-06-02T12:39:47.911Z",
+              currentPublicPhase: "LEGACY_PUBLIC_PHASE_SENTINEL",
+              currentPublicLabel: "LEGACY_PUBLIC_LABEL_SENTINEL",
+              completedPublicStepsCount: 1,
+              totalPublicStepsCount: 3,
+              publicNote: "LEGACY_PUBLIC_NOTE_SENTINEL",
+            },
+            steps: [
+              {
+                id: "legacy-step-1",
+                label: "LEGACY_PUBLIC_STEP_SENTINEL",
+                status: "IN_PROGRESS",
+                order: 1,
+                completedAt: null,
+              },
+            ],
+            documents: [
+              {
+                id: "public-doc-1",
+                title: "Customer-safe tracking document",
+                fileName: "safe-document.pdf",
+                fileSize: "1 MB",
+                createdAt: "2026-06-02T12:39:47.911Z",
+                downloadUrl: "/api/public/documents/public-doc-1?shipmentCode=PUBLIC-PORTAL-TRACK&expires=9999999999999&signature=safe",
+              },
+            ],
+            company: {
+              name: "Logistic Plus",
+              contactText: "پشتیبانی Logistic Plus 021-12345678",
+            },
+          },
+        },
+      });
+    });
+
+    await page.goto("/track/customer-portal-token");
+    await expect(page.getByRole("heading", { name: "PUBLIC-PORTAL-TRACK" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "جستجوی محموله" })).toHaveCount(0);
+    await expect(page.getByTestId("public-progress-timeline")).toBeVisible();
+    await expect(page.getByTestId("public-stage-transit")).toBeVisible();
+    await expect(page.getByTestId("public-next-step-card")).toBeVisible();
+    await expect(page.getByTestId("public-route-origin")).toContainText("Bushehr");
+    await expect(page.getByTestId("public-route-destination")).toContainText("Shiraz");
+    await expect(page.getByTestId("public-route-text")).toContainText("Bushehr");
+    await expect(page.getByTestId("public-eta")).toContainText("1405/11/15");
+    await expect(page.getByTestId("public-documents-section")).toContainText("Customer-safe tracking document");
+    await expect(page.getByLabel("Download Customer-safe tracking document")).toHaveAttribute("href", /\/api\/public\/documents\/public-doc-1/);
+    await expect(page.getByTestId("public-support-cta")).toHaveCount(0);
+    await expect(page.locator('a[href^="tel:"]')).toHaveCount(0);
+    await expect(page.getByText("021-12345678")).toHaveCount(0);
+    await expect(page.getByText("LEGACY_PUBLIC_PHASE_SENTINEL")).toHaveCount(0);
+    await expect(page.getByText("LEGACY_PUBLIC_LABEL_SENTINEL")).toHaveCount(0);
+    await expect(page.getByText("LEGACY_PUBLIC_NOTE_SENTINEL")).toHaveCount(0);
+    await expect(page.getByText("LEGACY_PUBLIC_STEP_SENTINEL")).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("customer tracking shows safe empty ETA and document states", async ({ page }) => {
+    await page.route("**/api/public/track/customer-empty-token", async (route) => {
+      await route.fulfill({
+        json: {
+          ok: true,
+          data: {
+            shipment: {
+              code: "PUBLIC-EMPTY-TRACK",
+              publicStatusLabel: "Shipment is being prepared",
+              publicStatusDescription: "Documents are under review and the operations team will publish the next safe update soon.",
+              origin: "",
+              destination: "",
+              estimatedDelivery: "",
+              lastPublicUpdate: "",
+              currentPublicPhase: "",
+              currentPublicLabel: "",
+              completedPublicStepsCount: 0,
+              totalPublicStepsCount: 0,
+              publicNote: "",
+            },
+            steps: [],
+            documents: [],
+            company: {
+              name: "Logistic Plus",
+              contactText: "",
+            },
+          },
+        },
+      });
+    });
+
+    await page.goto("/track/customer-empty-token");
+    await expect(page.getByRole("heading", { name: "PUBLIC-EMPTY-TRACK" })).toBeVisible();
+    await expect(page.getByTestId("public-route-origin")).toContainText("مبدأ ثبت نشده");
+    await expect(page.getByTestId("public-route-destination")).toContainText("مقصد ثبت نشده");
+    await expect(page.getByTestId("public-eta")).toContainText("زمان تقریبی تحویل هنوز ثبت نشده است");
+    await expect(page.getByTestId("public-documents-empty")).toBeVisible();
+    await expect(page.getByTestId("public-support-cta")).toHaveCount(0);
+  });
+
+  test("shipment detail hides the legacy logistics progress card but keeps replacement panels", async ({ page }) => {
+    await loginViaUi(page);
+    await page.goto("/shipments/s1");
+    await expect(page.getByRole("heading", { name: "LS-9801", exact: true })).toBeVisible();
+
+    await expect(page.getByText("پیشرفت لجستیک")).toHaveCount(0);
+    await expect(page.getByText("درصد تکمیل فرآیند")).toHaveCount(0);
+    await expect(page.getByText("اطلاعات تکمیلی بار")).toHaveCount(0);
+    await expect(page.getByText("40ft High Cube")).toHaveCount(0);
+    await expect(page.getByText("8471.30.00")).toHaveCount(0);
+
+    await expect(page.locator('[data-testid="workflow-start"], [data-testid="workflow-expand-all"]').first()).toBeVisible();
+    await expect(page.getByTestId("shipment-daily-status-panel")).toBeVisible();
+  });
+
   test("dashboard setup checklist disappears after customer tracking is enabled", async ({ page }) => {
     const client = await dbClient();
     try {
@@ -165,13 +335,14 @@ test.describe.serial("UX/UI regression sweep", () => {
     await expect(page.locator('[data-empty-state="setup-checklist"]')).toHaveCount(0);
   });
 
-  test("calendar popover stays inside the viewport on mobile dialogs", async ({ page }) => {
+  test("shipment wizard stays inside the viewport on mobile dialogs", async ({ page }) => {
     await loginViaUi(page);
     await page.setViewportSize({ width: 390, height: 700 });
     await page.goto("/shipments");
     await page.getByTestId("open-shipment-dialog").click();
-    await page.getByTestId("shamsi-date-time-trigger").click();
-    const box = await page.getByTestId("shamsi-date-time-panel").boundingBox();
+    await expect(page.getByTestId("shipment-wizard-step")).toBeVisible();
+    await expect(page.getByTestId("shamsi-date-time-trigger")).toHaveCount(0);
+    const box = await page.getByRole("dialog").boundingBox();
     expect(box).not.toBeNull();
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.y).toBeGreaterThanOrEqual(0);
@@ -184,9 +355,13 @@ test.describe.serial("UX/UI regression sweep", () => {
     await loginViaUi(page);
     await page.setViewportSize({ width: 1280, height: 420 });
     await page.goto("/dashboard");
+    await expect(page.locator('a[href="/shipments"]').first()).toBeVisible();
     const desktopScrollable = await page.evaluate(() => {
-      const viewport = document.querySelector('[data-slot="scroll-area-viewport"]');
-      return Boolean(viewport && viewport.scrollHeight > viewport.clientHeight && getComputedStyle(viewport).overflowY !== "hidden");
+      const viewports = [...document.querySelectorAll('[data-slot="scroll-area-viewport"]')];
+      return viewports.some((viewport) => {
+        const box = viewport.getBoundingClientRect();
+        return box.width > 0 && box.height > 0 && viewport.scrollHeight > viewport.clientHeight && getComputedStyle(viewport).overflowY !== "hidden";
+      });
     });
     expect(desktopScrollable).toBe(true);
 
@@ -201,7 +376,7 @@ test.describe.serial("UX/UI regression sweep", () => {
 
   test("core public and protected routes have no obvious desktop/mobile UI breakage", async ({ browser }) => {
     const publicRoutes = ["/", "/pricing", "/signup", "/contact", "/login", "/track/search"];
-    const protectedRoutes = ["/dashboard", "/shipments", "/customers", "/tasks", "/documents", "/cheques", "/commercial-cards", "/compliance-meetings", "/quotations", "/archive", "/management"];
+    const protectedRoutes = ["/dashboard", "/daily-status", "/shipments", "/customers", "/tasks", "/documents", "/cheques", "/commercial-cards", "/compliance-meetings", "/archive", "/management"];
     const viewports = [
       { width: 1280, height: 800 },
       { width: 390, height: 844 },
@@ -231,7 +406,7 @@ test.describe.serial("UX/UI regression sweep", () => {
     }
   });
 
-  test("legacy compliance and quotation routes redirect to canonical paths", async ({ page }) => {
+  test("legacy compliance route redirects and quotation UI routes stay disabled", async ({ page }) => {
     await loginViaUi(page);
 
     await page.goto("/compliance");
@@ -239,7 +414,59 @@ test.describe.serial("UX/UI regression sweep", () => {
     await expect(page.locator("body")).not.toBeEmpty();
 
     await page.goto("/quotage");
-    await expect(page).toHaveURL(/\/quotations$/);
-    await expect(page.locator("body")).not.toBeEmpty();
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page.getByTestId("open-quotation-dialog")).toHaveCount(0);
+
+    await page.goto("/quotations");
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page.locator('a[href="/quotations"]')).toHaveCount(0);
+    await expect(page.getByTestId("open-quotation-dialog")).toHaveCount(0);
+  });
+
+  test("quotation backend stays available but bootstrap and UI omit quotation data", async ({ page }) => {
+    const api = await loginApi();
+    const suffix = Date.now();
+    const customerName = `E2E Disabled Quote ${suffix}`;
+    try {
+      const quotation = await readOk<any>(
+        await api.post("/api/quotations", {
+          data: {
+            customerName,
+            customerPhone: "09120000000",
+            originCity: "Tehran",
+            destinationCity: "Shiraz",
+            cargoType: "GENERAL",
+            weight: 2,
+            dimensions: "1x1x1",
+            requirements: [],
+            baseRate: 1000000,
+            fuelSurcharge: 100000,
+            loadingFees: 50000,
+            tollFees: 25000,
+            insurancePercentage: 1,
+            profitMargin: 10,
+            totalPrice: 1292500,
+            validUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+            status: "PENDING",
+          },
+        })
+      );
+      const quotations = await readOk<any[]>(await api.get("/api/quotations?includeArchived=true"));
+      expect(quotations.some((item) => item.id === quotation.id)).toBe(true);
+
+      const auth = await readOk<any>(await api.get("/api/auth/me"));
+      const bootstrapResponse = await api.get(`/api/users/${encodeURIComponent(auth.user.id)}/bootstrap`);
+      expect(bootstrapResponse.status(), await bootstrapResponse.text()).toBeLessThan(400);
+      const bootstrap = await bootstrapResponse.json();
+      expect(bootstrap.records?.quotes || []).toEqual([]);
+    } finally {
+      await api.dispose();
+    }
+
+    await loginViaUi(page);
+    await page.goto("/quotations");
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page.locator('a[href="/quotations"]')).toHaveCount(0);
+    await expect(page.getByText(customerName)).toHaveCount(0);
   });
 });

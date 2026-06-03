@@ -24,6 +24,7 @@ const tenantPermissionDescriptions = {
   "shipments.create": "Create shipments",
   "shipments.update": "Update shipments",
   "shipments.archive": "Archive shipments",
+  "shipment_forms.manage": "Manage shipment type form templates",
   "shipment_steps.update": "Update shipment steps",
   "customers.view": "View customers",
   "customers.create": "Create customers",

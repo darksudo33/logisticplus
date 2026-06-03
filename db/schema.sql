@@ -343,6 +343,7 @@ CREATE TABLE IF NOT EXISTS customers (
   email TEXT,
   phone TEXT,
   address TEXT,
+  referrer TEXT,
   notes TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   legacy_data JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -361,6 +362,9 @@ CREATE TABLE IF NOT EXISTS shipments (
   customer_name TEXT,
   status TEXT NOT NULL,
   priority TEXT NOT NULL DEFAULT 'normal',
+  shipment_direction TEXT DEFAULT 'import',
+  transport_mode TEXT,
+  shipment_type_code TEXT DEFAULT 'IMPORT_SEA_CONTAINER',
   origin TEXT,
   destination TEXT,
   estimated_delivery_at TEXT,
@@ -375,7 +379,13 @@ CREATE TABLE IF NOT EXISTS shipments (
   completed_at TIMESTAMPTZ,
   archived_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT shipments_direction_check CHECK (
+    shipment_direction IS NULL OR shipment_direction IN ('import', 'export', 'transit', 'domestic')
+  ),
+  CONSTRAINT shipments_transport_mode_check CHECK (
+    transport_mode IS NULL OR transport_mode IN ('sea', 'air', 'land', 'rail')
+  )
 );
 
 CREATE TABLE IF NOT EXISTS shipment_status_events (
@@ -387,6 +397,183 @@ CREATE TABLE IF NOT EXISTS shipment_status_events (
   is_customer_visible BOOLEAN NOT NULL DEFAULT TRUE,
   created_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS shipment_kootaj_details (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  shipment_id TEXT NOT NULL REFERENCES shipments(id) ON DELETE CASCADE,
+  commercial_card_id TEXT,
+  order_registration_number TEXT,
+  order_registration_date TEXT,
+  order_registration_expiry_date TEXT,
+  order_registration_status TEXT,
+  proforma_number TEXT,
+  proforma_date TEXT,
+  foreign_seller_name TEXT,
+  foreign_seller_code TEXT,
+  goods_id_summary TEXT,
+  hs_code_summary TEXT,
+  order_permit_status TEXT,
+  fx_source_status TEXT,
+  currency_type TEXT,
+  currency_amount NUMERIC(18, 2),
+  bank_name TEXT,
+  bank_tracking_number TEXT,
+  fx_allocation_date TEXT,
+  bank_process_status TEXT,
+  insurance_number TEXT,
+  inspection_certificate_number TEXT,
+  booking_number TEXT,
+  bill_of_lading_number TEXT,
+  transport_document_number TEXT,
+  pre_alert_date TEXT,
+  cotage_number TEXT,
+  customs_status TEXT,
+  customs_route TEXT,
+  customs_office TEXT,
+  declaration_reference TEXT,
+  declaration_date TEXT,
+  cotage_date TEXT,
+  container_summary TEXT,
+  goods_summary TEXT,
+  package_count INTEGER,
+  gross_weight_kg NUMERIC(18, 3),
+  net_weight_kg NUMERIC(18, 3),
+  arrival_notice_number TEXT,
+  arrival_date TEXT,
+  manifest_number TEXT,
+  delivery_order_number TEXT,
+  warehouse_name TEXT,
+  warehouse_receipt_number TEXT,
+  warehouse_receipt_date TEXT,
+  evaluator_name TEXT,
+  expert_name TEXT,
+  document_control_status TEXT,
+  physical_inspection_status TEXT,
+  physical_inspection_date TEXT,
+  lab_status TEXT,
+  lab_result_date TEXT,
+  tariff_review_status TEXT,
+  valuation_status TEXT,
+  legal_permit_status TEXT,
+  standard_permit_status TEXT,
+  health_permit_status TEXT,
+  quarantine_permit_status TEXT,
+  other_permit_notes TEXT,
+  tax_payment_status TEXT,
+  duties_amount NUMERIC(18, 2),
+  tax_amount NUMERIC(18, 2),
+  customs_payment_date TEXT,
+  payment_reference TEXT,
+  cashier_confirmation_status TEXT,
+  warehouse_charges_status TEXT,
+  terminal_charges_status TEXT,
+  demurrage_status TEXT,
+  loading_permit_number TEXT,
+  loading_permit_date TEXT,
+  truck_plate TEXT,
+  driver_name TEXT,
+  gate_pass_number TEXT,
+  exit_gate_status TEXT,
+  release_status TEXT,
+  exit_date TEXT,
+  delivery_date TEXT,
+  internal_note TEXT,
+  custom_fields_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT shipment_kootaj_details_unique_shipment UNIQUE (organization_id, shipment_id),
+  CONSTRAINT shipment_kootaj_details_customs_route_check CHECK (customs_route IS NULL OR customs_route IN ('green', 'yellow', 'red')),
+  CONSTRAINT shipment_kootaj_details_customs_status_check CHECK (
+    customs_status IS NULL OR customs_status IN (
+      'not_started',
+      'declaration_registered',
+      'in_customs_review',
+      'documents_required',
+      'inspection',
+      'duties_pending',
+      'ready_for_release',
+      'released',
+      'exited',
+      'blocked'
+    )
+  ),
+  CONSTRAINT shipment_kootaj_details_tax_payment_status_check CHECK (
+    tax_payment_status IS NULL OR tax_payment_status IN ('not_started', 'pending', 'in_progress', 'completed', 'blocked', 'not_required', 'paid')
+  ),
+  CONSTRAINT shipment_kootaj_details_release_status_check CHECK (
+    release_status IS NULL OR release_status IN ('not_released', 'ready', 'released', 'exited', 'blocked')
+  ),
+  CONSTRAINT shipment_kootaj_details_exit_date_check CHECK (
+    exit_date IS NULL OR exit_date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+  ),
+  CONSTRAINT shipment_kootaj_details_currency_amount_non_negative CHECK (currency_amount IS NULL OR currency_amount >= 0),
+  CONSTRAINT shipment_kootaj_details_package_count_non_negative CHECK (package_count IS NULL OR package_count >= 0),
+  CONSTRAINT shipment_kootaj_details_gross_weight_non_negative CHECK (gross_weight_kg IS NULL OR gross_weight_kg >= 0),
+  CONSTRAINT shipment_kootaj_details_net_weight_non_negative CHECK (net_weight_kg IS NULL OR net_weight_kg >= 0),
+  CONSTRAINT shipment_kootaj_details_duties_amount_non_negative CHECK (duties_amount IS NULL OR duties_amount >= 0),
+  CONSTRAINT shipment_kootaj_details_tax_amount_non_negative CHECK (tax_amount IS NULL OR tax_amount >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS shipment_form_templates (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+  code TEXT NOT NULL,
+  shipment_type_code TEXT NOT NULL,
+  title_fa TEXT NOT NULL,
+  description TEXT,
+  is_system BOOLEAN NOT NULL DEFAULT FALSE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  updated_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  archived_at TIMESTAMPTZ,
+  CONSTRAINT shipment_form_templates_version_positive CHECK (version >= 1)
+);
+
+CREATE TABLE IF NOT EXISTS shipment_form_template_sections (
+  id TEXT PRIMARY KEY,
+  template_id TEXT NOT NULL REFERENCES shipment_form_templates(id) ON DELETE CASCADE,
+  section_key TEXT NOT NULL,
+  title_fa TEXT NOT NULL,
+  description TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_collapsed_by_default BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS shipment_form_template_fields (
+  id TEXT PRIMARY KEY,
+  template_id TEXT NOT NULL REFERENCES shipment_form_templates(id) ON DELETE CASCADE,
+  section_id TEXT NOT NULL REFERENCES shipment_form_template_sections(id) ON DELETE CASCADE,
+  field_key TEXT NOT NULL,
+  field_source TEXT NOT NULL,
+  field_type TEXT NOT NULL,
+  label_fa TEXT NOT NULL,
+  helper_text TEXT,
+  placeholder TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_visible BOOLEAN NOT NULL DEFAULT TRUE,
+  is_required BOOLEAN NOT NULL DEFAULT FALSE,
+  is_important BOOLEAN NOT NULL DEFAULT FALSE,
+  show_in_shipment_detail BOOLEAN NOT NULL DEFAULT TRUE,
+  show_in_daily_status BOOLEAN NOT NULL DEFAULT TRUE,
+  show_in_create_form BOOLEAN NOT NULL DEFAULT FALSE,
+  validation_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  options_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  archived_at TIMESTAMPTZ,
+  CONSTRAINT shipment_form_template_fields_source_check CHECK (field_source IN ('canonical', 'custom')),
+  CONSTRAINT shipment_form_template_fields_type_check CHECK (
+    field_type IN ('text', 'textarea', 'number', 'date', 'select', 'commercialCard', 'readonly')
+  )
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -656,7 +843,7 @@ CREATE TABLE IF NOT EXISTS archive_records (
 
 CREATE TABLE IF NOT EXISTS chat_threads (
   id TEXT PRIMARY KEY,
-  organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   owner_user_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
   type TEXT NOT NULL,
   name TEXT,
@@ -664,30 +851,102 @@ CREATE TABLE IF NOT EXISTS chat_threads (
   role_limit TEXT,
   icon TEXT,
   legacy_channel_id TEXT,
+  direct_key TEXT,
+  shipment_id TEXT REFERENCES shipments(id) ON DELETE SET NULL,
   created_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  last_message_id TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  archived_at TIMESTAMPTZ,
+  CONSTRAINT chat_threads_type_check CHECK (type IN ('DM', 'GROUP', 'CHANNEL', 'SHIPMENT'))
 );
 
 CREATE TABLE IF NOT EXISTS chat_thread_members (
   id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'member',
+  status TEXT NOT NULL DEFAULT 'active',
+  added_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  removed_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  removed_at TIMESTAMPTZ,
   unread_count INTEGER NOT NULL DEFAULT 0,
   last_read_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chat_thread_members_role_check CHECK (role IN ('owner', 'admin', 'member')),
+  CONSTRAINT chat_thread_members_status_check CHECK (status IN ('active', 'removed')),
   UNIQUE (thread_id, user_id)
 );
 
 CREATE TABLE IF NOT EXISTS chat_messages (
   id TEXT PRIMARY KEY,
-  organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
   sender_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
   sender_name TEXT NOT NULL,
   content TEXT NOT NULL,
+  body TEXT NOT NULL,
+  body_format TEXT NOT NULL DEFAULT 'plain_text',
+  client_message_id TEXT,
+  status TEXT NOT NULL DEFAULT 'sent',
   legacy_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  edited_at TIMESTAMPTZ,
+  deleted_at TIMESTAMPTZ,
+  CONSTRAINT chat_messages_body_length_check CHECK (char_length(body) BETWEEN 1 AND 4000),
+  CONSTRAINT chat_messages_body_format_check CHECK (body_format = 'plain_text'),
+  CONSTRAINT chat_messages_status_check CHECK (status IN ('sent', 'deleted'))
+);
+
+CREATE TABLE IF NOT EXISTS chat_message_read_receipts (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (message_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS chat_message_events (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+  message_id TEXT REFERENCES chat_messages(id) ON DELETE CASCADE,
+  actor_user_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS chat_message_attachments (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  thread_id TEXT NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  uploaded_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  storage_provider TEXT NOT NULL DEFAULT 'local',
+  storage_bucket TEXT,
+  storage_region TEXT,
+  storage_key TEXT,
+  object_key TEXT,
+  local_path TEXT,
+  checksum_sha256 TEXT,
+  original_filename TEXT NOT NULL,
+  file_name TEXT,
+  content_type TEXT NOT NULL,
+  size_bytes BIGINT NOT NULL DEFAULT 0,
+  attachment_type TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  deleted_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  deleted_reason TEXT,
+  storage_deleted_at TIMESTAMPTZ,
+  storage_delete_error TEXT,
+  CONSTRAINT chat_message_attachments_type_check CHECK (attachment_type IN ('image', 'document')),
+  CONSTRAINT chat_message_attachments_size_check CHECK (size_bytes >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS documents (
@@ -916,6 +1175,22 @@ CREATE INDEX IF NOT EXISTS shipments_customer_access_token_hash_idx ON shipments
 CREATE INDEX IF NOT EXISTS shipments_org_updated_idx ON shipments (organization_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS shipments_org_code_idx ON shipments (organization_id, shipment_code);
 CREATE INDEX IF NOT EXISTS shipments_org_customer_access_idx ON shipments (organization_id, customer_access_enabled, updated_at DESC);
+CREATE INDEX IF NOT EXISTS shipments_org_type_idx ON shipments (organization_id, shipment_type_code) WHERE archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS shipment_kootaj_details_org_shipment_idx ON shipment_kootaj_details (organization_id, shipment_id);
+CREATE INDEX IF NOT EXISTS shipment_kootaj_details_org_updated_idx ON shipment_kootaj_details (organization_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS shipment_kootaj_details_org_cotage_idx ON shipment_kootaj_details (organization_id, cotage_number) WHERE cotage_number IS NOT NULL;
+CREATE INDEX IF NOT EXISTS shipment_kootaj_details_org_commercial_card_idx ON shipment_kootaj_details (organization_id, commercial_card_id) WHERE commercial_card_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS shipment_kootaj_details_org_order_registration_idx ON shipment_kootaj_details (organization_id, order_registration_number) WHERE order_registration_number IS NOT NULL;
+CREATE INDEX IF NOT EXISTS shipment_kootaj_details_org_bill_of_lading_idx ON shipment_kootaj_details (organization_id, bill_of_lading_number) WHERE bill_of_lading_number IS NOT NULL;
+CREATE INDEX IF NOT EXISTS shipment_kootaj_details_org_bank_tracking_idx ON shipment_kootaj_details (organization_id, bank_tracking_number) WHERE bank_tracking_number IS NOT NULL;
+CREATE INDEX IF NOT EXISTS shipment_kootaj_details_custom_fields_gin_idx ON shipment_kootaj_details USING GIN (custom_fields_json);
+CREATE UNIQUE INDEX IF NOT EXISTS shipment_form_templates_global_code_idx ON shipment_form_templates (code, shipment_type_code) WHERE organization_id IS NULL AND archived_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS shipment_form_templates_org_code_idx ON shipment_form_templates (organization_id, code, shipment_type_code) WHERE organization_id IS NOT NULL AND archived_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS shipment_form_template_sections_key_idx ON shipment_form_template_sections (template_id, section_key);
+CREATE UNIQUE INDEX IF NOT EXISTS shipment_form_template_fields_key_idx ON shipment_form_template_fields (template_id, field_key);
+CREATE INDEX IF NOT EXISTS shipment_form_templates_active_type_idx ON shipment_form_templates (shipment_type_code, is_active, organization_id) WHERE archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS shipment_form_template_sections_template_idx ON shipment_form_template_sections (template_id, sort_order);
+CREATE INDEX IF NOT EXISTS shipment_form_template_fields_template_idx ON shipment_form_template_fields (template_id, sort_order) WHERE archived_at IS NULL;
 CREATE INDEX IF NOT EXISTS shipment_status_events_shipment_idx ON shipment_status_events (shipment_id);
 CREATE INDEX IF NOT EXISTS shipment_status_events_public_idx ON shipment_status_events (shipment_id, is_customer_visible, created_at DESC);
 CREATE INDEX IF NOT EXISTS shipment_status_events_org_created_idx ON shipment_status_events (organization_id, created_at DESC);
@@ -958,8 +1233,23 @@ CREATE INDEX IF NOT EXISTS archive_records_organization_idx ON archive_records (
 CREATE INDEX IF NOT EXISTS archive_records_archived_at_idx ON archive_records (archived_at DESC);
 CREATE INDEX IF NOT EXISTS archive_records_org_archived_idx ON archive_records (organization_id, archived_at DESC);
 CREATE INDEX IF NOT EXISTS chat_thread_members_user_idx ON chat_thread_members (user_id);
+CREATE INDEX IF NOT EXISTS chat_thread_members_org_user_status_idx ON chat_thread_members (organization_id, user_id, status);
+CREATE INDEX IF NOT EXISTS chat_thread_members_thread_status_idx ON chat_thread_members (thread_id, status);
 CREATE INDEX IF NOT EXISTS chat_messages_thread_created_idx ON chat_messages (thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS chat_messages_org_thread_created_idx ON chat_messages (organization_id, thread_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS chat_threads_organization_idx ON chat_threads (organization_id);
+CREATE INDEX IF NOT EXISTS chat_threads_org_updated_idx ON chat_threads (organization_id, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS chat_threads_org_direct_key_uidx ON chat_threads (organization_id, direct_key) WHERE direct_key IS NOT NULL AND archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS chat_threads_org_shipment_idx ON chat_threads (organization_id, shipment_id) WHERE shipment_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS chat_threads_org_shipment_active_uidx ON chat_threads (organization_id, shipment_id) WHERE shipment_id IS NOT NULL AND type = 'SHIPMENT' AND archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS chat_read_receipts_org_thread_user_idx ON chat_message_read_receipts (organization_id, thread_id, user_id);
+CREATE INDEX IF NOT EXISTS chat_message_events_org_thread_created_idx ON chat_message_events (organization_id, thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS chat_message_attachments_org_created_idx ON chat_message_attachments (organization_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS chat_message_attachments_message_idx ON chat_message_attachments (message_id);
+CREATE INDEX IF NOT EXISTS chat_message_attachments_thread_idx ON chat_message_attachments (organization_id, thread_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS chat_message_attachments_active_idx ON chat_message_attachments (organization_id, attachment_type, created_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS chat_message_attachments_deleted_idx ON chat_message_attachments (organization_id, deleted_at DESC) WHERE deleted_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS chat_message_attachments_object_key_idx ON chat_message_attachments (object_key) WHERE object_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS documents_shipment_id_idx ON documents (shipment_id);
 CREATE INDEX IF NOT EXISTS documents_organization_idx ON documents (organization_id);
 CREATE INDEX IF NOT EXISTS documents_customer_id_idx ON documents (customer_id);

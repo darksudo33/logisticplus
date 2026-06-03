@@ -46,11 +46,12 @@ export function generateLocalStorageKey(fileName = "") {
   return `${crypto.randomUUID()}${extensionFromName(fileName)}`;
 }
 
-export function generateDocumentObjectKey({ organizationId, fileName = "", id = crypto.randomUUID() } = {}) {
+export function generateDocumentObjectKey({ organizationId, fileName = "", id = crypto.randomUUID(), namespace = "documents" } = {}) {
   const now = new Date();
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
-  return `documents/${sanitizeTenantSegment(organizationId)}/${year}/${month}/${id}${extensionFromName(fileName)}`;
+  const safeNamespace = sanitizeTenantSegment(namespace || "documents");
+  return `${safeNamespace}/${sanitizeTenantSegment(organizationId)}/${year}/${month}/${id}${extensionFromName(fileName)}`;
 }
 
 function isObjectVerified(document = {}) {
@@ -70,6 +71,7 @@ export async function storeDocumentBuffer({
   fileName,
   contentType,
   organizationId,
+  namespace = "documents",
   config = resolveDocumentStorageConfig(),
 }) {
   const checksum = sha256Hex(buffer);
@@ -93,7 +95,7 @@ export async function storeDocumentBuffer({
     try {
       const objectProvider = createObjectStorageProvider(config);
       if (!objectProvider) throw new Error("Object storage is not enabled.");
-      objectKey = generateDocumentObjectKey({ organizationId, fileName });
+      objectKey = generateDocumentObjectKey({ organizationId, fileName, namespace });
       objectResult = await objectProvider.putObject({
         key: objectKey,
         body: buffer,

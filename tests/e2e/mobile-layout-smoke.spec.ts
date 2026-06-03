@@ -37,12 +37,12 @@ test.describe.serial("mobile layout smoke", () => {
 
     await page.getByTestId("open-shipment-dialog").click();
     await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByTestId("shipment-wizard-step")).toBeVisible();
+    await expect(page.getByTestId("shamsi-date-time-trigger")).toHaveCount(0);
     await expectNoHorizontalOverflow(page, "shipment create dialog");
-    await page.getByTestId("shamsi-date-time-trigger").click();
-    const calendarBox = await page.getByTestId("shamsi-date-time-panel").boundingBox();
-    expect(calendarBox).not.toBeNull();
-    expect(calendarBox!.x).toBeGreaterThanOrEqual(0);
-    expect(calendarBox!.x + calendarBox!.width).toBeLessThanOrEqual(390);
+    await page.getByTestId("shipment-wizard-next").click();
+    await expect(page.getByTestId("shipment-method-sea")).toBeVisible();
+    await expectNoHorizontalOverflow(page, "shipment method step");
     await closeDialog(page);
 
     await page.goto("/tasks");
