@@ -80,6 +80,94 @@ export interface Shipment {
   assignedManagerId?: string;
   updatedAt?: string;
 }
+export type ShipmentV2FlowCode = "IMPORT_LANJ" | "IMPORT_SHIP";
+export type ShipmentV2SectionKey =
+  | "base"
+  | "orderRegistration"
+  | "goods"
+  | "declarationKootaj"
+  | "permits"
+  | "payments"
+  | "banking"
+  | "notes";
+
+export type ShipmentV2LenjType = "TEH_LENJI" | "MALVANI";
+
+export interface ShipmentV2ShipmentSummary {
+  id: string;
+  trackingNumber: string;
+  customerId: string;
+  customerName: string;
+  status: ShipmentStatus;
+  shipmentDirection: "import" | "export" | "transit" | "domestic";
+  transportMode: "sea" | "air" | "land" | "rail" | "";
+  shipmentTypeCode: string;
+  origin: string;
+  destination: string;
+  estimatedDelivery: string;
+  assignedManagerId?: string | null;
+  isExitedArchived?: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface ShipmentV2BaseSection {
+  shipmentTitle?: string;
+  origin?: string;
+  dischargePort?: string;
+  deliveryPort?: string;
+  consigneeName?: string;
+  lenjType?: ShipmentV2LenjType | null;
+}
+
+export interface ShipmentV2GoodsRow {
+  description: string;
+  quantity?: number | null;
+  weight?: number | null;
+  cbm?: number | null;
+}
+
+export interface ShipmentV2GoodsSection {
+  container20Count?: number | null;
+  container40Count?: number | null;
+  goodsRows?: ShipmentV2GoodsRow[];
+}
+
+export interface ShipmentV2NotesSection {
+  internalNote?: string;
+}
+
+export type ShipmentV2EmptySection = Record<string, never>;
+
+export interface ShipmentV2Sections {
+  base: ShipmentV2BaseSection;
+  orderRegistration: ShipmentV2EmptySection;
+  goods: ShipmentV2GoodsSection;
+  declarationKootaj: ShipmentV2EmptySection;
+  permits: ShipmentV2EmptySection;
+  payments: ShipmentV2EmptySection;
+  banking: ShipmentV2EmptySection;
+  notes: ShipmentV2NotesSection;
+}
+
+export type ShipmentV2SectionPayload = ShipmentV2Sections[ShipmentV2SectionKey];
+
+export interface ShipmentV2Profile {
+  id: string;
+  organizationId: string;
+  shipmentId: string;
+  flowCode: ShipmentV2FlowCode;
+  sections: ShipmentV2Sections;
+  createdById?: string | null;
+  updatedById?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface ShipmentV2ProfileResponse {
+  shipment: ShipmentV2ShipmentSummary;
+  profile: ShipmentV2Profile | null;
+}
 
 export interface ShipmentStep {
   id: string;

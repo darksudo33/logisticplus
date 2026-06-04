@@ -39,6 +39,8 @@ const ShipmentFormTemplatesAdmin = lazy(() => import("./app/ShipmentFormTemplate
 const ShipmentWorkflowTemplatesAdmin = lazy(() => import("./app/ShipmentWorkflowTemplatesAdmin"));
 const AdminConsoleRoute = lazy(() => import("./app/AdminConsoleRoute"));
 const ShipmentDetail = lazy(() => import("./app/ShipmentDetail"));
+const ShipmentCreateV2 = lazy(() => import("./app/ShipmentCreateV2"));
+const ShipmentDetailV2 = lazy(() => import("./app/ShipmentDetailV2"));
 const Documents = lazy(() => import("./app/Documents"));
 const ShipmentEdit = lazy(() => import("./app/ShipmentEdit").then((module) => ({ default: module.ShipmentEdit })));
 const ChangeLog = lazy(() => import("./app/ChangeLog"));
@@ -99,7 +101,9 @@ function AppRoutes() {
         <Route path="/daily-status" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><DailyStatus /></ProtectedAppLayout>} />
         <Route path="/kootaj-board" element={<Navigate to="/daily-status" replace />} />
         <Route path="/shipments" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><Shipments /></ProtectedAppLayout>} />
+        <Route path="/shipments/new-v2" element={<ProtectedAppLayout anyOf={["shipments.create"]}><ShipmentCreateV2 /></ProtectedAppLayout>} />
         <Route path="/shipments/exited" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ExitedShipments /></ProtectedAppLayout>} />
+        <Route path="/shipments/:id/v2" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentDetailV2 /></ProtectedAppLayout>} />
         <Route path="/shipments/:id" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentDetail /></ProtectedAppLayout>} />
         <Route path="/shipments/:id/edit" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentEdit /></ProtectedAppLayout>} />
         <Route path="/changelog" element={<ProtectedAppLayout anyOf={["changes.view"]}><ChangeLog /></ProtectedAppLayout>} />

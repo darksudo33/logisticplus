@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import { Search, Ship, Filter, Plus, Eye, MoreHorizontal, Calendar, MapPin, Truck, Check, ListChecks, CheckCircle2, Clock, MoreVertical, Edit, ArrowUpDown, ArrowUp, ArrowDown, Activity, Archive, Trash2, Trash, UserPlus } from "lucide-react";
+import { Search, Ship, Filter, Plus, Eye, MoreHorizontal, Calendar, MapPin, Truck, Check, ListChecks, CheckCircle2, Clock, MoreVertical, Edit, ArrowUpDown, ArrowUp, ArrowDown, Activity, Archive, Trash2, Trash, UserPlus, Package } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -434,6 +434,17 @@ export default function Shipments() {
           <p className="text-[12px] text-muted-foreground">لیست کامل و وضعیت جزئی بارهای در جریان.</p>
         </div>
         
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+        <Button
+          type="button"
+          variant="outline"
+          data-testid="open-shipment-v2-create"
+          className="h-10 w-full gap-2 rounded-xl px-4 text-xs font-bold sm:w-auto"
+          onClick={() => navigate("/shipments/new-v2")}
+        >
+          <Package className="h-3.5 w-3.5" />
+          پرونده V2
+        </Button>
         <Dialog open={isAddDialogOpen} onOpenChange={handleCreateDialogOpenChange}>
           <DialogTrigger
             render={(triggerProps) => (
@@ -771,6 +782,7 @@ export default function Shipments() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -882,6 +894,13 @@ export default function Shipments() {
                          >
                            <Edit className="w-3.5 h-3.5" />
                            ویرایش محموله
+                         </DropdownMenuItem>
+                         <DropdownMenuItem
+                           className="text-xs cursor-pointer hover:bg-muted flex items-center gap-2 rounded-lg"
+                           onClick={() => navigate(`/shipments/${shipment.id}/v2`)}
+                         >
+                           <Package className="w-3.5 h-3.5 text-primary" />
+                           پرونده V2
                          </DropdownMenuItem>
                           {(shipment.status === "DELIVERED" || shipment.status === "CLOSED") && (
                             <DropdownMenuItem 
@@ -1079,6 +1098,13 @@ export default function Shipments() {
                                  >
                                    <Edit className="w-3.5 h-3.5" />
                                    ویرایش محموله
+                                 </DropdownMenuItem>
+                                 <DropdownMenuItem
+                                   className="text-xs cursor-pointer hover:bg-muted flex items-center gap-2 rounded-lg"
+                                   onClick={() => navigate(`/shipments/${shipment.id}/v2`)}
+                                 >
+                                   <Package className="w-3.5 h-3.5 text-primary" />
+                                   پرونده V2
                                  </DropdownMenuItem>
                                  {(shipment.status === "DELIVERED" || shipment.status === "CLOSED") && (
                                    <DropdownMenuItem 

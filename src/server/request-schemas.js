@@ -200,15 +200,98 @@ export const dailyStatusParamsSchema = z.object({
   shipmentId: requiredId,
 });
 
+export const SHIPMENT_V2_SECTION_KEYS = [
+  "base",
+  "orderRegistration",
+  "goods",
+  "declarationKootaj",
+  "permits",
+  "payments",
+  "banking",
+  "notes",
+];
+
 const shipmentStatus = z.enum(["PENDING", "BOOKED", "IN_TRANSIT", "ARRIVED", "CUSTOMS", "CLEARED", "DELIVERED", "CLOSED"]);
 const shipmentDirection = z.enum(SHIPMENT_DIRECTION_VALUES);
 const shipmentTransportMode = z.enum(TRANSPORT_MODE_VALUES);
 const shipmentTypeCode = z.enum(SHIPMENT_TYPE_CODES);
+const lenjType = z.enum(["TEH_LENJI", "MALVANI"]);
+const shipmentV2FlowCode = z.enum(["IMPORT_LANJ", "IMPORT_SHIP"]);
+const shipmentV2SectionKey = z.enum(SHIPMENT_V2_SECTION_KEYS);
+const shipmentV2Text = (max = 180) => z.string().trim().max(max).optional();
+const requiredShipmentV2Text = (fieldName, max = 180) =>
+  z.string().trim().min(1, `${fieldName} is required.`).max(max);
 const optionalNonNegativeNumber = z.preprocess((value) => {
   if (value === "" || value === undefined || value === null) return undefined;
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : value;
 }, z.number().min(0).optional());
+
+const shipmentV2GoodsRowSchema = z.object({
+  description: requiredShipmentV2Text("Goods description", 300),
+  quantity: optionalNullableNonNegativeNumber,
+  weight: optionalNullableNonNegativeNumber,
+  cbm: optionalNullableNonNegativeNumber,
+}).strict();
+
+const shipmentV2BaseSectionPayloadSchema = z.object({
+  shipmentTitle: shipmentV2Text(180),
+  origin: shipmentV2Text(180),
+  dischargePort: shipmentV2Text(180),
+  deliveryPort: shipmentV2Text(180),
+  consigneeName: shipmentV2Text(180),
+  lenjType: lenjType.optional().nullable(),
+}).strict();
+
+const shipmentV2GoodsSectionPayloadSchema = z.object({
+  container20Count: optionalNullableNonNegativeInteger,
+  container40Count: optionalNullableNonNegativeInteger,
+  goodsRows: z.array(shipmentV2GoodsRowSchema).max(100).optional(),
+}).strict();
+
+const shipmentV2NotesSectionPayloadSchema = z.object({
+  internalNote: shipmentV2Text(4000),
+}).strict();
+
+const shipmentV2EmptySectionPayloadSchema = z.object({}).strict();
+
+export const shipmentV2SectionPayloadSchemas = {
+  base: shipmentV2BaseSectionPayloadSchema,
+  orderRegistration: shipmentV2EmptySectionPayloadSchema,
+  goods: shipmentV2GoodsSectionPayloadSchema,
+  declarationKootaj: shipmentV2EmptySectionPayloadSchema,
+  permits: shipmentV2EmptySectionPayloadSchema,
+  payments: shipmentV2EmptySectionPayloadSchema,
+  banking: shipmentV2EmptySectionPayloadSchema,
+  notes: shipmentV2NotesSectionPayloadSchema,
+};
+
+export const shipmentV2CreateBodySchema = z.object({
+  flowCode: shipmentV2FlowCode,
+  trackingNumber: optionalTrimmedText(120),
+  customerId: requiredId,
+  shipmentTitle: requiredShipmentV2Text("Shipment title"),
+  origin: requiredShipmentV2Text("Origin"),
+  dischargePort: requiredShipmentV2Text("Discharge port"),
+  deliveryPort: requiredShipmentV2Text("Delivery port"),
+  consigneeName: optionalTrimmedText(180),
+  lenjType: lenjType.optional().nullable(),
+  container20Count: optionalNonNegativeNumber,
+  container40Count: optionalNonNegativeNumber,
+  goodsRows: z.array(shipmentV2GoodsRowSchema).max(100).optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.flowCode === "IMPORT_LANJ" && !value.lenjType) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Lenj type is required.",
+      path: ["lenjType"],
+    });
+  }
+});
+
+export const shipmentV2SectionParamsSchema = shipmentParamsSchema.extend({
+  sectionKey: shipmentV2SectionKey,
+});
 
 const shipmentOperationalFieldsBaseSchema = z.object({
   trackingNumber: optionalTrimmedText(120),
