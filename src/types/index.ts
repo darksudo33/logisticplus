@@ -318,6 +318,27 @@ export interface CommercialCardDocument {
   uploadedAt: string;
 }
 
+export type BusinessEntityContactType = "commercial_card" | "malvani";
+
+export interface BusinessEntityContact {
+  id: string;
+  organizationId?: string;
+  entityType: BusinessEntityContactType;
+  entityId: string;
+  contactName: string;
+  roleTitle: string;
+  phoneNumber: string;
+  phoneLabel?: string;
+  note?: string;
+  isPrimary: boolean;
+  sortOrder: number;
+  createdById?: string | null;
+  updatedById?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string | null;
+}
+
 export interface CommercialCard {
   id: string;
   holderName: string;
@@ -329,8 +350,33 @@ export interface CommercialCard {
   responsiblePhone?: string;
   description?: string;
   documents: CommercialCardDocument[];
+  contacts?: BusinessEntityContact[];
+  isArchived?: boolean;
+  archivedAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export type MalvaniActiveStatus = "ACTIVE" | "INACTIVE" | "NEEDS_REVIEW";
+
+export interface MalvaniProfile {
+  id: string;
+  organizationId?: string;
+  displayName: string;
+  captainName: string;
+  lenjName: string;
+  lenjRegistrationNumber: string;
+  lenjType?: string;
+  homePort?: string;
+  activeStatus: MalvaniActiveStatus;
+  note?: string;
+  contacts: BusinessEntityContact[];
+  contactsCount: number;
+  createdById?: string | null;
+  updatedById?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string | null;
 }
 
 export type DailyStatusCustomsRoute = "green" | "yellow" | "red";

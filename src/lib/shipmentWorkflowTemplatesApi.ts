@@ -69,7 +69,6 @@ export const shipmentWorkflowTemplatesApi = {
   get: (id: string) => apiGet<ShipmentWorkflowTemplate>(`/api/shipment-workflow-templates/${encodeURIComponent(id)}`),
   getForShipment: (shipmentId: string) =>
     apiGet<ActiveShipmentWorkflowTemplate>(`/api/shipments/${encodeURIComponent(shipmentId)}/workflow-template`),
-  create: (body: unknown) => apiPost<ShipmentWorkflowTemplate>("/api/shipment-workflow-templates", body),
   update: (id: string, body: unknown) =>
     apiPatch<ShipmentWorkflowTemplate>(`/api/shipment-workflow-templates/${encodeURIComponent(id)}`, body),
   publish: (id: string, body: unknown) =>

@@ -239,7 +239,7 @@ interface MockStore {
   deleteUser: (id: string) => void;
   addDocument: (document: Omit<ShipmentDocument, "id" | "createdAt">) => void;
   deleteDocument: (id: string) => void;
-  addCommercialCard: (card: Omit<CommercialCard, "id" | "createdAt" | "updatedAt">) => void;
+  addCommercialCard: (card: Omit<CommercialCard, "id" | "createdAt" | "updatedAt"> & { id?: string }) => void;
   updateCommercialCard: (id: string, updates: Partial<Omit<CommercialCard, "id" | "createdAt">>) => void;
   deleteCommercialCard: (id: string) => void;
   markNotificationRead: (id: string) => Promise<void>;
@@ -979,7 +979,7 @@ export const useMockStore = create<MockStore>((set) => ({
     const now = new Date().toISOString();
     const newCard: CommercialCard = {
       ...card,
-      id: `cc${Date.now()}`,
+      id: card.id || `cc${Date.now()}`,
       createdAt: now,
       updatedAt: now,
     };
@@ -993,7 +993,11 @@ export const useMockStore = create<MockStore>((set) => ({
     ),
   })),
   deleteCommercialCard: (id) => set((state) => ({
-    commercialCards: state.commercialCards.filter((card) => card.id !== id),
+    commercialCards: state.commercialCards.map((card) =>
+      card.id === id
+        ? { ...card, isArchived: true, archivedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+        : card
+    ),
   })),
   markNotificationRead: async (id) => {
     const previousNotifications = useMockStore.getState().notifications;

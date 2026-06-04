@@ -8,6 +8,7 @@ import {
   rolePermissions,
   tenantPermissionDescriptions,
 } from "./seed-production-core.ts";
+import { PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS } from "../src/shared/shipment-workflow-template-presets.js";
 import {
   resolveDocumentStorageConfig,
   validateObjectStorageConfig,
@@ -68,6 +69,8 @@ async function verifySchema(client: any) {
     "documents",
     "change_logs",
     "audit_logs",
+    "shipment_workflow_templates",
+    "shipment_type_workflow_templates",
   ];
   for (const table of requiredTables) {
     await requireCount(
@@ -120,6 +123,40 @@ async function verifyCatalog(client: any) {
     }
   }
 
+  for (const mapping of PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS) {
+    await requireCount(
+      client,
+      `SELECT COUNT(*)::int AS count
+       FROM shipment_workflow_templates
+       WHERE id = $1
+         AND code = $2
+         AND is_system = TRUE
+         AND is_active = TRUE
+         AND organization_id IS NULL
+         AND archived_at IS NULL`,
+      [mapping.templateId, mapping.workflowTemplateCode],
+      `Missing workflow template: ${mapping.workflowTemplateCode}`
+    );
+    await requireCount(
+      client,
+      `SELECT COUNT(*)::int AS count
+       FROM shipment_type_workflow_templates
+       WHERE organization_id IS NULL
+         AND shipment_type_code = $1
+         AND workflow_template_id = $2
+         AND workflow_template_code = $3
+         AND workflow_template_version = $4
+         AND archived_at IS NULL`,
+      [
+        mapping.shipmentTypeCode,
+        mapping.templateId,
+        mapping.workflowTemplateCode,
+        mapping.workflowTemplateVersion,
+      ],
+      `Missing workflow template mapping: ${mapping.shipmentTypeCode}`
+    );
+  }
+
   const platformRoleGrants = await countQuery(
     client,
     `SELECT COUNT(*)::int AS count
@@ -133,6 +170,7 @@ async function verifyCatalog(client: any) {
     plans: pricingPlans.length,
     permissions: Object.keys(tenantPermissionDescriptions).length + 1,
     roles: Object.keys(rolePermissions).length,
+    workflowTemplates: PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS.length,
   };
 }
 

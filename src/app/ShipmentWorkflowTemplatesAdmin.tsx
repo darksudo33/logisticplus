@@ -86,6 +86,24 @@ function listText(value: unknown[] | undefined) {
   return (value || []).map((item) => String(item)).join("\n");
 }
 
+const directionLabels: Record<string, string> = {
+  import: "واردات",
+  export: "صادرات",
+  transit: "ترانزیت",
+  domestic: "داخلی",
+};
+
+const transportModeLabels: Record<string, string> = {
+  sea: "دریایی",
+  air: "هوایی",
+  land: "زمینی",
+  rail: "ریلی",
+};
+
+function shipmentTypeLabel(types: ShipmentTypeOption[], code?: string | null) {
+  return types.find((type) => type.code === code)?.labelFa || code || "بدون نوع محموله";
+}
+
 function ToggleBox({
   label,
   checked,
@@ -332,27 +350,6 @@ export default function ShipmentWorkflowTemplatesAdmin() {
     }
   };
 
-  const cloneTemplate = async () => {
-    if (!selectedTemplate) return;
-    setSavingKey("clone");
-    try {
-      const updated = await shipmentWorkflowTemplatesApi.create({
-        sourceTemplateId: selectedTemplate.id,
-        titleFa: templateDraft.titleFa.trim() || selectedTemplate.titleFa,
-        titleEn: templateDraft.titleEn.trim() || selectedTemplate.titleEn || "",
-        description: templateDraft.description.trim() || selectedTemplate.description || "",
-        shipmentTypeCode: selectedTypeCode,
-        isActive: true,
-      });
-      updateTemplateState(updated);
-      toast.success("کپی اختصاصی قالب ساخته شد.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "ساخت کپی قالب ناموفق بود.");
-    } finally {
-      setSavingKey(null);
-    }
-  };
-
   const publishTemplate = async () => {
     if (!selectedTemplate) return;
     setSavingKey("publish");
@@ -501,7 +498,7 @@ export default function ShipmentWorkflowTemplatesAdmin() {
                   <select value={selectedTemplate?.id || ""} onChange={(event) => setSelectedTemplateId(event.target.value)} className="h-10 w-full rounded-lg border border-input bg-background px-3 text-xs font-black outline-none focus:ring-2 focus:ring-ring" data-testid="shipment-workflow-template-select">
                     {templates.map((template) => (
                       <option key={template.id} value={template.id}>
-                        {template.titleFa} - v{template.version} {template.organizationId ? "" : "(system)"}
+                        {template.titleFa} - {shipmentTypeLabel(types, template.shipmentTypeHint)} - v{template.version} {template.organizationId ? "" : "(system)"}
                       </option>
                     ))}
                   </select>
@@ -509,8 +506,20 @@ export default function ShipmentWorkflowTemplatesAdmin() {
                 {selectedTemplate ? (
                   <div className="rounded-lg border border-border bg-background p-3">
                     <p className="truncate text-xs font-black text-foreground">{selectedTemplate.code}</p>
+                    <p className="mt-1 truncate text-[11px] font-bold text-muted-foreground">
+                      {shipmentTypeLabel(types, selectedTemplate.shipmentTypeHint)}
+                    </p>
                     <div className="mt-2 flex flex-wrap gap-1">
                       <Badge variant="outline" className="text-[10px] font-black">{selectedTemplate.organizationId ? "اختصاصی شرکت" : "سیستمی"}</Badge>
+                      <Badge variant="outline" className="text-[10px] font-black">
+                        {directionLabels[selectedTemplate.shipmentDirection || ""] || selectedTemplate.shipmentDirection || "بدون جهت"}
+                      </Badge>
+                      <Badge variant="outline" className="text-[10px] font-black">
+                        {transportModeLabels[selectedTemplate.transportMode || ""] || selectedTemplate.transportMode || "بدون روش حمل"}
+                      </Badge>
+                      <Badge variant="outline" className={cn("text-[10px] font-black", selectedTemplate.isActive ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700" : "border-muted-foreground/30 text-muted-foreground")}>
+                        {selectedTemplate.isActive ? "فعال" : "غیرفعال"}
+                      </Badge>
                       <Badge variant="outline" className="text-[10px] font-black">نسخه {selectedTemplate.version}</Badge>
                       <Badge variant="outline" className="text-[10px] font-black">{stepCount(selectedTemplate)} مرحله</Badge>
                     </div>
@@ -541,10 +550,6 @@ export default function ShipmentWorkflowTemplatesAdmin() {
                   <Button type="button" className="h-9 rounded-lg text-xs font-black" onClick={() => void saveTemplate()} disabled={savingKey === "template" || !selectedTemplate || !templateDraft.titleFa.trim()}>
                     {savingKey === "template" ? <Loader2 className="ml-1 h-4 w-4 animate-spin" /> : <Save className="ml-1 h-4 w-4" />}
                     ذخیره قالب
-                  </Button>
-                  <Button type="button" variant="outline" className="h-9 rounded-lg text-xs font-black" onClick={() => void cloneTemplate()} disabled={savingKey === "clone" || !selectedTemplate}>
-                    <Plus className="ml-1 h-4 w-4" />
-                    کپی اختصاصی
                   </Button>
                 </div>
               </CardContent>

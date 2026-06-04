@@ -393,6 +393,98 @@ export const organizationMembersQuerySchema = z.object({
   includeInactive: queryBoolean(false),
 });
 
+const normalizeBusinessPhoneInput = (value) => {
+  const singleValue = firstQueryValue(value);
+  if (singleValue === undefined || singleValue === null) return singleValue;
+  const persianDigits = "۰۱۲۳۴۵۶۷۸۹";
+  const arabicDigits = "٠١٢٣٤٥٦٧٨٩";
+  const normalizedDigits = String(singleValue)
+    .replace(/[۰-۹٠-٩]/g, (digit) => {
+      const persianIndex = persianDigits.indexOf(digit);
+      if (persianIndex >= 0) return String(persianIndex);
+      const arabicIndex = arabicDigits.indexOf(digit);
+      return arabicIndex >= 0 ? String(arabicIndex) : digit;
+    })
+    .trim()
+    .replace(/^00/, "+")
+    .replace(/[()\s\-._]/g, "");
+  return normalizedDigits;
+};
+
+const businessPhone = z.preprocess(
+  normalizeBusinessPhoneInput,
+  z
+    .string()
+    .min(6, "Phone number is too short.")
+    .max(21, "Phone number is too long.")
+    .regex(/^\+?[0-9]{6,20}$/, "Phone number format is not valid.")
+);
+const malvaniActiveStatus = z.enum(["ACTIVE", "INACTIVE", "NEEDS_REVIEW"]);
+const businessEntityContactType = z.enum(["commercial_card", "malvani"]);
+
+export const malvaniProfileParamsSchema = z.object({
+  id: requiredId,
+});
+
+export const malvaniProfileCreateBodySchema = z.object({
+  displayName: z.string().trim().min(1, "Display name is required.").max(180),
+  captainName: z.string().trim().min(1, "Captain name is required.").max(180),
+  lenjName: z.string().trim().min(1, "Lenj name is required.").max(180),
+  lenjRegistrationNumber: z.string().trim().min(1, "Lenj registration number is required.").max(120),
+  lenjType: optionalNullableTrimmedText(120),
+  homePort: optionalNullableTrimmedText(120),
+  activeStatus: malvaniActiveStatus.default("ACTIVE"),
+  note: optionalTrimmedText(2000),
+}).strict();
+
+export const malvaniProfileUpdateBodySchema = z.object({
+  displayName: optionalTrimmedText(180),
+  captainName: optionalTrimmedText(180),
+  lenjName: optionalTrimmedText(180),
+  lenjRegistrationNumber: optionalTrimmedText(120),
+  lenjType: optionalNullableTrimmedText(120),
+  homePort: optionalNullableTrimmedText(120),
+  activeStatus: malvaniActiveStatus.optional(),
+  note: optionalTrimmedText(2000),
+}).strict().refine(
+  (value) => Object.values(value).some((item) => item !== undefined),
+  { message: "At least one Malvani field is required." }
+);
+
+export const businessEntityContactsQuerySchema = z.object({
+  entityType: z.preprocess(firstQueryValue, businessEntityContactType),
+  entityId: z.preprocess(firstQueryValue, requiredId),
+}).strict();
+
+export const businessEntityContactParamsSchema = z.object({
+  id: requiredId,
+});
+
+export const businessEntityContactCreateBodySchema = z.object({
+  entityType: businessEntityContactType,
+  entityId: requiredId,
+  contactName: z.string().trim().min(1, "Contact name is required.").max(180),
+  roleTitle: z.string().trim().min(1, "Role/title is required.").max(180),
+  phoneNumber: businessPhone,
+  phoneLabel: optionalNullableTrimmedText(80),
+  note: optionalNullableTrimmedText(1000),
+  isPrimary: z.boolean().optional().default(false),
+  sortOrder: optionalNullableNonNegativeInteger,
+}).strict();
+
+export const businessEntityContactUpdateBodySchema = z.object({
+  contactName: optionalTrimmedText(180),
+  roleTitle: optionalTrimmedText(180),
+  phoneNumber: businessPhone.optional(),
+  phoneLabel: optionalNullableTrimmedText(80),
+  note: optionalNullableTrimmedText(1000),
+  isPrimary: z.boolean().optional(),
+  sortOrder: optionalNullableNonNegativeInteger,
+}).strict().refine(
+  (value) => Object.values(value).some((item) => item !== undefined),
+  { message: "At least one contact field is required." }
+);
+
 export const dailyStatusListQuerySchema = z.object({
   q: z.preprocess(firstQueryValue, optionalTrimmedText(160)),
   shipmentId: z.preprocess(firstQueryValue, optionalId),

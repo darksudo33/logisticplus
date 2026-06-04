@@ -2,13 +2,20 @@ import { expect, test } from "@playwright/test";
 import pg from "pg";
 import {
   USER_PASSWORD,
+  apiContext,
   disposeContexts,
   expectForbidden,
+  expectPublicTrackingPayloadIsSafe,
   expectUnavailable,
   loginApi,
+  loginViaUi,
   readOk,
   uniqueEmail,
 } from "./helpers";
+import {
+  PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS,
+  PREDEFINED_WORKFLOW_TEMPLATE_BY_SHIPMENT_TYPE,
+} from "../../src/shared/shipment-workflow-template-presets.js";
 
 const { Client } = pg;
 type DbClient = InstanceType<typeof Client>;
@@ -18,18 +25,39 @@ const shipmentId = "s1";
 let client: DbClient;
 let seedOrganizationId = "org1";
 
+const runtimeSelectionTypes = [
+  "IMPORT_LENJ",
+  "IMPORT_SEA_CONTAINER",
+  "IMPORT_AIR_CARGO",
+  "IMPORT_LAND_TRUCK",
+  "EXPORT_SEA_CONTAINER",
+];
+
 async function cleanupWorkflowTemplateTestData() {
-  await client.query("DELETE FROM shipment_workflow_instances WHERE shipment_id = $1", [shipmentId]);
-  await client.query("DELETE FROM shipment_type_workflow_templates WHERE organization_id = $1", [seedOrganizationId]);
   await client.query(
-    "DELETE FROM shipment_workflow_templates WHERE organization_id = $1 AND code = 'IR_IMPORT_CUSTOMS_V1'",
+    `DELETE FROM shipment_workflow_instances
+     WHERE shipment_id IN (
+       SELECT id
+       FROM shipments
+       WHERE organization_id = $1
+         AND shipment_code LIKE 'WF-TPL-%'
+     )`,
     [seedOrganizationId]
   );
+  await client.query("DELETE FROM shipment_workflow_instances WHERE shipment_id = $1", [shipmentId]);
+  await client.query(
+    `DELETE FROM shipments
+     WHERE organization_id = $1
+       AND shipment_code LIKE 'WF-TPL-%'`,
+    [seedOrganizationId]
+  );
+  await client.query("DELETE FROM shipment_type_workflow_templates WHERE organization_id = $1", [seedOrganizationId]);
+  await client.query("DELETE FROM shipment_workflow_templates WHERE organization_id = $1", [seedOrganizationId]);
 }
 
 async function createOperationsUser(owner: Awaited<ReturnType<typeof loginApi>>) {
   const email = uniqueEmail("e2e-workflow-template-ops");
-  await readOk(
+  const data = await readOk<any>(
     await owner.post("/api/users", {
       data: {
         name: "E2E Workflow Template Operations",
@@ -39,7 +67,7 @@ async function createOperationsUser(owner: Awaited<ReturnType<typeof loginApi>>)
       },
     })
   );
-  return { email };
+  return { id: data.id, email };
 }
 
 async function createTenantOwner(owner: Awaited<ReturnType<typeof loginApi>>) {
@@ -64,6 +92,26 @@ function allTemplateSteps(template: any) {
   return (template.phases || []).flatMap((phase: any) => phase.steps || []);
 }
 
+async function createShipmentForType(owner: Awaited<ReturnType<typeof loginApi>>, typeCode: string) {
+  const template = PREDEFINED_WORKFLOW_TEMPLATE_BY_SHIPMENT_TYPE.get(typeCode);
+  expect(template, `Missing test workflow template metadata for ${typeCode}`).toBeTruthy();
+  return readOk<any>(
+    await owner.post("/api/shipments", {
+      data: {
+        trackingNumber: `WF-TPL-${typeCode}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        customerName: `Workflow Template ${typeCode}`,
+        origin: template!.shipmentDirection === "export" ? "Tehran" : "Dubai",
+        destination: template!.shipmentDirection === "export" ? "Dubai" : "Tehran",
+        status: "PENDING",
+        shipmentTypeCode: typeCode,
+        shipmentDirection: template!.shipmentDirection,
+        transportMode: template!.transportMode,
+        estimatedDelivery: "2026-06-10",
+      },
+    })
+  );
+}
+
 test.describe.serial("shipment workflow templates", () => {
   test.beforeAll(async () => {
     client = new Client({ connectionString: testDatabaseUrl });
@@ -83,51 +131,123 @@ test.describe.serial("shipment workflow templates", () => {
     await client.end();
   });
 
-  test("versions tenant workflow templates without rewriting started shipment snapshots", async () => {
+  test("lists all predefined templates and global shipment type mappings", async () => {
+    const owner = await loginApi();
+    try {
+      const templates = await readOk<any[]>(await owner.get("/api/shipment-workflow-templates"));
+      const codes = templates.map((template) => template.code);
+      expect(codes).toEqual(expect.arrayContaining(
+        PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS.map((mapping) => mapping.workflowTemplateCode)
+      ));
+      expect(templates.filter((template) => template.isSystem).length).toBeGreaterThanOrEqual(10);
+
+      for (const mapping of PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS) {
+        const matchingTemplates = await readOk<any[]>(
+          await owner.get(`/api/shipment-workflow-templates?shipmentTypeCode=${mapping.shipmentTypeCode}`)
+        );
+        expect(matchingTemplates.some((template) => template.code === mapping.workflowTemplateCode)).toBe(true);
+
+        const dbMapping = await client.query(
+          `SELECT workflow_template_id, workflow_template_code, workflow_template_version
+           FROM shipment_type_workflow_templates
+           WHERE organization_id IS NULL
+             AND shipment_type_code = $1
+             AND archived_at IS NULL
+           LIMIT 1`,
+          [mapping.shipmentTypeCode]
+        );
+        expect(dbMapping.rows[0]).toEqual(expect.objectContaining({
+          workflow_template_id: mapping.templateId,
+          workflow_template_code: mapping.workflowTemplateCode,
+        }));
+        expect(Number(dbMapping.rows[0].workflow_template_version)).toBe(mapping.workflowTemplateVersion);
+      }
+
+      const createAttempt = await owner.post("/api/shipment-workflow-templates", {
+        data: {
+          titleFa: "E2E disabled blank workflow",
+          titleEn: "E2E disabled blank workflow",
+          shipmentTypeCode: "IMPORT_SEA_CONTAINER",
+        },
+      });
+      expect(createAttempt.status(), await createAttempt.text()).toBe(403);
+      const payload = await createAttempt.json();
+      expect(payload.error?.code).toBe("WORKFLOW_TEMPLATE_CREATE_DISABLED");
+    } finally {
+      await disposeContexts(owner);
+    }
+  });
+
+  test("new shipments use their mapped workflow templates and reject spoofed tenant ids", async () => {
+    const owner = await loginApi();
+    try {
+      const spoofed = await owner.post("/api/shipments", {
+        data: {
+          trackingNumber: `WF-TPL-SPOOF-${Date.now()}`,
+          customerName: "Spoofed workflow template shipment",
+          origin: "Dubai",
+          destination: "Tehran",
+          shipmentTypeCode: "IMPORT_AIR_CARGO",
+          organizationId: "other-org",
+          orgId: "other-org",
+          companyId: "other-company",
+          tenantId: "other-tenant",
+        },
+      });
+      expect(spoofed.status(), await spoofed.text()).toBe(403);
+      expect((await spoofed.json()).error?.code).toBe("TENANT_SCOPE_CONFLICT");
+
+      for (const typeCode of runtimeSelectionTypes) {
+        const mapping = PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS.find((item) => item.shipmentTypeCode === typeCode);
+        expect(mapping).toBeTruthy();
+        const shipment = await createShipmentForType(owner, typeCode);
+        expect(shipment.shipmentTypeCode).toBe(typeCode);
+        const dbShipment = await client.query(
+          "SELECT organization_id, shipment_type_code FROM shipments WHERE id = $1 LIMIT 1",
+          [shipment.id]
+        );
+        expect(dbShipment.rows[0]).toEqual(expect.objectContaining({
+          organization_id: seedOrganizationId,
+          shipment_type_code: typeCode,
+        }));
+
+        const active = await readOk<any>(await owner.get(`/api/shipments/${shipment.id}/workflow-template`));
+        expect(active.template.code).toBe(mapping!.workflowTemplateCode);
+        const progress = await readOk<any>(await owner.post(`/api/shipments/${shipment.id}/progress/start`));
+        expect(progress.workflow.workflowTemplateCode).toBe(mapping!.workflowTemplateCode);
+        expect(progress.workflow.workflowTemplateId).toBe(mapping!.templateId);
+        expect(progress.definition.titleFa).toBeTruthy();
+      }
+    } finally {
+      await disposeContexts(owner);
+    }
+  });
+
+  test("admin edits existing seeded templates while started snapshots stay unchanged", async () => {
     const owner = await loginApi();
     const contexts = [owner];
     try {
       const auditStartedAt = new Date(Date.now() - 1000).toISOString();
       const templates = await readOk<any[]>(await owner.get("/api/shipment-workflow-templates"));
-      const systemTemplate = templates.find((template) => template.id === "swt-ir-import-customs-v1");
-      expect(systemTemplate?.isSystem).toBe(true);
-      expect(allTemplateSteps(systemTemplate).length).toBeGreaterThan(60);
+      const legacyTemplate = templates.find((template) => template.id === "swt-ir-import-customs-v1");
+      const seaTemplate = templates.find((template) => template.code === "WF_IMPORT_SEA_CONTAINER_V1");
+      expect(legacyTemplate?.isSystem).toBe(true);
+      expect(seaTemplate?.isSystem).toBe(true);
+      expect(allTemplateSteps(seaTemplate).length).toBeGreaterThanOrEqual(8);
 
-      const started = await readOk<any>(await owner.post(`/api/shipments/${shipmentId}/progress/start`));
-      expect(started.workflow.workflowTemplateId).toBe(systemTemplate.id);
-      expect(started.workflow.workflowTemplateVersion).toBe(1);
-
-      const initialSnapshot = await client.query(
-        `SELECT workflow_template_id, workflow_template_version, workflow_definition_snapshot_json
-         FROM shipment_workflow_instances
-         WHERE shipment_id = $1
-         ORDER BY started_at DESC
-         LIMIT 1`,
-        [shipmentId]
-      );
-      expect(initialSnapshot.rows[0].workflow_template_id).toBe(systemTemplate.id);
-      expect(Number(initialSnapshot.rows[0].workflow_template_version)).toBe(1);
-      expect(JSON.stringify(initialSnapshot.rows[0].workflow_definition_snapshot_json)).not.toContain("E2E_TEMPLATE_STEP");
-
-      const clone = await readOk<any>(
-        await owner.post("/api/shipment-workflow-templates", {
-          data: {
-            sourceTemplateId: systemTemplate.id,
-            titleFa: "E2E controlled workflow template",
-            titleEn: "E2E controlled workflow template",
-            description: "Playwright clone used to verify controlled workflow versioning.",
-            shipmentTypeCode: "IMPORT_SEA_CONTAINER",
-          },
+      await readOk(
+        await owner.patch("/api/shipment-types/IMPORT_SEA_CONTAINER/workflow-template", {
+          data: { templateId: legacyTemplate.id },
         })
       );
-      expect(clone.organizationId).toBe(seedOrganizationId);
-      expect(clone.isSystem).toBe(false);
+      const started = await readOk<any>(await owner.post(`/api/shipments/${shipmentId}/progress/start`));
+      expect(started.workflow.workflowTemplateCode).toBe("IR_IMPORT_CUSTOMS_V1");
 
       const operationsInfo = await createOperationsUser(owner);
       const operations = await loginApi(operationsInfo.email, USER_PASSWORD);
       contexts.push(operations);
       await expectForbidden(
-        await operations.patch(`/api/shipment-workflow-templates/${clone.id}`, {
+        await operations.patch(`/api/shipment-workflow-templates/${seaTemplate.id}`, {
           data: { titleFa: "Forbidden workflow template edit" },
         })
       );
@@ -135,96 +255,82 @@ test.describe.serial("shipment workflow templates", () => {
       const tenantInfo = await createTenantOwner(owner);
       const tenant = await loginApi(tenantInfo.tenantEmail, USER_PASSWORD);
       contexts.push(tenant);
-      await expectUnavailable(await tenant.get(`/api/shipment-workflow-templates/${clone.id}`));
 
-      const phaseKey = clone.phases[0].phaseKey;
+      const edited = await readOk<any>(
+        await owner.patch(`/api/shipment-workflow-templates/${seaTemplate.id}`, {
+          data: {
+            titleFa: "E2E edited sea container workflow",
+            titleEn: "E2E edited sea container workflow",
+            description: "Existing seeded template customized by Playwright.",
+          },
+        })
+      );
+      expect(edited.organizationId).toBe(seedOrganizationId);
+      expect(edited.isSystem).toBe(false);
+      await expectUnavailable(await tenant.get(`/api/shipment-workflow-templates/${edited.id}`));
+
+      const phaseKey = edited.phases[0].phaseKey;
       const stepKey = `E2E_TEMPLATE_STEP_${Date.now()}`;
       const withAddedStep = await readOk<any>(
-        await owner.post(`/api/shipment-workflow-templates/${clone.id}/steps`, {
+        await owner.post(`/api/shipment-workflow-templates/${edited.id}/steps`, {
           data: {
             phaseKey,
             stepKey,
-            labelFa: "E2E template step",
-            labelEn: "E2E template step",
-            publicLabel: "Safe public E2E step",
-            sortOrder: 2,
+            labelFa: "E2E optional workflow step",
+            labelEn: "E2E optional workflow step",
+            publicLabel: "Safe public E2E optional step",
+            sortOrder: 99,
             isRequired: false,
             isVisible: true,
             isCustomerVisible: false,
             roleSuggestion: "OPERATIONS",
             expectedDocuments: ["commercial_invoice"],
-            expectedFormFields: ["kootajNumber"],
+            expectedFormFields: ["cotageNumber"],
             taskPolicy: { mode: "suggested" },
           },
         })
       );
       const addedStep = allTemplateSteps(withAddedStep).find((step: any) => step.stepKey === stepKey);
       expect(addedStep?.isRequired).toBe(false);
-      expect(addedStep?.expectedDocuments).toContain("commercial_invoice");
 
       const withEditedStep = await readOk<any>(
-        await owner.patch(`/api/shipment-workflow-templates/${clone.id}/steps/${addedStep.id}`, {
+        await owner.patch(`/api/shipment-workflow-templates/${withAddedStep.id}/steps/${addedStep.id}`, {
           data: {
             labelFa: "E2E renamed workflow step",
             publicLabel: "Renamed safe public step",
-            sortOrder: 3,
             isVisible: false,
             isCustomerVisible: false,
             isRequired: false,
           },
         })
       );
-      const editedStep = allTemplateSteps(withEditedStep).find((step: any) => step.stepKey === stepKey);
-      expect(editedStep?.labelFa).toBe("E2E renamed workflow step");
-      expect(editedStep?.isVisible).toBe(false);
+      expect(allTemplateSteps(withEditedStep).find((step: any) => step.stepKey === stepKey)?.isVisible).toBe(false);
 
-      const archiveStepKey = `E2E_ARCHIVE_${Date.now()}`;
-      const withArchiveCandidate = await readOk<any>(
-        await owner.post(`/api/shipment-workflow-templates/${clone.id}/steps`, {
-          data: {
-            phaseKey,
-            stepKey: archiveStepKey,
-            labelFa: "E2E archive candidate",
-            labelEn: "E2E archive candidate",
-            isRequired: false,
-            sortOrder: 4,
-          },
-        })
-      );
-      const archiveCandidate = allTemplateSteps(withArchiveCandidate).find((step: any) => step.stepKey === archiveStepKey);
       const afterArchive = await readOk<any>(
-        await owner.delete(`/api/shipment-workflow-templates/${clone.id}/steps/${archiveCandidate.id}`)
+        await owner.delete(`/api/shipment-workflow-templates/${withEditedStep.id}/steps/${addedStep.id}`)
       );
-      expect(allTemplateSteps(afterArchive).some((step: any) => step.stepKey === archiveStepKey)).toBe(false);
+      expect(allTemplateSteps(afterArchive).some((step: any) => step.stepKey === stepKey)).toBe(false);
 
       const published = await readOk<any>(
-        await owner.patch(`/api/shipment-workflow-templates/${clone.id}/publish`, {
+        await owner.patch(`/api/shipment-workflow-templates/${afterArchive.id}/publish`, {
           data: {
             shipmentTypeCode: "IMPORT_SEA_CONTAINER",
-            titleFa: "E2E published workflow template",
-            titleEn: "E2E published workflow template",
+            titleFa: "E2E published sea container workflow",
+            titleEn: "E2E published sea container workflow",
           },
         })
       );
-      expect(published.id).not.toBe(clone.id);
-      expect(published.version).toBeGreaterThan(clone.version);
+      expect(published.id).not.toBe(afterArchive.id);
+      expect(published.version).toBeGreaterThan(afterArchive.version);
       expect(published.isActive).toBe(true);
-
-      const mapping = await readOk<any>(
-        await owner.patch("/api/shipment-types/IMPORT_LAND_TRUCK/workflow-template", {
-          data: { templateId: published.id },
-        })
-      );
-      expect(mapping.shipmentTypeCode).toBe("IMPORT_LAND_TRUCK");
-      expect(mapping.template.id).toBe(published.id);
 
       const activeForShipment = await readOk<any>(await owner.get(`/api/shipments/${shipmentId}/workflow-template`));
       expect(activeForShipment.template.id).toBe(published.id);
 
       const progressAfterPublish = await readOk<any>(await owner.get(`/api/shipments/${shipmentId}/progress`));
-      expect(progressAfterPublish.workflow.workflowTemplateId).toBe(systemTemplate.id);
-      expect(progressAfterPublish.workflow.workflowTemplateVersion).toBe(1);
-      expect(progressAfterPublish.steps.some((step: any) => step.code === stepKey)).toBe(false);
+      expect(progressAfterPublish.workflow.workflowTemplateCode).toBe("IR_IMPORT_CUSTOMS_V1");
+      expect(progressAfterPublish.workflow.workflowTemplateId).toBe(legacyTemplate.id);
+      expect(JSON.stringify(progressAfterPublish.definition)).not.toContain(stepKey);
 
       const auditActions = await client.query(
         `SELECT event_type
@@ -235,14 +341,60 @@ test.describe.serial("shipment workflow templates", () => {
         [seedOrganizationId, auditStartedAt]
       );
       const events = auditActions.rows.map((row) => row.event_type);
-      expect(events).toContain("shipment_workflow_template.create");
+      expect(events).toContain("shipment_workflow_template.update");
       expect(events).toContain("shipment_workflow_template.step_add");
       expect(events).toContain("shipment_workflow_template.step_update");
       expect(events).toContain("shipment_workflow_template.step_archive");
       expect(events).toContain("shipment_workflow_template.publish");
       expect(events).toContain("shipment_workflow_template.mapping_update");
+      expect(events).not.toContain("shipment_workflow_template.create");
     } finally {
       await disposeContexts(...contexts);
+    }
+  });
+
+  test("normal users cannot open the workflow template editor UI", async ({ page }) => {
+    const owner = await loginApi();
+    const operationsInfo = await createOperationsUser(owner);
+    await disposeContexts(owner);
+
+    await loginViaUi(page, operationsInfo.email, USER_PASSWORD);
+    await page.goto("/admin/workflow-templates");
+    await expect(page.getByTestId("shipment-workflow-templates-admin-page")).toHaveCount(0);
+  });
+
+  test("public tracking does not leak workflow template internals", async () => {
+    const owner = await loginApi();
+    const publicContext = await apiContext();
+    try {
+      const shipment = await createShipmentForType(owner, "EXPORT_SEA_CONTAINER");
+      const progress = await readOk<any>(await owner.post(`/api/shipments/${shipment.id}/progress/start`));
+      await readOk(
+        await owner.patch(`/api/shipments/${shipment.id}/progress/current`, {
+          data: {
+            stepCode: "001",
+            status: "completed",
+            internalNote: "Private workflow template internals should stay hidden.",
+            publicNote: "Customer-safe export workflow update.",
+            publicVisible: true,
+          },
+        })
+      );
+      const access = await readOk<{ token: string }>(
+        await owner.post(`/api/shipments/${shipment.id}/customer-access/generate`)
+      );
+      const payload = await readOk<any>(
+        await publicContext.get(`/api/public/track/${encodeURIComponent(access.token)}`)
+      );
+      expectPublicTrackingPayloadIsSafe(payload);
+      const serialized = JSON.stringify(payload);
+      expect(serialized).not.toContain(progress.workflow.workflowTemplateId);
+      expect(serialized).not.toContain(progress.workflow.workflowTemplateCode);
+      expect(serialized).not.toContain("WF_EXPORT_SEA_CONTAINER_V1");
+      expect(serialized.toLowerCase()).not.toContain("workflowtemplate");
+      expect(serialized.toLowerCase()).not.toContain("taskpolicy");
+    } finally {
+      await disposeContexts(owner, publicContext);
     }
   });
 });

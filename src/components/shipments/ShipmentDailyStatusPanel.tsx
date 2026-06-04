@@ -313,6 +313,10 @@ function commercialCardLabel(row: DailyStatusBoardRow | null, commercialCards: C
   return value;
 }
 
+function selectableCommercialCards(commercialCards: CommercialCard[]) {
+  return commercialCards.filter((card) => !card.isArchived && !card.archivedAt);
+}
+
 function readonlyValue(row: DailyStatusBoardRow, key: string) {
   switch (key) {
     case "shipmentCode":
@@ -775,7 +779,7 @@ export function ShipmentDailyStatusPanel({
           </SelectTrigger>
           <SelectContent className="bg-card text-foreground" dir="rtl">
             <SelectItem value={NONE_VALUE}>بدون کارت</SelectItem>
-            {commercialCards.map((card) => (
+            {selectableCommercialCards(commercialCards).map((card) => (
               <SelectItem key={card.id} value={card.id}>
                 {card.holderName || card.cardNumber || card.id} {card.cardNumber ? `(${card.cardNumber})` : ""}
               </SelectItem>

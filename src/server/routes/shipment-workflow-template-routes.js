@@ -2,7 +2,6 @@ import {
   shipmentParamsSchema,
   shipmentTypeWorkflowTemplateBodySchema,
   shipmentTypeWorkflowTemplateParamsSchema,
-  shipmentWorkflowTemplateCreateBodySchema,
   shipmentWorkflowTemplateListQuerySchema,
   shipmentWorkflowTemplateParamsSchema,
   shipmentWorkflowTemplatePublishBodySchema,
@@ -15,7 +14,6 @@ import { parseRequestValue } from "../validation.js";
 import {
   addShipmentWorkflowTemplateStep,
   archiveShipmentWorkflowTemplateStep,
-  createShipmentWorkflowTemplate,
   getActiveShipmentWorkflowTemplateForShipment,
   getShipmentWorkflowTemplate,
   listShipmentWorkflowTemplates,
@@ -143,24 +141,12 @@ export function registerShipmentWorkflowTemplateRoutes(
     try {
       const tenantRequest = await requireWorkflowTemplateManager({ req, res, requireAuthenticatedTenantUser, requirePermission });
       if (!tenantRequest) return;
-      const body = parseRequestValue(res, shipmentWorkflowTemplateCreateBodySchema, req.body || {});
-      if (!body) return;
-      const data = await createShipmentWorkflowTemplate(pool, {
-        organizationId: tenantRequest.organizationId,
-        actorUserId: tenantRequest.user.id,
-        body,
-      });
-      await auditLog({
-        actorUserId: tenantRequest.user.id,
-        organizationId: tenantRequest.organizationId,
-        action: "shipment_workflow_template.create",
-        entityType: "shipment_workflow_template",
-        entityId: data.id,
-        summary: "Shipment workflow template was created.",
-        after: { id: data.id, code: data.code, version: data.version, titleFa: data.titleFa },
-        requestContext: requestContext(req),
-      });
-      res.status(201).json({ ok: true, data });
+      return createApiError(
+        res,
+        403,
+        "WORKFLOW_TEMPLATE_CREATE_DISABLED",
+        "Creating brand-new workflow templates is disabled in V1. Customize one of the seeded shipment-type templates instead."
+      );
     } catch (error) {
       handleRouteError(res, error, "SHIPMENT_WORKFLOW_TEMPLATE_CREATE_FAILED", "Could not create shipment workflow template.");
     }

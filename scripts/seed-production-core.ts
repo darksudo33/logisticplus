@@ -22,6 +22,7 @@ export const tenantPermissionDescriptions = {
   "shipments.update": "Update shipments",
   "shipments.archive": "Archive shipments",
   "shipment_forms.manage": "Manage shipment type form templates",
+  "shipment_workflows.manage": "Manage shipment workflow templates",
   "shipment_steps.update": "Update shipment steps",
   "customers.view": "View customers",
   "customers.create": "Create customers",
@@ -57,6 +58,7 @@ const ceoOnlyTenantPermissions = new Set([
   "chat.media.view",
   "chat.media.delete",
   "shipment_forms.manage",
+  "shipment_workflows.manage",
 ]);
 const companyOperationalPermissions = [
   "archive.view",

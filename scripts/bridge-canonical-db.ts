@@ -9,10 +9,9 @@ import pg from "pg";
 import { pricingPlans } from "../src/lib/pricing.ts";
 import { DEFAULT_SHIPMENT_FORM_TEMPLATE_DEFINITIONS } from "../src/shared/shipment-form-fields.js";
 import {
-  IR_IMPORT_CUSTOMS_PHASES,
-  IR_IMPORT_CUSTOMS_STEPS,
-  IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
-} from "../src/shared/iran-import-customs-workflow.js";
+  PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS,
+  SEEDED_SHIPMENT_WORKFLOW_TEMPLATES,
+} from "../src/shared/shipment-workflow-template-presets.js";
 import { DEFAULT_SMS_TEMPLATES } from "../src/server/sms-templates.js";
 
 const { Client } = pg;
@@ -304,20 +303,20 @@ function shipmentTemplateFieldId(typeCode: string, fieldKey: string) {
   return `${shipmentTemplateId(typeCode)}-field-${fieldKey}`;
 }
 
-const importWorkflowShipmentTypes = [
-  "IMPORT_LENJ",
-  "IMPORT_SEA_CONTAINER",
-  "IMPORT_SEA_BULK",
-  "IMPORT_AIR_CARGO",
-  "IMPORT_LAND_TRUCK",
-];
-
-function workflowTemplatePhaseId(phaseKey: string) {
-  return `swt-ir-import-customs-v1-phase-${phaseKey}`;
+function stableSlug(value: string) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
-function workflowTemplateStepId(stepKey: string) {
-  return `swts-ir-import-customs-v1-${stepKey.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+function workflowTemplatePhaseId(templateId: string, phaseKey: string) {
+  return `${templateId}-phase-${stableSlug(phaseKey)}`.slice(0, 180);
+}
+
+function workflowTemplateStepId(templateId: string, stepKey: string) {
+  return `${templateId}-step-${stableSlug(stepKey)}`.slice(0, 180);
+}
+
+function workflowTypeMappingId(typeCode: string) {
+  return `stwt-global-${stableSlug(typeCode)}`.slice(0, 180);
 }
 
 async function seedShipmentFormTemplates(client: Client) {
@@ -425,107 +424,151 @@ async function seedShipmentFormTemplates(client: Client) {
   }
 }
 
-async function seedShipmentWorkflowTemplates(client: Client) {
-  await client.query(
-    `INSERT INTO shipment_workflow_templates (
-       id, organization_id, code, shipment_direction, transport_mode, shipment_type_hint,
-       title_fa, title_en, description, is_system, is_active, version, published_at,
-       created_at, updated_at
-     )
-     VALUES (
-       'swt-ir-import-customs-v1', NULL, $1, 'import', 'sea', 'IMPORT_SEA_CONTAINER',
-       'گردش کار واردات و ترخیص ایران', 'Iran import customs workflow',
-       'Controlled system workflow for Iran import customs operations.', TRUE, TRUE, 1, NOW(),
-       NOW(), NOW()
-     )
-     ON CONFLICT (id) DO UPDATE SET
-       code = EXCLUDED.code,
-       shipment_direction = EXCLUDED.shipment_direction,
-       transport_mode = EXCLUDED.transport_mode,
-       shipment_type_hint = EXCLUDED.shipment_type_hint,
-       title_fa = EXCLUDED.title_fa,
-       title_en = EXCLUDED.title_en,
-       description = EXCLUDED.description,
-       is_system = TRUE,
-       is_active = TRUE,
-       archived_at = NULL,
-       updated_at = NOW()`,
-    [IR_IMPORT_CUSTOMS_WORKFLOW_KEY]
-  );
-
-  for (const [index, phase] of IR_IMPORT_CUSTOMS_PHASES.entries()) {
+async function seedPredefinedShipmentWorkflowTemplates(client: Client) {
+  for (const template of SEEDED_SHIPMENT_WORKFLOW_TEMPLATES) {
     await client.query(
-      `INSERT INTO shipment_workflow_template_phases (
-         id, template_id, phase_key, label_fa, label_en, sort_order, is_visible, created_at, updated_at
+      `INSERT INTO shipment_workflow_templates (
+         id, organization_id, code, shipment_direction, transport_mode, shipment_type_hint,
+         title_fa, title_en, description, is_system, is_active, version, published_at,
+         created_at, updated_at
        )
-       VALUES ($1, 'swt-ir-import-customs-v1', $2, $3, $4, $5, TRUE, NOW(), NOW())
-       ON CONFLICT (template_id, phase_key) DO UPDATE SET
-         label_fa = EXCLUDED.label_fa,
-         label_en = EXCLUDED.label_en,
-         sort_order = EXCLUDED.sort_order,
-         is_visible = TRUE,
-         updated_at = NOW()`,
-      [
-        workflowTemplatePhaseId(phase.id),
-        phase.id,
-        phase.labelFa,
-        phase.labelEn,
-        index + 1,
-      ]
-    );
-  }
-
-  for (const step of IR_IMPORT_CUSTOMS_STEPS) {
-    await client.query(
-      `INSERT INTO shipment_workflow_template_steps (
-         id, template_id, phase_id, phase_key, step_key, label_fa, label_en, public_label,
-         sort_order, is_required, is_visible, is_customer_visible, role_suggestion,
-         expected_duration_hours, task_policy_json, expected_documents_json,
-         expected_form_fields_json, next_step_rules_json, visibility_rule_json, created_at, updated_at
-       )
-       VALUES (
-         $1, 'swt-ir-import-customs-v1', $2, $3, $4, $5, $6, $7,
-         $8, TRUE, TRUE, TRUE, NULL, NULL, '{"mode":"suggested"}'::jsonb, '[]'::jsonb,
-         '[]'::jsonb, '{}'::jsonb, $9::jsonb, NOW(), NOW()
-       )
+       VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, TRUE, TRUE, $9, NOW(), NOW(), NOW())
        ON CONFLICT (id) DO UPDATE SET
-         phase_id = EXCLUDED.phase_id,
-         phase_key = EXCLUDED.phase_key,
-         label_fa = EXCLUDED.label_fa,
-         label_en = EXCLUDED.label_en,
-         public_label = EXCLUDED.public_label,
-         sort_order = EXCLUDED.sort_order,
-         is_required = TRUE,
-         is_visible = TRUE,
-         is_customer_visible = TRUE,
-         task_policy_json = EXCLUDED.task_policy_json,
-         expected_documents_json = EXCLUDED.expected_documents_json,
-         expected_form_fields_json = EXCLUDED.expected_form_fields_json,
-         next_step_rules_json = EXCLUDED.next_step_rules_json,
-         visibility_rule_json = EXCLUDED.visibility_rule_json,
+         code = EXCLUDED.code,
+         shipment_direction = EXCLUDED.shipment_direction,
+         transport_mode = EXCLUDED.transport_mode,
+         shipment_type_hint = EXCLUDED.shipment_type_hint,
+         title_fa = EXCLUDED.title_fa,
+         title_en = EXCLUDED.title_en,
+         description = EXCLUDED.description,
+         is_system = TRUE,
+         is_active = TRUE,
          archived_at = NULL,
          updated_at = NOW()`,
       [
-        workflowTemplateStepId(step.code),
-        workflowTemplatePhaseId(step.phaseId),
-        step.phaseId,
-        step.code,
-        step.labelFa,
-        step.labelEn,
-        step.phaseId === "customs_route" ? "پرونده در حال بررسی گمرکی است" : step.labelFa,
-        step.order,
-        JSON.stringify(step.phaseId === "customs_route" ? { type: "iran_customs_route_v1" } : {}),
+        template.id,
+        template.code,
+        template.shipmentDirection,
+        template.transportMode,
+        template.shipmentTypeHint,
+        template.titleFa,
+        template.titleEn,
+        template.description,
+        template.version,
       ]
     );
+
+    for (const phase of template.phases) {
+      await client.query(
+        `INSERT INTO shipment_workflow_template_phases (
+           id, template_id, phase_key, label_fa, label_en, sort_order, is_visible, created_at, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, TRUE, NOW(), NOW())
+         ON CONFLICT (template_id, phase_key) DO UPDATE SET
+           label_fa = EXCLUDED.label_fa,
+           label_en = EXCLUDED.label_en,
+           sort_order = EXCLUDED.sort_order,
+           is_visible = TRUE,
+           updated_at = NOW()`,
+        [
+          workflowTemplatePhaseId(template.id, phase.phaseKey),
+          template.id,
+          phase.phaseKey,
+          phase.labelFa,
+          phase.labelEn,
+          phase.sortOrder,
+        ]
+      );
+    }
+
+    for (const step of template.steps) {
+      await client.query(
+        `INSERT INTO shipment_workflow_template_steps (
+           id, template_id, phase_id, phase_key, step_key, label_fa, label_en, public_label,
+           sort_order, is_required, is_visible, is_customer_visible, role_suggestion,
+           expected_duration_hours, task_policy_json, expected_documents_json,
+           expected_form_fields_json, next_step_rules_json, visibility_rule_json, created_at, updated_at
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8,
+           $9, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb,
+           $17::jsonb, $18::jsonb, $19::jsonb, NOW(), NOW()
+         )
+         ON CONFLICT (template_id, step_key) WHERE archived_at IS NULL DO UPDATE SET
+           phase_id = EXCLUDED.phase_id,
+           phase_key = EXCLUDED.phase_key,
+           label_fa = EXCLUDED.label_fa,
+           label_en = EXCLUDED.label_en,
+           public_label = EXCLUDED.public_label,
+           sort_order = EXCLUDED.sort_order,
+           is_required = EXCLUDED.is_required,
+           is_visible = EXCLUDED.is_visible,
+           is_customer_visible = EXCLUDED.is_customer_visible,
+           role_suggestion = EXCLUDED.role_suggestion,
+           expected_duration_hours = EXCLUDED.expected_duration_hours,
+           task_policy_json = EXCLUDED.task_policy_json,
+           expected_documents_json = EXCLUDED.expected_documents_json,
+           expected_form_fields_json = EXCLUDED.expected_form_fields_json,
+           next_step_rules_json = EXCLUDED.next_step_rules_json,
+           visibility_rule_json = EXCLUDED.visibility_rule_json,
+           archived_at = NULL,
+           updated_at = NOW()`,
+        [
+          workflowTemplateStepId(template.id, step.stepKey),
+          template.id,
+          workflowTemplatePhaseId(template.id, step.phaseKey),
+          step.phaseKey,
+          step.stepKey,
+          step.labelFa,
+          step.labelEn,
+          step.publicLabel || step.labelFa,
+          step.sortOrder,
+          step.isRequired !== false,
+          step.isVisible !== false,
+          step.isCustomerVisible !== false,
+          step.roleSuggestion || null,
+          step.expectedDurationHours,
+          JSON.stringify(step.taskPolicy || { mode: "suggested" }),
+          JSON.stringify(step.expectedDocuments || []),
+          JSON.stringify(step.expectedFormFields || []),
+          JSON.stringify(step.nextStepRules || {}),
+          JSON.stringify(step.visibilityRule || {}),
+        ]
+      );
+    }
   }
 
-  for (const typeCode of importWorkflowShipmentTypes) {
+  for (const mapping of PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS) {
+    await client.query(
+      `UPDATE shipment_type_workflow_templates
+       SET workflow_template_id = $2,
+           workflow_template_code = $3,
+           workflow_template_version = $4,
+           archived_at = NULL,
+           updated_at = NOW()
+       WHERE organization_id IS NULL
+         AND shipment_type_code = $1
+         AND archived_at IS NULL`,
+      [
+        mapping.shipmentTypeCode,
+        mapping.templateId,
+        mapping.workflowTemplateCode,
+        mapping.workflowTemplateVersion,
+      ]
+    );
     await client.query(
       `INSERT INTO shipment_type_workflow_templates (
          id, organization_id, shipment_type_code, workflow_template_id,
          workflow_template_code, workflow_template_version, created_at, updated_at
        )
-       VALUES ($1, NULL, $2, 'swt-ir-import-customs-v1', $3, 1, NOW(), NOW())
+       SELECT $1, NULL, $2, $3, $4, $5, NOW(), NOW()
+       WHERE NOT EXISTS (
+         SELECT 1
+         FROM shipment_type_workflow_templates
+         WHERE organization_id IS NULL
+           AND shipment_type_code = $2
+           AND archived_at IS NULL
+       )
        ON CONFLICT (id) DO UPDATE SET
          workflow_template_id = EXCLUDED.workflow_template_id,
          workflow_template_code = EXCLUDED.workflow_template_code,
@@ -533,12 +576,18 @@ async function seedShipmentWorkflowTemplates(client: Client) {
          archived_at = NULL,
          updated_at = NOW()`,
       [
-        `stwt-global-${typeCode}`,
-        typeCode,
-        IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
+        workflowTypeMappingId(mapping.shipmentTypeCode),
+        mapping.shipmentTypeCode,
+        mapping.templateId,
+        mapping.workflowTemplateCode,
+        mapping.workflowTemplateVersion,
       ]
     );
   }
+}
+
+async function seedShipmentWorkflowTemplates(client: Client) {
+  await seedPredefinedShipmentWorkflowTemplates(client);
 }
 
 async function bridgeUsers(client: Client, users: any[]) {

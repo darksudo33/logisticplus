@@ -114,6 +114,10 @@ function commercialCardLabel(row: DailyStatusBoardRow | null, commercialCards: C
   return value;
 }
 
+function selectableCommercialCards(commercialCards: CommercialCard[]) {
+  return commercialCards.filter((card) => !card.isArchived && !card.archivedAt);
+}
+
 function editableProfileFields(fields: IranImportProfileField[]) {
   return fields.filter((field) => field.editable && (field.patchKey || field.customFieldKey));
 }
@@ -397,7 +401,7 @@ function renderEditor({
         </SelectTrigger>
         <SelectContent className="bg-card text-foreground" dir="rtl">
           <SelectItem value={NONE_VALUE}>بدون کارت</SelectItem>
-          {commercialCards.map((card) => (
+          {selectableCommercialCards(commercialCards).map((card) => (
             <SelectItem key={card.id} value={card.id}>
               {card.holderName || card.cardNumber} {card.cardNumber ? `(${card.cardNumber})` : ""}
             </SelectItem>

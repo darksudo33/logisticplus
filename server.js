@@ -218,6 +218,7 @@ import { registerNotificationRoutes } from "./src/server/routes/notification-rou
 import { registerPublicTrackingRoutes } from "./src/server/routes/public-tracking-routes.js";
 import { registerShipmentProgressRoutes } from "./src/server/routes/shipment-progress-routes.js";
 import { registerDailyStatusRoutes } from "./src/server/routes/daily-status-routes.js";
+import { registerBusinessEntityRoutes } from "./src/server/routes/business-entity-routes.js";
 import { registerShipmentFormTemplateRoutes } from "./src/server/routes/shipment-form-template-routes.js";
 import { registerShipmentWorkflowTemplateRoutes } from "./src/server/routes/shipment-workflow-template-routes.js";
 import { registerUserRoutes } from "./src/server/routes/user-routes.js";
@@ -2098,6 +2099,14 @@ async function startServer() {
     requestContext,
     requireAuthenticatedTenantUser,
     requirePermission,
+  });
+
+  registerBusinessEntityRoutes(app, {
+    auditLog,
+    createApiError,
+    pool,
+    requestContext,
+    requireAuthenticatedTenantUser,
   });
 
   registerShipmentFormTemplateRoutes(app, {
