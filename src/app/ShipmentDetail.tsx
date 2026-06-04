@@ -20,6 +20,8 @@ import {
   FileText,
   Download,
   Trash2,
+  Archive,
+  ArchiveRestore,
   FileIcon,
   Plus,
   Search,
@@ -34,6 +36,7 @@ import {
   Copy,
   Link2,
   RefreshCw,
+  Save,
   ShieldCheck,
   EyeOff,
   Loader2,
@@ -61,7 +64,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { shipmentApi } from "@/src/lib/shipmentApi";
+import { shipmentApi, type PostExitStatus } from "@/src/lib/shipmentApi";
 import {
   DocumentType,
   Shipment,
@@ -82,6 +85,18 @@ import { ShipmentDailyStatusPanel } from "@/src/components/shipments/ShipmentDai
 import { ShipmentProgressBlockerDialog } from "@/src/components/shipments/ShipmentProgressBlockerDialog";
 import { ShipmentProgressUpdateDialog } from "@/src/components/shipments/ShipmentProgressUpdateDialog";
 import { TaskAssignDialog } from "@/src/components/tasks/TaskAssignDialog";
+
+const POST_EXIT_STATUS_LABELS: Record<PostExitStatus, string> = {
+  needs_follow_up: "نیاز به پیگیری",
+  in_progress: "در حال پیگیری",
+  settled: "تسویه شده",
+  closed: "بسته شده",
+};
+
+function displayDate(value?: string | null) {
+  if (!value) return "";
+  return String(value).slice(0, 10);
+}
 
 const DocumentView = ({ shipmentId }: { shipmentId: string }) => {
   const documents = useMockStore(state => state.documents);
@@ -1077,6 +1092,7 @@ export default function ShipmentDetail() {
   const loadCurrentUserRecords = useMockStore(state => state.loadCurrentUserRecords);
   const documents = useMockStore(state => state.documents);
   const customers = useMockStore(state => state.customers);
+  const currentUser = useMockStore(state => state.currentUser);
   const shipmentProgress = useAppDataStore(state => id ? state.shipmentProgressById[id] : null);
   const organizationMembers = useAppDataStore(state => state.organizationMembers);
   const refreshShipmentProgress = useAppDataStore(state => state.refreshShipmentProgress);
@@ -1122,6 +1138,20 @@ export default function ShipmentDetail() {
   }>({});
   const [isWorkflowMembersLoading, setIsWorkflowMembersLoading] = useState(false);
   const [workflowMembersError, setWorkflowMembersError] = useState("");
+  const [exitedArchiveDialogOpen, setExitedArchiveDialogOpen] = useState(false);
+  const [exitedArchiveReason, setExitedArchiveReason] = useState("");
+  const [restoreExitedDialogOpen, setRestoreExitedDialogOpen] = useState(false);
+  const [postExitDraft, setPostExitDraft] = useState<{
+    postExitStatus: PostExitStatus;
+    postExitNote: string;
+    postExitFollowUpAt: string;
+  }>({
+    postExitStatus: "needs_follow_up",
+    postExitNote: "",
+    postExitFollowUpAt: "",
+  });
+  const [isPostExitSaving, setIsPostExitSaving] = useState(false);
+  const [isExitedArchiveSaving, setIsExitedArchiveSaving] = useState(false);
   const [assignForm, setAssignForm] = useState({
     userId: users[0]?.id || "",
     priority: "MEDIUM" as const,
@@ -1188,6 +1218,23 @@ export default function ShipmentDetail() {
     };
   }, [id, storeShipment]);
 
+  React.useEffect(() => {
+    if (!shipment) return;
+    setPostExitDraft({
+      postExitStatus: shipment.postExitStatus || "needs_follow_up",
+      postExitNote: shipment.postExitNote || "",
+      postExitFollowUpAt: displayDate(shipment.postExitFollowUpAt),
+    });
+  }, [shipment?.id, shipment?.postExitStatus, shipment?.postExitNote, shipment?.postExitFollowUpAt]);
+
+  const refreshCurrentShipment = React.useCallback(async () => {
+    if (!id) return null;
+    const updated = await shipmentApi.get(id);
+    setRemoteShipmentResult({ routeId: id, shipment: updated });
+    await loadCurrentUserRecords();
+    return updated;
+  }, [id, loadCurrentUserRecords]);
+
   const visibleShipments = React.useMemo(() => {
     if (!shipment || shipments.some(s => s.id === shipment.id)) return shipments;
     return [shipment, ...shipments];
@@ -1223,6 +1270,61 @@ export default function ShipmentDetail() {
   const progress = getShipmentProgress(shipment, steps);
   const completedSteps = progress.completedSteps;
   const progressPercent = progress.percent;
+  const canArchiveShipments = Boolean(currentUser?.permissions?.includes("shipments.archive"));
+  const canUpdateShipments = Boolean(currentUser?.permissions?.includes("shipments.update"));
+  const canMoveToExitedArchive = canArchiveShipments && !shipment.isExitedArchived && ["CLEARED", "DELIVERED", "CLOSED"].includes(shipment.status);
+
+  const handleMoveToExitedArchive = async () => {
+    setIsExitedArchiveSaving(true);
+    try {
+      const updated = await shipmentApi.moveToExitedArchive(shipment.id, {
+        reason: exitedArchiveReason.trim() || null,
+      });
+      setRemoteShipmentResult({ routeId: shipment.id, shipment: updated });
+      await loadCurrentUserRecords();
+      setExitedArchiveDialogOpen(false);
+      setExitedArchiveReason("");
+      toast.success("محموله به محموله‌های خروج‌شده منتقل شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "انتقال محموله ناموفق بود.");
+    } finally {
+      setIsExitedArchiveSaving(false);
+    }
+  };
+
+  const handleRestoreExitedShipment = async () => {
+    setIsExitedArchiveSaving(true);
+    try {
+      const updated = await shipmentApi.restoreFromExitedArchive(shipment.id);
+      setRemoteShipmentResult({ routeId: shipment.id, shipment: updated });
+      await loadCurrentUserRecords();
+      setRestoreExitedDialogOpen(false);
+      toast.success("محموله به لیست فعال برگشت.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "بازگردانی محموله ناموفق بود.");
+    } finally {
+      setIsExitedArchiveSaving(false);
+    }
+  };
+
+  const handleSavePostExit = async () => {
+    setIsPostExitSaving(true);
+    try {
+      const updated = await shipmentApi.updatePostExit(shipment.id, {
+        postExitStatus: postExitDraft.postExitStatus,
+        postExitNote: postExitDraft.postExitNote || null,
+        postExitFollowUpAt: postExitDraft.postExitFollowUpAt || null,
+      });
+      setRemoteShipmentResult({ routeId: shipment.id, shipment: updated });
+      await loadCurrentUserRecords();
+      await refreshCurrentShipment();
+      toast.success("پیگیری بعد از خروج ذخیره شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ذخیره پیگیری ناموفق بود.");
+    } finally {
+      setIsPostExitSaving(false);
+    }
+  };
 
   const runProgressMutation = async (action: () => Promise<any>, successMessage: string) => {
     setIsProgressLoading(true);
@@ -1476,6 +1578,11 @@ export default function ShipmentDetail() {
               <div className="shrink-0 scale-90 md:scale-100 origin-right">
                 <StatusBadge status={shipment.status} />
               </div>
+              {shipment.isExitedArchived ? (
+                <Badge variant="outline" className="h-7 rounded-full border-amber-500/30 bg-amber-500/10 px-3 text-[11px] font-black text-amber-700" data-testid="shipment-exited-badge">
+                  خروج‌شده
+                </Badge>
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold text-muted-foreground md:gap-3 md:text-xs">
               <span className="flex items-center gap-1 truncate"><UserPlus className="w-3.5 h-3.5" /> {shipment.customerName}</span>
@@ -1608,6 +1715,28 @@ export default function ShipmentDetail() {
             <Edit className="w-4 h-4 ml-2" />
             ویرایش بار
           </Button>
+          {canMoveToExitedArchive ? (
+            <Button
+              variant="outline"
+              className="h-10 rounded-xl border-primary/30 bg-primary/5 px-4 text-xs font-black text-primary"
+              onClick={() => setExitedArchiveDialogOpen(true)}
+              data-testid="shipment-move-to-exited"
+            >
+              <Archive className="ml-2 h-4 w-4" />
+              انتقال به محموله‌های خروج‌شده
+            </Button>
+          ) : null}
+          {shipment.isExitedArchived && canArchiveShipments ? (
+            <Button
+              variant="outline"
+              className="h-10 rounded-xl px-4 text-xs font-black"
+              onClick={() => setRestoreExitedDialogOpen(true)}
+              data-testid="shipment-restore-exited"
+            >
+              <ArchiveRestore className="ml-2 h-4 w-4" />
+              بازگردانی به محموله‌های فعال
+            </Button>
+          ) : null}
         </div>
         </div>
       </div>
@@ -1615,6 +1744,68 @@ export default function ShipmentDetail() {
       <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_20rem] xl:grid-cols-[minmax(0,1fr)_22rem]">
         {/* Left Column - Details */}
         <div className="order-2 min-w-0 space-y-4 md:space-y-6 lg:order-1">
+          {shipment.isExitedArchived ? (
+            <Card className="overflow-hidden rounded-2xl border-amber-500/20 bg-amber-500/5 shadow-sm" data-testid="shipment-post-exit-panel">
+              <CardHeader className="border-b border-amber-500/15 bg-amber-500/10 p-4">
+                <CardTitle className="flex items-center gap-2 text-sm font-black text-foreground">
+                  <Archive className="h-4 w-4 text-amber-700" />
+                  وضعیت پیگیری بعد از خروج
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-4 p-4 md:grid-cols-[12rem_minmax(0,1fr)_12rem_auto] md:items-end">
+                <div>
+                  <Label className="text-[11px] font-black text-muted-foreground">وضعیت پیگیری بعد از خروج</Label>
+                  <select
+                    value={postExitDraft.postExitStatus}
+                    onChange={(event) => setPostExitDraft((current) => ({ ...current, postExitStatus: event.target.value as PostExitStatus }))}
+                    disabled={!canUpdateShipments || isPostExitSaving}
+                    className="mt-1 h-10 w-full rounded-lg border border-border bg-background px-3 text-xs font-bold"
+                  >
+                    {Object.entries(POST_EXIT_STATUS_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <Label className="text-[11px] font-black text-muted-foreground">یادداشت پیگیری</Label>
+                  <Input
+                    value={postExitDraft.postExitNote}
+                    onChange={(event) => setPostExitDraft((current) => ({ ...current, postExitNote: event.target.value }))}
+                    disabled={!canUpdateShipments || isPostExitSaving}
+                    placeholder="یادداشت داخلی پیگیری بعد از خروج"
+                    className="mt-1 h-10 rounded-lg text-xs"
+                    data-testid="shipment-post-exit-note"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[11px] font-black text-muted-foreground">تاریخ پیگیری بعدی</Label>
+                  <Input
+                    type="date"
+                    value={postExitDraft.postExitFollowUpAt}
+                    onChange={(event) => setPostExitDraft((current) => ({ ...current, postExitFollowUpAt: event.target.value }))}
+                    disabled={!canUpdateShipments || isPostExitSaving}
+                    className="mt-1 h-10 rounded-lg text-xs"
+                    data-testid="shipment-post-exit-follow-up-at"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  {canUpdateShipments ? (
+                    <Button type="button" className="h-10 rounded-lg text-xs font-black" onClick={() => void handleSavePostExit()} disabled={isPostExitSaving} data-testid="shipment-post-exit-save">
+                      {isPostExitSaving ? <Loader2 className="ml-1 h-4 w-4 animate-spin" /> : <Save className="ml-1 h-4 w-4" />}
+                      ذخیره
+                    </Button>
+                  ) : null}
+                  {canArchiveShipments ? (
+                    <Button type="button" variant="outline" className="h-10 rounded-lg text-xs font-black" onClick={() => setRestoreExitedDialogOpen(true)} disabled={isExitedArchiveSaving} data-testid="shipment-post-exit-restore">
+                      <ArchiveRestore className="ml-1 h-4 w-4" />
+                      بازگردانی به محموله‌های فعال
+                    </Button>
+                  ) : null}
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+
           <ShipmentChatPanel shipmentId={shipment.id} shipmentCode={shipment.trackingNumber} />
 
           <Card className="overflow-hidden rounded-2xl border-border/70 bg-card shadow-sm" data-testid="shipment-documents-panel">
@@ -1768,6 +1959,63 @@ export default function ShipmentDetail() {
           </Card>
         </aside>
       </div>
+
+      <Dialog open={exitedArchiveDialogOpen} onOpenChange={(open) => {
+        if (!open && !isExitedArchiveSaving) {
+          setExitedArchiveDialogOpen(false);
+          setExitedArchiveReason("");
+        }
+      }}>
+        <DialogContent className="max-w-md text-right" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black">انتقال به محموله‌های خروج‌شده</DialogTitle>
+            <DialogDescription className="text-sm leading-7 text-muted-foreground">
+              این محموله از لیست محموله‌های فعال خارج می‌شود اما حذف نخواهد شد. اطلاعات، اسناد، گفتگوها و سوابق آن برای پیگیری‌های بعد از خروج باقی می‌ماند.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label className="text-xs font-black">دلیل انتقال</Label>
+            <Input
+              value={exitedArchiveReason}
+              onChange={(event) => setExitedArchiveReason(event.target.value)}
+              placeholder="مثلاً: خروج از گمرک و شروع پیگیری تسویه"
+              className="h-10 rounded-lg text-xs"
+              data-testid="shipment-exited-archive-reason"
+            />
+          </div>
+          <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-start">
+            <Button type="button" variant="outline" onClick={() => setExitedArchiveDialogOpen(false)} disabled={isExitedArchiveSaving} data-testid="shipment-exited-archive-cancel">
+              انصراف
+            </Button>
+            <Button type="button" onClick={() => void handleMoveToExitedArchive()} disabled={isExitedArchiveSaving} data-testid="shipment-exited-archive-confirm">
+              {isExitedArchiveSaving ? <Loader2 className="ml-1 h-4 w-4 animate-spin" /> : <Archive className="ml-1 h-4 w-4" />}
+              انتقال
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={restoreExitedDialogOpen} onOpenChange={(open) => {
+        if (!open && !isExitedArchiveSaving) setRestoreExitedDialogOpen(false);
+      }}>
+        <DialogContent className="max-w-md text-right" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black">بازگردانی به محموله‌های فعال</DialogTitle>
+            <DialogDescription className="text-sm leading-7 text-muted-foreground">
+              این محموله دوباره در لیست محموله‌های فعال و صفحات عملیاتی نمایش داده می‌شود.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-start">
+            <Button type="button" variant="outline" onClick={() => setRestoreExitedDialogOpen(false)} disabled={isExitedArchiveSaving} data-testid="shipment-exited-restore-cancel">
+              انصراف
+            </Button>
+            <Button type="button" onClick={() => void handleRestoreExitedShipment()} disabled={isExitedArchiveSaving} data-testid="shipment-exited-restore-confirm">
+              {isExitedArchiveSaving ? <Loader2 className="ml-1 h-4 w-4 animate-spin" /> : <ArchiveRestore className="ml-1 h-4 w-4" />}
+              بازگردانی
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ShipmentProgressUpdateDialog
         open={progressDialogOpen}

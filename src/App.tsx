@@ -25,6 +25,7 @@ const SignupPage = lazy(() => import("./app/SaasSignup").then((module) => ({ def
 const SignupPendingPage = lazy(() => import("./app/SaasSignup").then((module) => ({ default: module.SignupPendingPage })));
 const Dashboard = lazy(() => import("./app/Dashboard"));
 const Shipments = lazy(() => import("./app/Shipments"));
+const ExitedShipments = lazy(() => import("./app/ExitedShipments"));
 const DailyStatus = lazy(() => import("./app/DailyStatus"));
 const Customers = lazy(() => import("./app/Customers"));
 const Tasks = lazy(() => import("./app/Tasks"));
@@ -98,6 +99,7 @@ function AppRoutes() {
         <Route path="/daily-status" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><DailyStatus /></ProtectedAppLayout>} />
         <Route path="/kootaj-board" element={<Navigate to="/daily-status" replace />} />
         <Route path="/shipments" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><Shipments /></ProtectedAppLayout>} />
+        <Route path="/shipments/exited" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ExitedShipments /></ProtectedAppLayout>} />
         <Route path="/shipments/:id" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentDetail /></ProtectedAppLayout>} />
         <Route path="/shipments/:id/edit" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentEdit /></ProtectedAppLayout>} />
         <Route path="/changelog" element={<ProtectedAppLayout anyOf={["changes.view"]}><ChangeLog /></ProtectedAppLayout>} />

@@ -29,6 +29,8 @@ const MATCHED_FIELD_LABELS: Record<string, string> = {
   status: "وضعیت",
   recipientSender: "فرستنده / گیرنده",
   notes: "یادداشت",
+  cotageNumber: "شماره کوتاژ",
+  declarationReference: "اظهارنامه",
   phone: "تلفن",
   email: "ایمیل",
   address: "آدرس",
@@ -126,6 +128,11 @@ export function SearchResults({
                       <Badge variant="secondary" className="h-5 rounded-full px-2 text-[9px]">
                         {SEARCH_RESULT_LABELS[result.type]}
                       </Badge>
+                      {result.badges?.map((badge) => (
+                        <Badge key={badge} variant="outline" className="h-5 rounded-full border-amber-500/30 bg-amber-500/10 px-2 text-[9px] text-amber-700">
+                          {badge}
+                        </Badge>
+                      ))}
                     </span>
                     {result.subtitle ? <span className="block truncate text-[11px] font-bold text-muted-foreground">{result.subtitle}</span> : null}
                     {result.description ? <span className="block line-clamp-2 text-[10px] leading-relaxed text-muted-foreground">{result.description}</span> : null}

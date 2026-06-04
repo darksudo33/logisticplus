@@ -37,6 +37,7 @@ const sidebarItems = [
   { icon: IdCard, label: "کارت‌های بازرگانی", path: "/commercial-cards" },
   { icon: ClipboardList, label: "وضعیت روزانه", path: "/daily-status" },
   { icon: Ship, label: "محموله‌ها", path: "/shipments" },
+  { icon: Archive, label: "محموله‌های خروج‌شده", path: "/shipments/exited", permission: "shipments.view_all" },
   { icon: SettingsIcon, label: "فرم‌های نوع محموله", path: "/admin/shipment-form-templates", permission: "shipment_forms.manage" },
   { icon: GitBranch, label: "قالب گردش کار محموله‌ها", path: "/admin/workflow-templates", permission: "shipment_workflows.manage" },
   ...(QUOTATIONS_UI_ENABLED ? [{ icon: Calculator, label: "مدیریت کوتاژ", path: "/quotations" }] : []),

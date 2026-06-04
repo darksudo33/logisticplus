@@ -66,8 +66,19 @@ export interface Shipment {
   actualDelivery?: string;
   freeTimeDays: number;
   isArchived?: boolean;
+  isExitedArchived?: boolean;
+  exitedArchivedAt?: string | null;
+  exitedArchivedById?: string | null;
+  exitedArchiveReason?: string;
+  postExitStatus?: "needs_follow_up" | "in_progress" | "settled" | "closed";
+  postExitNote?: string;
+  postExitFollowUpAt?: string | null;
+  postExitClosedAt?: string | null;
+  postExitClosedById?: string | null;
   customerAccessEnabled?: boolean;
   hasCustomerAccess?: boolean;
+  assignedManagerId?: string;
+  updatedAt?: string;
 }
 
 export interface ShipmentStep {

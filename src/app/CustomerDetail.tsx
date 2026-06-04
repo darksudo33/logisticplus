@@ -74,7 +74,7 @@ export default function CustomerDetail() {
     );
   }
 
-  const activeShipments = customerShipments.filter(s => s.status !== "DELIVERED" && s.status !== "CLOSED" && !s.isArchived);
+  const activeShipments = customerShipments.filter(s => s.status !== "DELIVERED" && s.status !== "CLOSED" && !s.isArchived && !s.isExitedArchived);
   const canViewPrivateDetails = currentUser?.role === "CEO" && customer.canViewPrivateDetails !== false;
 
   return (

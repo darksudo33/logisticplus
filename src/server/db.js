@@ -165,6 +165,7 @@ function toSearchResult(row, normalizedQuery) {
     subtitle: row.subtitle || "",
     description: row.description || "",
     url: row.url || "/dashboard",
+    badges: Array.isArray(row.badges) ? row.badges.filter(Boolean) : [],
     matchedFields: collectMatchedFields(row.field_values, normalizedQuery),
     updatedAt: new Date(row.updated_at || Date.now()).toISOString(),
   };
@@ -234,6 +235,8 @@ async function searchShipments({ user, normalizedQuery, fetchLimit }) {
     status: normalizedSearchSql("s.status"),
     recipientSender: normalizedSearchSql("CONCAT_WS(' ', s.legacy_data->>'recipient', s.legacy_data->>'sender')"),
     notes: normalizedSearchSql("s.legacy_data->>'notes'"),
+    cotageNumber: normalizedSearchSql("k.cotage_number"),
+    declarationReference: normalizedSearchSql("k.declaration_reference"),
   };
   const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
   const limitParam = `$${values.push(fetchLimit)}`;
@@ -243,10 +246,15 @@ async function searchShipments({ user, normalizedQuery, fetchLimit }) {
        'shipment' AS result_type,
        COALESCE(NULLIF(s.shipment_code, ''), s.id) AS title,
        CONCAT_WS(' · ', NULLIF(COALESCE(s.customer_name, c.company_name, c.contact_name), ''), NULLIF(CONCAT_WS(' → ', s.origin, s.destination), '')) AS subtitle,
-       CONCAT('وضعیت فعلی: ', COALESCE(NULLIF(s.status, ''), 'ثبت نشده')) AS description,
+       CONCAT(
+         CASE WHEN s.exited_archived_at IS NOT NULL THEN 'خروج‌شده · ' ELSE '' END,
+         'وضعیت فعلی: ',
+         COALESCE(NULLIF(s.status, ''), 'ثبت نشده')
+       ) AS description,
        CONCAT('/shipments/', s.id) AS url,
        COALESCE(s.updated_at, s.created_at) AS updated_at,
        ${matcher.score} AS search_score,
+       CASE WHEN s.exited_archived_at IS NOT NULL THEN ARRAY['خروج‌شده']::text[] ELSE ARRAY[]::text[] END AS badges,
        jsonb_build_object(
          'shipmentNumber', s.shipment_code,
          'trackingNumber', s.legacy_data->>'trackingNumber',
@@ -256,11 +264,16 @@ async function searchShipments({ user, normalizedQuery, fetchLimit }) {
          'destination', s.destination,
          'status', s.status,
          'recipientSender', CONCAT_WS(' ', s.legacy_data->>'recipient', s.legacy_data->>'sender'),
-         'notes', s.legacy_data->>'notes'
+         'notes', s.legacy_data->>'notes',
+         'cotageNumber', k.cotage_number,
+         'declarationReference', k.declaration_reference
        ) AS field_values,
        COUNT(*) OVER()::int AS total_count
      FROM shipments s
      LEFT JOIN customers c ON c.id = s.customer_id
+     LEFT JOIN shipment_kootaj_details k
+       ON k.shipment_id = s.id
+      AND k.organization_id = s.organization_id
      WHERE (s.organization_id = ${organizationParam} OR (s.organization_id IS NULL AND s.owner_user_id = ${ownerParam}))
        AND s.archived_at IS NULL
        AND ${matcher.condition}
@@ -738,6 +751,7 @@ async function listBootstrapShipments(ownerUserId, organizationId) {
       `SELECT *
        FROM shipments
        WHERE owner_user_id = $1
+         AND exited_archived_at IS NULL
        ORDER BY updated_at DESC, created_at DESC`,
       [ownerUserId]
     );
@@ -746,8 +760,11 @@ async function listBootstrapShipments(ownerUserId, organizationId) {
   const result = await pool.query(
     `SELECT *
      FROM shipments
-     WHERE organization_id = $1
-        OR (owner_user_id = $2 AND organization_id IS NULL)
+     WHERE exited_archived_at IS NULL
+       AND (
+         organization_id = $1
+         OR (owner_user_id = $2 AND organization_id IS NULL)
+       )
      ORDER BY updated_at DESC, created_at DESC`,
     [organizationId, ownerUserId]
   );
@@ -1463,6 +1480,15 @@ function toUiShipment(row) {
     actualDelivery: row.actual_delivery_at || legacy.actualDelivery || undefined,
     freeTimeDays: Number.isFinite(freeTimeDays) ? freeTimeDays : 0,
     isArchived: Boolean(row.archived_at || legacy.isArchived),
+    isExitedArchived: Boolean(row.exited_archived_at),
+    exitedArchivedAt: row.exited_archived_at || null,
+    exitedArchivedById: row.exited_archived_by_id || null,
+    exitedArchiveReason: row.exited_archive_reason || "",
+    postExitStatus: row.post_exit_status || "needs_follow_up",
+    postExitNote: row.post_exit_note || "",
+    postExitFollowUpAt: row.post_exit_follow_up_at || null,
+    postExitClosedAt: row.post_exit_closed_at || null,
+    postExitClosedById: row.post_exit_closed_by_id || null,
     customerAccessEnabled: Boolean(row.customer_access_enabled || legacy.customerAccessEnabled),
     hasCustomerAccess: Boolean(
       row.customer_access_enabled ||
@@ -1472,6 +1498,7 @@ function toUiShipment(row) {
     ),
     priority: row.priority || legacy.priority || "normal",
     assignedManagerId: row.assigned_manager_id || legacy.assignedManagerId || undefined,
+    updatedAt: row.updated_at || legacy.updatedAt || row.created_at || new Date().toISOString(),
     notes: legacy.notes || "",
     containerCount: legacy.containerCount ?? undefined,
     grossWeightKg: legacy.grossWeightKg ?? legacy.weight ?? undefined,
@@ -1742,6 +1769,254 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
       error.code = "SHIPMENT_CODE_EXISTS";
       error.message = "Shipment tracking number already exists.";
     }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+const POST_EXIT_STATUS_VALUES = new Set(["needs_follow_up", "in_progress", "settled", "closed"]);
+
+function normalizePostExitStatus(value, fallback = "needs_follow_up") {
+  const normalized = String(value || fallback || "needs_follow_up").trim();
+  return POST_EXIT_STATUS_VALUES.has(normalized) ? normalized : "needs_follow_up";
+}
+
+function toExitedShipment(row) {
+  if (!row) return null;
+  return {
+    ...toUiShipment(row),
+    customerDisplayName: row.customer_display_name || row.customer_name || "",
+    cotageNumber: row.cotage_number || "",
+    declarationReference: row.declaration_reference || "",
+    exitDate: row.exit_date || "",
+    releaseStatus: row.release_status || "",
+    customsStatus: row.customs_status || "",
+    assignedManagerName: row.assigned_manager_name || "",
+    lastUpdatedAt: row.shipment_updated_at || row.updated_at || row.exited_archived_at || row.created_at,
+  };
+}
+
+export async function listExitedShipmentRecords({
+  organizationId,
+  filters = {},
+} = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listExitedShipmentRecords");
+  const values = [scopedOrganizationId];
+  const conditions = [
+    "s.organization_id = $1",
+    "s.archived_at IS NULL",
+    "s.exited_archived_at IS NOT NULL",
+  ];
+  const addValue = (value) => `$${values.push(value)}`;
+
+  if (filters.customerId) conditions.push(`s.customer_id = ${addValue(filters.customerId)}`);
+  if (filters.shipmentTypeCode) conditions.push(`s.shipment_type_code = ${addValue(filters.shipmentTypeCode)}`);
+  if (filters.postExitStatus) conditions.push(`s.post_exit_status = ${addValue(filters.postExitStatus)}`);
+  if (filters.assignedManagerId) conditions.push(`s.assigned_manager_id = ${addValue(filters.assignedManagerId)}`);
+  if (filters.exitDateFrom) conditions.push(`k.exit_date >= ${addValue(filters.exitDateFrom)}`);
+  if (filters.exitDateTo) conditions.push(`k.exit_date <= ${addValue(filters.exitDateTo)}`);
+  if (filters.q) {
+    const queryParam = addValue(`%${filters.q}%`);
+    conditions.push(`(
+      s.shipment_code ILIKE ${queryParam}
+      OR s.customer_name ILIKE ${queryParam}
+      OR c.company_name ILIKE ${queryParam}
+      OR c.contact_name ILIKE ${queryParam}
+      OR k.cotage_number ILIKE ${queryParam}
+      OR k.declaration_reference ILIKE ${queryParam}
+      OR k.bill_of_lading_number ILIKE ${queryParam}
+      OR k.order_registration_number ILIKE ${queryParam}
+    )`);
+  }
+
+  const limitParam = addValue(filters.limit || 100);
+  const result = await pool.query(
+    `SELECT
+       s.*,
+       s.updated_at AS shipment_updated_at,
+       COALESCE(c.company_name, c.contact_name, s.customer_name, s.legacy_data->>'customerName') AS customer_display_name,
+       k.cotage_number,
+       k.declaration_reference,
+       k.exit_date,
+       k.release_status,
+       k.customs_status,
+       assigned_manager.name AS assigned_manager_name
+     FROM shipments s
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
+     LEFT JOIN shipment_kootaj_details k
+       ON k.shipment_id = s.id
+      AND k.organization_id = s.organization_id
+     LEFT JOIN app_users assigned_manager
+       ON assigned_manager.id = s.assigned_manager_id
+      AND assigned_manager.organization_id = s.organization_id
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY COALESCE(s.post_exit_follow_up_at, s.exited_archived_at, s.updated_at) DESC, s.updated_at DESC
+     LIMIT ${limitParam}`,
+    values
+  );
+  return result.rows.map(toExitedShipment);
+}
+
+export async function moveShipmentToExitedArchive(id, { organizationId, actorUserId, reason } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "moveShipmentToExitedArchive");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query(
+      `SELECT *
+       FROM shipments
+       WHERE id = $1
+         AND organization_id = $2
+         AND archived_at IS NULL
+       FOR UPDATE`,
+      [id, scopedOrganizationId]
+    );
+    const before = beforeResult.rows[0];
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const result = await client.query(
+      `UPDATE shipments
+       SET exited_archived_at = COALESCE(exited_archived_at, NOW()),
+           exited_archived_by_id = COALESCE(exited_archived_by_id, $3),
+           exited_archive_reason = $4,
+           post_exit_status = COALESCE(post_exit_status, 'needs_follow_up'),
+           updated_at = NOW()
+       WHERE id = $1
+         AND organization_id = $2
+       RETURNING *`,
+      [id, scopedOrganizationId, actorUserId || null, reason || null]
+    );
+    await client.query("COMMIT");
+    return {
+      before: toUiShipment(before),
+      after: toUiShipment(result.rows[0]),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function restoreShipmentFromExitedArchive(id, { organizationId, actorUserId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "restoreShipmentFromExitedArchive");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query(
+      `SELECT *
+       FROM shipments
+       WHERE id = $1
+         AND organization_id = $2
+         AND archived_at IS NULL
+       FOR UPDATE`,
+      [id, scopedOrganizationId]
+    );
+    const before = beforeResult.rows[0];
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const result = await client.query(
+      `UPDATE shipments
+       SET exited_archived_at = NULL,
+           updated_at = NOW()
+       WHERE id = $1
+         AND organization_id = $2
+       RETURNING *`,
+      [id, scopedOrganizationId]
+    );
+    await client.query("COMMIT");
+    return {
+      before: toUiShipment(before),
+      after: toUiShipment(result.rows[0]),
+      actorUserId,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateShipmentPostExitFields(id, updates = {}, { organizationId, actorUserId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateShipmentPostExitFields");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query(
+      `SELECT *
+       FROM shipments
+       WHERE id = $1
+         AND organization_id = $2
+         AND archived_at IS NULL
+       FOR UPDATE`,
+      [id, scopedOrganizationId]
+    );
+    const before = beforeResult.rows[0];
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    if (!before.exited_archived_at) {
+      const error = new Error("Shipment is not in exited archive.");
+      error.statusCode = 409;
+      error.code = "SHIPMENT_NOT_EXITED_ARCHIVED";
+      throw error;
+    }
+
+    const nextStatus = updates.postExitStatus !== undefined
+      ? normalizePostExitStatus(updates.postExitStatus, before.post_exit_status)
+      : before.post_exit_status || "needs_follow_up";
+    const nextNote = updates.postExitNote !== undefined ? updates.postExitNote || null : before.post_exit_note;
+    const nextFollowUpAt = updates.postExitFollowUpAt !== undefined ? updates.postExitFollowUpAt || null : before.post_exit_follow_up_at;
+    const closeNow = nextStatus === "closed" && before.post_exit_status !== "closed";
+    const reopen = nextStatus !== "closed";
+
+    const result = await client.query(
+      `UPDATE shipments
+       SET post_exit_status = $3,
+           post_exit_note = $4,
+           post_exit_follow_up_at = $5,
+           post_exit_closed_at = CASE
+             WHEN $3 = 'closed' THEN COALESCE(post_exit_closed_at, NOW())
+             WHEN $6::boolean THEN NULL
+             ELSE post_exit_closed_at
+           END,
+           post_exit_closed_by_id = CASE
+             WHEN $3 = 'closed' AND $7::boolean THEN $8
+             WHEN $6::boolean THEN NULL
+             ELSE post_exit_closed_by_id
+           END,
+           updated_at = NOW()
+       WHERE id = $1
+         AND organization_id = $2
+       RETURNING *`,
+      [
+        id,
+        scopedOrganizationId,
+        nextStatus,
+        nextNote,
+        nextFollowUpAt,
+        reopen,
+        closeNow,
+        actorUserId || null,
+      ]
+    );
+    await client.query("COMMIT");
+    return {
+      before: toUiShipment(before),
+      after: toUiShipment(result.rows[0]),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
@@ -4018,8 +4293,8 @@ export async function getDashboardData(user, permissions = []) {
   ] = await Promise.all([
     pool.query(
       `SELECT
-         COUNT(*) FILTER (WHERE archived_at IS NULL AND status NOT IN ('DELIVERED', 'CLOSED'))::int AS active_shipments,
-         COUNT(*) FILTER (WHERE archived_at IS NULL AND status = 'CUSTOMS')::int AS customs_shipments
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND exited_archived_at IS NULL AND status NOT IN ('DELIVERED', 'CLOSED'))::int AS active_shipments,
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND exited_archived_at IS NULL AND status = 'CUSTOMS')::int AS customs_shipments
        FROM shipments
        WHERE ($1::text IS NULL OR organization_id = $1)`,
       [orgParam]
@@ -4027,7 +4302,9 @@ export async function getDashboardData(user, permissions = []) {
     pool.query(
       `SELECT id, shipment_code, customer_name, status, destination, estimated_delivery_at, legacy_data
        FROM shipments
-       WHERE archived_at IS NULL AND ($1::text IS NULL OR organization_id = $1)
+       WHERE archived_at IS NULL
+         AND exited_archived_at IS NULL
+         AND ($1::text IS NULL OR organization_id = $1)
        ORDER BY updated_at DESC, created_at DESC
        LIMIT 8`,
       [orgParam]
@@ -4036,6 +4313,7 @@ export async function getDashboardData(user, permissions = []) {
       `SELECT id, shipment_code, customer_name, status, destination, estimated_delivery_at, legacy_data
        FROM shipments
        WHERE archived_at IS NULL
+         AND exited_archived_at IS NULL
          AND status IN ('ARRIVED', 'CUSTOMS', 'IN_TRANSIT')
          AND ($1::text IS NULL OR organization_id = $1)
        ORDER BY updated_at DESC, created_at DESC
@@ -6966,6 +7244,7 @@ export async function listCustomerRelated(id, type, { organizationId, includePri
     const result = await pool.query(
       `SELECT * FROM shipments
        WHERE customer_id = $1 AND organization_id = $2
+         AND exited_archived_at IS NULL
        ORDER BY updated_at DESC`,
       [id, scopedOrganizationId]
     );

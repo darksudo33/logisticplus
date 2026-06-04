@@ -253,6 +253,38 @@ export const shipmentOperationalFieldsBodySchema = shipmentOperationalFieldsBase
   }
 );
 
+const postExitStatus = z.enum(["needs_follow_up", "in_progress", "settled", "closed"]);
+const optionalIsoDate = z.preprocess(
+  normalizeIsoDateInput,
+  z.string().trim().refine(isRealIsoDate, "Date must be a valid YYYY-MM-DD date.").nullable().optional()
+);
+
+export const exitedShipmentsListQuerySchema = z.object({
+  q: z.preprocess(firstQueryValue, optionalTrimmedText(120)),
+  customerId: z.preprocess(firstQueryValue, optionalNullableId),
+  shipmentTypeCode: z.preprocess(firstQueryValue, shipmentTypeCode.optional()),
+  exitDateFrom: z.preprocess(firstQueryValue, optionalIsoDate),
+  exitDateTo: z.preprocess(firstQueryValue, optionalIsoDate),
+  postExitStatus: z.preprocess(firstQueryValue, postExitStatus.optional()),
+  assignedManagerId: z.preprocess(firstQueryValue, optionalNullableId),
+  limit: queryLimit(100),
+}).strict();
+
+export const exitedShipmentArchiveBodySchema = z.object({
+  reason: optionalNullableTrimmedText(1000),
+}).strict();
+
+export const postExitUpdateBodySchema = z.object({
+  postExitStatus: postExitStatus.optional(),
+  postExitNote: optionalNullableTrimmedText(4000),
+  postExitFollowUpAt: optionalIsoDate,
+}).strict().refine(
+  (value) => Object.values(value).some((item) => item !== undefined),
+  {
+    message: "At least one post-exit field is required.",
+  }
+);
+
 export const shipmentStepParamsSchema = shipmentParamsSchema.extend({
   stepId: requiredId,
 });

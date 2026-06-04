@@ -324,6 +324,7 @@ function appendFilter(values, conditions, sql, value) {
 function dailyStatusQuery(filters = {}, organizationId) {
   const values = [organizationId];
   const conditions = ["s.organization_id = $1", "s.archived_at IS NULL"];
+  if (!filters.includeExited) conditions.push("s.exited_archived_at IS NULL");
 
   if (filters.shipmentId) appendFilter(values, conditions, "s.id = ?", filters.shipmentId);
   if (filters.commercialCardId) appendFilter(values, conditions, "k.commercial_card_id = ?", filters.commercialCardId);
@@ -583,7 +584,7 @@ export async function getDailyStatusBoardRows(queryable, { organizationId, filte
 export async function getDailyStatusBoardRow(queryable, { organizationId, shipmentId } = {}) {
   const rows = await getDailyStatusBoardRows(queryable, {
     organizationId,
-    filters: { shipmentId, limit: 1 },
+    filters: { shipmentId, limit: 1, includeExited: true },
   });
   return rows[0] || null;
 }

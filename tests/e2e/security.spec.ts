@@ -775,6 +775,7 @@ test.describe.serial("security regression harness", () => {
   });
 
   test("serves public tracking through a customer-safe payload only", async ({ page }) => {
+    await resetRateLimitBuckets();
     await page.goto("/track/not-a-real-token-for-playwright-tests");
     await expect(page.locator('a[href="/track/search"]').first()).toBeVisible();
 

@@ -436,6 +436,14 @@ CREATE TABLE IF NOT EXISTS shipments (
   created_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
   completed_at TIMESTAMPTZ,
   archived_at TIMESTAMPTZ,
+  exited_archived_at TIMESTAMPTZ,
+  exited_archived_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  exited_archive_reason TEXT,
+  post_exit_status TEXT,
+  post_exit_note TEXT,
+  post_exit_follow_up_at TIMESTAMPTZ,
+  post_exit_closed_at TIMESTAMPTZ,
+  post_exit_closed_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT shipments_direction_check CHECK (
@@ -443,6 +451,9 @@ CREATE TABLE IF NOT EXISTS shipments (
   ),
   CONSTRAINT shipments_transport_mode_check CHECK (
     transport_mode IS NULL OR transport_mode IN ('sea', 'air', 'land', 'rail')
+  ),
+  CONSTRAINT shipments_post_exit_status_check CHECK (
+    post_exit_status IS NULL OR post_exit_status IN ('needs_follow_up', 'in_progress', 'settled', 'closed')
   )
 );
 
@@ -1352,6 +1363,9 @@ CREATE INDEX IF NOT EXISTS shipments_org_updated_idx ON shipments (organization_
 CREATE INDEX IF NOT EXISTS shipments_org_code_idx ON shipments (organization_id, shipment_code);
 CREATE INDEX IF NOT EXISTS shipments_org_customer_access_idx ON shipments (organization_id, customer_access_enabled, updated_at DESC);
 CREATE INDEX IF NOT EXISTS shipments_org_type_idx ON shipments (organization_id, shipment_type_code) WHERE archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS shipments_org_exited_archive_idx ON shipments (organization_id, exited_archived_at DESC, updated_at DESC) WHERE exited_archived_at IS NOT NULL AND archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS shipments_org_active_not_exited_idx ON shipments (organization_id, updated_at DESC) WHERE archived_at IS NULL AND exited_archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS shipments_org_post_exit_follow_up_idx ON shipments (organization_id, post_exit_status, post_exit_follow_up_at) WHERE exited_archived_at IS NOT NULL AND archived_at IS NULL;
 CREATE INDEX IF NOT EXISTS shipment_kootaj_details_org_shipment_idx ON shipment_kootaj_details (organization_id, shipment_id);
 CREATE INDEX IF NOT EXISTS shipment_kootaj_details_org_updated_idx ON shipment_kootaj_details (organization_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS shipment_kootaj_details_org_cotage_idx ON shipment_kootaj_details (organization_id, cotage_number) WHERE cotage_number IS NOT NULL;

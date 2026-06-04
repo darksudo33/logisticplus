@@ -24,6 +24,7 @@ export type SearchResult = {
   subtitle: string;
   description: string;
   url: string;
+  badges?: string[];
   matchedFields: string[];
   updatedAt: string;
 };

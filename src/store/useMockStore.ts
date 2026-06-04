@@ -95,6 +95,17 @@ const normalizeShipmentRecord = (record: any): Shipment => {
     actualDelivery: record.actualDelivery || record.actual_delivery_at || legacy.actualDelivery || undefined,
     freeTimeDays: Number.isFinite(freeTimeDays) ? freeTimeDays : 0,
     isArchived: Boolean(record.isArchived ?? record.archived_at ?? legacy.isArchived),
+    isExitedArchived: Boolean(record.isExitedArchived ?? record.exited_archived_at ?? record.exitedArchivedAt),
+    exitedArchivedAt: record.exitedArchivedAt || record.exited_archived_at || null,
+    exitedArchivedById: record.exitedArchivedById || record.exited_archived_by_id || null,
+    exitedArchiveReason: record.exitedArchiveReason || record.exited_archive_reason || "",
+    postExitStatus: record.postExitStatus || record.post_exit_status || "needs_follow_up",
+    postExitNote: record.postExitNote || record.post_exit_note || "",
+    postExitFollowUpAt: record.postExitFollowUpAt || record.post_exit_follow_up_at || null,
+    postExitClosedAt: record.postExitClosedAt || record.post_exit_closed_at || null,
+    postExitClosedById: record.postExitClosedById || record.post_exit_closed_by_id || null,
+    assignedManagerId: record.assignedManagerId || record.assigned_manager_id || legacy.assignedManagerId || undefined,
+    updatedAt: record.updatedAt || record.updated_at || legacy.updatedAt || undefined,
     customerAccessEnabled: Boolean(
       record.customerAccessEnabled ??
         record.customer_access_enabled ??

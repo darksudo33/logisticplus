@@ -167,6 +167,10 @@ export function expectPublicTrackingPayloadIsSafe(data: any) {
     "completed_by_user_id",
     "internalnote",
     "kootaj",
+    "postexit",
+    "post_exit",
+    "exitedarchive",
+    "exited_archive",
   ]) {
     expect(serialized).not.toContain(forbidden);
   }

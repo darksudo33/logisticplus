@@ -144,9 +144,9 @@ export default function Dashboard() {
 
   const today = format(new Date(), "yyyy/MM/dd");
   const activeCustomers = customers.filter((customer) => !customer.isArchived);
-  const visibleShipments = shipments.filter((shipment) => !shipment.isArchived);
-  const activeShipments = shipments.filter((s) => !s.isArchived && s.status !== "DELIVERED" && s.status !== "CLOSED");
-  const customsShipments = shipments.filter((s) => !s.isArchived && s.status === "CUSTOMS");
+  const visibleShipments = shipments.filter((shipment) => !shipment.isArchived && !shipment.isExitedArchived);
+  const activeShipments = shipments.filter((s) => !s.isArchived && !s.isExitedArchived && s.status !== "DELIVERED" && s.status !== "CLOSED");
+  const customsShipments = shipments.filter((s) => !s.isArchived && !s.isExitedArchived && s.status === "CUSTOMS");
   const openTodayTasks = tasks.filter((t) => t.status !== "DONE" && t.dueDate === today);
   const completedTasks = tasks.filter((t) => t.status === "DONE");
   const demurrageRisk = shipments.filter((s) => s.status === "ARRIVED" && (s.freeTimeDays || 14) < 5);

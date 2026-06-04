@@ -165,6 +165,7 @@ export default function Shipments() {
   const shipmentTypes = shipmentTypesResource.data;
   const shipmentTemplates = shipmentTemplatesResource.data;
   const refreshStoreShipments = useAppDataStore(state => state.refreshShipments);
+  const currentUser = useAppDataStore(state => state.currentUser);
   const users = useAppDataStore(state => state.users);
   const [shipmentSteps, setShipmentSteps] = useState<ShipmentStep[]>([]);
 
@@ -174,6 +175,9 @@ export default function Shipments() {
   const [createStep, setCreateStep] = useState(0);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [shipmentToDelete, setShipmentToDelete] = useState<string | null>(null);
+  const [exitedArchiveTarget, setExitedArchiveTarget] = useState<string | null>(null);
+  const [exitedArchiveReason, setExitedArchiveReason] = useState("");
+  const [isExitedArchiveSaving, setIsExitedArchiveSaving] = useState(false);
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
   
   const [newShipment, setNewShipment] = useState<ShipmentCreateState>(() => createInitialShipmentState());
@@ -305,6 +309,24 @@ export default function Shipments() {
     }
   };
 
+  const handleMoveToExitedArchive = async () => {
+    if (!exitedArchiveTarget) return;
+    setIsExitedArchiveSaving(true);
+    try {
+      await shipmentApi.moveToExitedArchive(exitedArchiveTarget, {
+        reason: exitedArchiveReason.trim() || null,
+      });
+      await refreshShipmentViews();
+      setExitedArchiveTarget(null);
+      setExitedArchiveReason("");
+      toast.success("محموله به محموله‌های خروج‌شده منتقل شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "انتقال محموله ناموفق بود.");
+    } finally {
+      setIsExitedArchiveSaving(false);
+    }
+  };
+
   const handleShipmentStatus = async (id: string, status: ShipmentStatus) => {
     try {
       await shipmentApi.updateOperationalFields(id, { status });
@@ -318,7 +340,7 @@ export default function Shipments() {
   const processedShipments = React.useMemo(() => {
     return [...shipments]
       .filter(s => {
-        const isNotArchived = !s.isArchived;
+        const isNotArchived = !s.isArchived && !s.isExitedArchived;
         const matchesSearch = s.trackingNumber.includes(searchTerm) || s.containerNumber.includes(searchTerm);
         const matchesStatus = statusFilter === "ALL" || s.status === statusFilter;
         return isNotArchived && matchesSearch && matchesStatus;
@@ -337,9 +359,9 @@ export default function Shipments() {
   };
 
   const shipmentStats = React.useMemo(() => {
-    const active = shipments.filter(s => !s.isArchived && !["DELIVERED", "CLOSED"].includes(s.status)).length;
-    const customs = shipments.filter(s => !s.isArchived && s.status === "CUSTOMS").length;
-    const delivered = shipments.filter(s => !s.isArchived && s.status === "DELIVERED").length;
+    const active = shipments.filter(s => !s.isArchived && !s.isExitedArchived && !["DELIVERED", "CLOSED"].includes(s.status)).length;
+    const customs = shipments.filter(s => !s.isArchived && !s.isExitedArchived && s.status === "CUSTOMS").length;
+    const delivered = shipments.filter(s => !s.isArchived && !s.isExitedArchived && s.status === "DELIVERED").length;
     const pendingTasks = tasks.filter(t => t.status !== "DONE").length;
     return [
       { label: "محموله فعال", value: active, icon: Ship, tone: "blue" },
@@ -365,6 +387,10 @@ export default function Shipments() {
   const handleViewDetails = (shipment: any) => {
     navigate(`/shipments/${shipment.id}`);
   };
+
+  const canMoveToExitedArchive = Boolean(currentUser?.permissions?.includes("shipments.archive"));
+  const isExitArchiveEligible = (shipment: { status: ShipmentStatus }) =>
+    canMoveToExitedArchive && ["CLEARED", "DELIVERED", "CLOSED"].includes(shipment.status);
 
   const statusOptions = [
     { value: "ALL", label: "همه وضعیت‌ها" },
@@ -866,6 +892,18 @@ export default function Shipments() {
                               بایگانی محموله
                             </DropdownMenuItem>
                           )}
+                          {isExitArchiveEligible(shipment) && (
+                            <DropdownMenuItem
+                              className="text-xs cursor-pointer hover:bg-primary/10 text-primary font-bold flex items-center gap-2 rounded-lg"
+                              onClick={() => {
+                                setExitedArchiveTarget(shipment.id);
+                                setExitedArchiveReason("");
+                              }}
+                            >
+                              <Archive className="w-3.5 h-3.5" />
+                              انتقال به محموله‌های خروج‌شده
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuSeparator className="bg-border" />
                           <DropdownMenuItem 
                             className="text-xs cursor-pointer hover:bg-red-500/10 text-red-500 font-bold flex items-center gap-2 rounded-lg"
@@ -1051,6 +1089,18 @@ export default function Shipments() {
                                      بایگانی محموله
                                    </DropdownMenuItem>
                                  )}
+                                 {isExitArchiveEligible(shipment) && (
+                                   <DropdownMenuItem
+                                     className="text-xs cursor-pointer hover:bg-primary/10 text-primary font-bold flex items-center gap-2 rounded-lg"
+                                     onClick={() => {
+                                       setExitedArchiveTarget(shipment.id);
+                                       setExitedArchiveReason("");
+                                     }}
+                                   >
+                                     <Archive className="w-3.5 h-3.5" />
+                                     انتقال به محموله‌های خروج‌شده
+                                   </DropdownMenuItem>
+                                 )}
                                  <DropdownMenuSeparator className="bg-border" />
                                  <DropdownMenuItem 
                                    className="text-xs cursor-pointer hover:bg-red-500/10 text-red-500 font-bold flex items-center gap-2 rounded-lg"
@@ -1122,6 +1172,39 @@ export default function Shipments() {
         }}
         itemName={shipments.find(s => s.id === shipmentToDelete)?.trackingNumber}
       />
+
+      <Dialog open={Boolean(exitedArchiveTarget)} onOpenChange={(open) => {
+        if (!open && !isExitedArchiveSaving) {
+          setExitedArchiveTarget(null);
+          setExitedArchiveReason("");
+        }
+      }}>
+        <DialogContent className="max-w-md text-right" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black">انتقال به محموله‌های خروج‌شده</DialogTitle>
+            <DialogDescription className="text-sm leading-7 text-muted-foreground">
+              این محموله از لیست محموله‌های فعال خارج می‌شود اما حذف نخواهد شد. اطلاعات، اسناد، گفتگوها و سوابق آن برای پیگیری‌های بعد از خروج باقی می‌ماند.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label className="text-xs font-black">دلیل انتقال</Label>
+            <Input
+              value={exitedArchiveReason}
+              onChange={(event) => setExitedArchiveReason(event.target.value)}
+              placeholder="مثلاً: خروج از گمرک و شروع پیگیری تسویه"
+              className="h-10 rounded-lg text-xs"
+            />
+          </div>
+          <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-start">
+            <Button type="button" variant="outline" onClick={() => setExitedArchiveTarget(null)} disabled={isExitedArchiveSaving}>
+              انصراف
+            </Button>
+            <Button type="button" onClick={() => void handleMoveToExitedArchive()} disabled={isExitedArchiveSaving}>
+              {isExitedArchiveSaving ? "در حال انتقال..." : "انتقال"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
