@@ -12,6 +12,7 @@ import { runProductionAdminBootstrap } from "./seed-production-admin.ts";
 import { runFreshProductionVerification } from "./verify-fresh-production.ts";
 import { pricingPlans } from "../src/lib/pricing.ts";
 import { DEFAULT_SMS_TEMPLATES } from "../src/server/sms-templates.js";
+import { SYSTEM_CUSTOMS_STEP_CATALOG } from "../src/shared/shipment-workflow-step-catalog.js";
 
 const { Client } = pg;
 
@@ -137,6 +138,9 @@ async function tableCounts(client: any) {
        (SELECT COUNT(*)::int FROM roles) AS roles,
        (SELECT COUNT(*)::int FROM role_permissions) AS role_permissions,
        (SELECT COUNT(*)::int FROM sms_templates) AS sms_templates,
+       (SELECT COUNT(*)::int FROM shipment_workflow_step_catalog WHERE organization_id IS NULL AND is_system = TRUE AND category = 'customs_import') AS workflow_catalog_steps,
+       (SELECT COUNT(*)::int FROM shipment_workflow_templates WHERE organization_id IS NULL AND is_system = TRUE AND archived_at IS NULL) AS workflow_templates,
+       (SELECT COUNT(*)::int FROM shipment_workflow_template_steps WHERE template_id = 'swt-ir-import-customs-v1' AND catalog_step_id IS NOT NULL AND archived_at IS NULL) AS import_customs_template_steps,
        (SELECT COUNT(*)::int FROM organizations) AS organizations,
        (SELECT COUNT(*)::int FROM customers) AS customers,
        (SELECT COUNT(*)::int FROM shipments) AS shipments,
@@ -352,6 +356,9 @@ async function main() {
     expect(state.counts.roles === countsAfterFirstCore.roles, "Second core run should not duplicate roles.");
     expect(state.counts.role_permissions === countsAfterFirstCore.role_permissions, "Second core run should not duplicate role permissions.");
     expect(state.counts.sms_templates === countsAfterFirstCore.sms_templates, "Second core run should not duplicate SMS templates.");
+    expect(state.counts.workflow_catalog_steps === countsAfterFirstCore.workflow_catalog_steps, "Second core run should not duplicate workflow catalog steps.");
+    expect(state.counts.workflow_catalog_steps === SYSTEM_CUSTOMS_STEP_CATALOG.length, "Core seed should ensure all system customs catalog steps.");
+    expect(state.counts.import_customs_template_steps === SYSTEM_CUSTOMS_STEP_CATALOG.length, "Core seed should ensure the import customs workflow has catalog steps.");
 
     allOutput.push(...(await runCapturedAdmin(["--dry-run"])));
     state = await loadState();

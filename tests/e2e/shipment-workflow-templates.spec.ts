@@ -16,6 +16,7 @@ import {
   PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS,
   PREDEFINED_WORKFLOW_TEMPLATE_BY_SHIPMENT_TYPE,
 } from "../../src/shared/shipment-workflow-template-presets.js";
+import { SYSTEM_CUSTOMS_STEP_CATALOG } from "../../src/shared/shipment-workflow-step-catalog.js";
 
 const { Client } = pg;
 type DbClient = InstanceType<typeof Client>;
@@ -140,6 +141,22 @@ test.describe.serial("shipment workflow templates", () => {
         PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS.map((mapping) => mapping.workflowTemplateCode)
       ));
       expect(templates.filter((template) => template.isSystem).length).toBeGreaterThanOrEqual(10);
+
+      const catalog = await readOk<any[]>(await owner.get("/api/shipment-workflow-step-catalog"));
+      expect(catalog).toHaveLength(SYSTEM_CUSTOMS_STEP_CATALOG.length);
+      expect(catalog.filter((step) => step.isSystem).length).toBe(SYSTEM_CUSTOMS_STEP_CATALOG.length);
+      expect(new Set(catalog.map((step) => step.code)).size).toBe(SYSTEM_CUSTOMS_STEP_CATALOG.length);
+
+      const documentsCatalog = await readOk<any[]>(
+        await owner.get("/api/shipment-workflow-step-catalog?stageKey=documents")
+      );
+      expect(documentsCatalog.length).toBeGreaterThan(0);
+      expect(documentsCatalog.every((step) => step.stageKey === "documents")).toBe(true);
+
+      const cotageCatalog = await readOk<any[]>(
+        await owner.get(`/api/shipment-workflow-step-catalog?q=${encodeURIComponent("کوتاج")}`)
+      );
+      expect(cotageCatalog.some((step) => String(step.titleFa).includes("کوتاج"))).toBe(true);
 
       for (const mapping of PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS) {
         const matchingTemplates = await readOk<any[]>(
@@ -293,6 +310,21 @@ test.describe.serial("shipment workflow templates", () => {
       const addedStep = allTemplateSteps(withAddedStep).find((step: any) => step.stepKey === stepKey);
       expect(addedStep?.isRequired).toBe(false);
 
+      const catalog = await readOk<any[]>(await owner.get("/api/shipment-workflow-step-catalog"));
+      const catalogStep = catalog.find((step) => step.code === "IR_IMPORT_CUSTOMS_036") || catalog[0];
+      const withCatalogStep = await readOk<any>(
+        await owner.post(`/api/shipment-workflow-templates/${withAddedStep.id}/steps/from-catalog`, {
+          data: { catalogStepIds: [catalogStep.id] },
+        })
+      );
+      expect(allTemplateSteps(withCatalogStep).some((step: any) => step.catalogStepId === catalogStep.id)).toBe(true);
+
+      const duplicateAttempt = await owner.post(`/api/shipment-workflow-templates/${withCatalogStep.id}/steps/from-catalog`, {
+        data: { catalogStepIds: [catalogStep.id] },
+      });
+      expect(duplicateAttempt.status(), await duplicateAttempt.text()).toBe(409);
+      expect((await duplicateAttempt.json()).error?.code).toBe("SHIPMENT_WORKFLOW_TEMPLATE_DUPLICATE_CATALOG_STEPS");
+
       const withEditedStep = await readOk<any>(
         await owner.patch(`/api/shipment-workflow-templates/${withAddedStep.id}/steps/${addedStep.id}`, {
           data: {
@@ -343,6 +375,7 @@ test.describe.serial("shipment workflow templates", () => {
       const events = auditActions.rows.map((row) => row.event_type);
       expect(events).toContain("shipment_workflow_template.update");
       expect(events).toContain("shipment_workflow_template.step_add");
+      expect(events).toContain("shipment_workflow_template.steps_add_from_catalog");
       expect(events).toContain("shipment_workflow_template.step_update");
       expect(events).toContain("shipment_workflow_template.step_archive");
       expect(events).toContain("shipment_workflow_template.publish");
@@ -350,6 +383,60 @@ test.describe.serial("shipment workflow templates", () => {
       expect(events).not.toContain("shipment_workflow_template.create");
     } finally {
       await disposeContexts(...contexts);
+    }
+  });
+
+  test("unused tenant templates can be deleted but referenced templates must be archived", async () => {
+    const owner = await loginApi();
+    try {
+      const unusedTemplateId = `e2e-unused-workflow-template-${Date.now()}`;
+      const unusedPhaseId = `${unusedTemplateId}-phase`;
+      await client.query(
+        `INSERT INTO shipment_workflow_templates (
+           id, organization_id, code, shipment_direction, transport_mode, shipment_type_hint,
+           title_fa, title_en, description, is_system, is_active, version, created_at, updated_at
+         )
+         VALUES ($1, $2, $3, 'import', 'sea', 'IMPORT_SEA_CONTAINER',
+           'E2E unused workflow template', 'E2E unused workflow template', '', FALSE, TRUE, 1, NOW(), NOW())`,
+        [unusedTemplateId, seedOrganizationId, unusedTemplateId]
+      );
+      await client.query(
+        `INSERT INTO shipment_workflow_template_phases (
+           id, template_id, phase_key, label_fa, label_en, sort_order, is_visible, created_at, updated_at
+         )
+         VALUES ($1, $2, 'base', 'Base', 'Base', 1, TRUE, NOW(), NOW())`,
+        [unusedPhaseId, unusedTemplateId]
+      );
+      await readOk(await owner.delete(`/api/shipment-workflow-templates/${unusedTemplateId}`));
+      const deleted = await client.query("SELECT COUNT(*)::int AS count FROM shipment_workflow_templates WHERE id = $1", [unusedTemplateId]);
+      expect(Number(deleted.rows[0].count)).toBe(0);
+
+      const templates = await readOk<any[]>(await owner.get("/api/shipment-workflow-templates"));
+      const seaTemplate = templates.find((template) => template.code === "WF_IMPORT_SEA_CONTAINER_V1");
+      const edited = await readOk<any>(
+        await owner.patch(`/api/shipment-workflow-templates/${seaTemplate.id}`, {
+          data: {
+            titleFa: "E2E referenced workflow template",
+            titleEn: "E2E referenced workflow template",
+          },
+        })
+      );
+      const deleteUsed = await owner.delete(`/api/shipment-workflow-templates/${edited.id}`);
+      expect(deleteUsed.status(), await deleteUsed.text()).toBe(409);
+
+      const archived = await readOk<any>(
+        await owner.post(`/api/shipment-workflow-templates/${edited.id}/archive`, {
+          data: { reason: "E2E archive referenced template" },
+        })
+      );
+      expect(archived.archivedAt).toBeTruthy();
+
+      const activeTemplates = await readOk<any[]>(await owner.get("/api/shipment-workflow-templates"));
+      expect(activeTemplates.some((template) => template.id === edited.id)).toBe(false);
+      const withArchived = await readOk<any[]>(await owner.get("/api/shipment-workflow-templates?includeArchived=true"));
+      expect(withArchived.some((template) => template.id === edited.id && template.archivedAt)).toBe(true);
+    } finally {
+      await disposeContexts(owner);
     }
   });
 

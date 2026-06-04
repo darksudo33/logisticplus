@@ -6,6 +6,25 @@ Shipment workflow templates move shipment progress flows out of hardcoded UI/ser
 
 The V1 system keeps the existing Iran import customs workflow working, seeds predefined templates for each supported import/export shipment variation, and lets admins customize those existing templates. V1 intentionally does not expose a blank "create workflow from scratch" builder.
 
+## Customs Step Catalog
+
+Migration `20260604123000_workflow_step_catalog_and_archives.sql` adds `shipment_workflow_step_catalog`, a reusable step library. The production seed keeps the global system catalog idempotently populated with 64 Iran import customs steps grouped into:
+
+- intake
+- documents
+- permits
+- declaration
+- routing
+- inspection
+- payments
+- release
+- exit
+- closure
+
+System catalog steps are shared presets. Tenant admins can add them to templates, but tenant edits happen on template step snapshots or tenant-owned templates; they do not destructively edit the global catalog.
+
+Template steps now optionally store `catalog_step_id`. The step row still stores labels, visibility, checklist, required documents, and form-field metadata so a workflow instance can snapshot the template at start time. Later catalog changes do not rewrite existing shipment workflow history.
+
 ## Relationship To Form Templates
 
 Form templates answer: which operational fields should this shipment type show?
@@ -54,10 +73,15 @@ Supported V1 actions:
 - Edit a seeded template, which forks it into an organization-scoped customization when needed.
 - Edit template title, description, and active status.
 - Add optional custom steps to existing phases.
+- Search and filter the customs step catalog.
+- Add one or many existing customs catalog steps to a template.
 - Rename labels, public labels, role suggestions, expected documents, and expected form fields.
+- Override required/customer-visible/checklist metadata per template step.
 - Toggle optional step visibility and customer visibility.
 - Reorder steps.
 - Archive optional custom steps.
+- Archive tenant-owned templates.
+- Hard delete only unused tenant-owned templates.
 - Publish a new version and optionally map a shipment type to it.
 
 Not supported in V1:
@@ -65,6 +89,7 @@ Not supported in V1:
 - Creating a totally new workflow template from a blank builder.
 - Creating workflows unrelated to the supported shipment type catalog.
 - Replacing the migration-seeded global templates with destructive edits.
+- Hard-deleting system templates or templates referenced by shipments, active mappings, or audit history.
 
 Required seeded steps cannot be archived in V1. To remove one from normal use, hide it or make it optional in an organization-specific version.
 
@@ -111,6 +136,39 @@ Migration `20260603210000_shipment_workflow_templates.sql` adds:
 The migration is additive and backfills existing Iran import workflow instances with snapshot metadata without changing customer workflow state.
 
 Migration `20260604110000_predefined_shipment_workflow_templates.sql` adds the predefined import/export shipment type templates and updates global shipment type mappings for future workflow starts. It is additive and idempotent, and it does not update existing `shipment_workflow_instances`.
+
+Migration `20260604123000_workflow_step_catalog_and_archives.sql` adds:
+
+- `shipment_workflow_step_catalog`
+- `shipment_workflow_template_steps.catalog_step_id`
+- `shipment_workflow_template_steps.checklist_json`
+- `shipment_workflow_templates.archived_by_id`
+- `shipment_workflow_templates.archived_reason`
+- safe catalog/template indexes
+- the 64-step system customs catalog
+- the catalog-backed `IR_IMPORT_CUSTOMS_V1` template definition
+
+Existing shipment workflow instances are not rewritten by this migration.
+
+## Empty Workflow Reset Script
+
+`scripts/reset-empty-shipment-workflows-to-default.ts` repairs blank workflow instances after deployment.
+
+Rules:
+
+- Dry-run is the default.
+- `--apply` is required to mutate.
+- Scope is required with `--organization-id=<id>` or explicit `--all-tenants`.
+- Workflows with user activity, blockers, linked tasks, or touched step states are skipped.
+- The script resets only blank instances to the active default template for the shipment type.
+
+Recommended production sequence:
+
+1. Run migrations.
+2. Run `npm run seed:production-core`.
+3. Run `npm run verify:fresh-production`.
+4. Run `npm exec tsx scripts/reset-empty-shipment-workflows-to-default.ts -- --all-tenants` and review output.
+5. Run the same command with `--apply` only after the dry-run shows only blank workflows.
 
 ## V1 Tradeoffs
 

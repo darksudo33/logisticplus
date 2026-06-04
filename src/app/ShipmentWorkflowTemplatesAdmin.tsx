@@ -1,14 +1,17 @@
 import React from "react";
 import {
+  Archive,
   CheckCircle2,
   ClipboardList,
   Eye,
   EyeOff,
   GitBranch,
+  Library,
   Loader2,
   Plus,
   RefreshCw,
   Save,
+  Search,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -24,6 +27,7 @@ import {
   type ShipmentWorkflowTemplate,
   type ShipmentWorkflowTemplatePhase,
   type ShipmentWorkflowTemplateStep,
+  type ShipmentWorkflowStepCatalogItem,
 } from "@/src/lib/shipmentWorkflowTemplatesApi";
 import type { ShipmentTypeOption } from "@/src/lib/shipmentFormTemplatesApi";
 
@@ -36,6 +40,7 @@ type StepDraft = {
   isVisible: boolean;
   isCustomerVisible: boolean;
   roleSuggestion: string;
+  checklistText: string;
   expectedDocumentsText: string;
   expectedFormFieldsText: string;
 };
@@ -100,6 +105,19 @@ const transportModeLabels: Record<string, string> = {
   rail: "ریلی",
 };
 
+const catalogStageLabels: Record<string, string> = {
+  intake: "ثبت اولیه پرونده",
+  documents: "دریافت و بررسی اسناد",
+  permits: "ثبت سفارش و مجوزها",
+  declaration: "اظهار گمرکی",
+  routing: "تعیین مسیر گمرکی",
+  inspection: "ارزیابی و بازرسی",
+  payments: "پرداخت‌ها و عوارض",
+  release: "صدور پروانه و ترخیص",
+  exit: "خروج و تحویل کالا",
+  closure: "بستن پرونده",
+};
+
 function shipmentTypeLabel(types: ShipmentTypeOption[], code?: string | null) {
   return types.find((type) => type.code === code)?.labelFa || code || "بدون نوع محموله";
 }
@@ -140,6 +158,7 @@ function StepEditor({
     isVisible: step.isVisible,
     isCustomerVisible: step.isCustomerVisible,
     roleSuggestion: step.roleSuggestion || "",
+    checklistText: listText(step.checklist),
     expectedDocumentsText: listText(step.expectedDocuments),
     expectedFormFieldsText: listText(step.expectedFormFields),
   });
@@ -154,6 +173,7 @@ function StepEditor({
       isVisible: step.isVisible,
       isCustomerVisible: step.isCustomerVisible,
       roleSuggestion: step.roleSuggestion || "",
+      checklistText: listText(step.checklist),
       expectedDocumentsText: listText(step.expectedDocuments),
       expectedFormFieldsText: listText(step.expectedFormFields),
     });
@@ -168,6 +188,7 @@ function StepEditor({
     draft.isVisible !== step.isVisible ||
     draft.isCustomerVisible !== step.isCustomerVisible ||
     draft.roleSuggestion !== (step.roleSuggestion || "") ||
+    draft.checklistText !== listText(step.checklist) ||
     draft.expectedDocumentsText !== listText(step.expectedDocuments) ||
     draft.expectedFormFieldsText !== listText(step.expectedFormFields);
 
@@ -180,6 +201,7 @@ function StepEditor({
     isVisible: draft.isVisible,
     isCustomerVisible: draft.isCustomerVisible,
     roleSuggestion: draft.roleSuggestion.trim(),
+    checklist: parseList(draft.checklistText),
     expectedDocuments: parseList(draft.expectedDocumentsText),
     expectedFormFields: parseList(draft.expectedFormFieldsText),
     taskPolicy: step.taskPolicy || { mode: "suggested" },
@@ -192,6 +214,9 @@ function StepEditor({
           <div className="flex flex-wrap items-center gap-1.5">
             <Badge variant="outline" className="text-[10px] font-black">{phase.labelFa}</Badge>
             <Badge variant="outline" className="text-[10px] font-black" dir="ltr">{step.stepKey}</Badge>
+            {step.catalogStepId ? (
+              <Badge variant="outline" className="border-sky-500/30 bg-sky-500/10 text-[10px] font-black text-sky-700">از کتابخانه</Badge>
+            ) : null}
             {!step.isVisible ? (
               <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-[10px] font-black text-amber-700">مخفی</Badge>
             ) : null}
@@ -244,7 +269,11 @@ function StepEditor({
         </div>
       </div>
 
-      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+      <div className="mt-3 grid gap-3 lg:grid-cols-3">
+        <div className="space-y-1.5">
+          <Label className="text-[11px] font-bold text-muted-foreground">چک‌لیست قالب</Label>
+          <textarea value={draft.checklistText} onChange={(event) => setDraft((current) => ({ ...current, checklistText: event.target.value }))} className="min-h-16 w-full rounded-lg border border-input bg-card px-3 py-2 text-xs font-bold leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+        </div>
         <div className="space-y-1.5">
           <Label className="text-[11px] font-bold text-muted-foreground">اسناد مورد انتظار</Label>
           <textarea value={draft.expectedDocumentsText} onChange={(event) => setDraft((current) => ({ ...current, expectedDocumentsText: event.target.value }))} className="min-h-16 w-full rounded-lg border border-input bg-card px-3 py-2 text-xs font-bold leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring" dir="ltr" />
@@ -274,12 +303,18 @@ function StepEditor({
 export default function ShipmentWorkflowTemplatesAdmin() {
   const [types, setTypes] = React.useState<ShipmentTypeOption[]>([]);
   const [templates, setTemplates] = React.useState<ShipmentWorkflowTemplate[]>([]);
+  const [catalogSteps, setCatalogSteps] = React.useState<ShipmentWorkflowStepCatalogItem[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = React.useState("");
   const [selectedTypeCode, setSelectedTypeCode] = React.useState("IMPORT_SEA_CONTAINER");
   const [loading, setLoading] = React.useState(true);
   const [savingKey, setSavingKey] = React.useState<string | null>(null);
   const [templateDraft, setTemplateDraft] = React.useState({ titleFa: "", titleEn: "", description: "", isActive: true });
   const [newStep, setNewStep] = React.useState<NewStepDraft>({ stepKey: "", labelFa: "", labelEn: "", phaseId: "" });
+  const [catalogSearch, setCatalogSearch] = React.useState("");
+  const [catalogStage, setCatalogStage] = React.useState("");
+  const [includeArchivedCatalog, setIncludeArchivedCatalog] = React.useState(false);
+  const [includeArchivedTemplates, setIncludeArchivedTemplates] = React.useState(false);
+  const [selectedCatalogStepIds, setSelectedCatalogStepIds] = React.useState<string[]>([]);
 
   const selectedTemplate = React.useMemo(
     () => templates.find((template) => template.id === selectedTemplateId) || templates[0] || null,
@@ -288,6 +323,28 @@ export default function ShipmentWorkflowTemplatesAdmin() {
   const orderedSteps = React.useMemo(
     () => selectedTemplate?.phases.flatMap((phase) => phase.steps).sort((a, b) => a.sortOrder - b.sortOrder) || [],
     [selectedTemplate]
+  );
+  const catalogStageOptions = React.useMemo(() => {
+    const stages = new Map<string, string>();
+    for (const step of catalogSteps) {
+      if (step.stageKey) stages.set(step.stageKey, step.stageTitleFa || catalogStageLabels[step.stageKey] || step.stageKey);
+    }
+    return [...stages.entries()].map(([key, label]) => ({ key, label }));
+  }, [catalogSteps]);
+  const visibleCatalogSteps = React.useMemo(() => {
+    const query = catalogSearch.trim().toLowerCase();
+    return catalogSteps.filter((step) => {
+      if (!includeArchivedCatalog && step.archivedAt) return false;
+      if (catalogStage && step.stageKey !== catalogStage) return false;
+      if (!query) return true;
+      return [step.code, step.title, step.titleFa, step.stageTitleFa]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+  }, [catalogSearch, catalogStage, catalogSteps, includeArchivedCatalog]);
+  const selectedTemplateCatalogIds = React.useMemo(
+    () => new Set(orderedSteps.map((step) => step.catalogStepId).filter(Boolean) as string[]),
+    [orderedSteps]
   );
 
   React.useEffect(() => {
@@ -308,19 +365,21 @@ export default function ShipmentWorkflowTemplatesAdmin() {
   const loadData = React.useCallback(async () => {
     setLoading(true);
     try {
-      const [loadedTypes, loadedTemplates] = await Promise.all([
+      const [loadedTypes, loadedTemplates, loadedCatalogSteps] = await Promise.all([
         shipmentWorkflowTemplatesApi.listTypes(),
-        shipmentWorkflowTemplatesApi.list(),
+        shipmentWorkflowTemplatesApi.list(undefined, { includeArchived: includeArchivedTemplates }),
+        shipmentWorkflowTemplatesApi.listCatalog({ includeArchived: includeArchivedCatalog }),
       ]);
       setTypes(loadedTypes);
       setTemplates(loadedTemplates);
+      setCatalogSteps(loadedCatalogSteps);
       if (!selectedTemplateId && loadedTemplates[0]) setSelectedTemplateId(loadedTemplates[0].id);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "بارگیری قالب‌های گردش کار ناموفق بود.");
     } finally {
       setLoading(false);
     }
-  }, [selectedTemplateId]);
+  }, [includeArchivedCatalog, includeArchivedTemplates, selectedTemplateId]);
 
   React.useEffect(() => {
     void loadData();
@@ -459,6 +518,71 @@ export default function ShipmentWorkflowTemplatesAdmin() {
     }
   };
 
+  const toggleCatalogStep = (stepId: string, checked: boolean) => {
+    setSelectedCatalogStepIds((current) => (
+      checked ? [...new Set([...current, stepId])] : current.filter((id) => id !== stepId)
+    ));
+  };
+
+  const addCatalogStepsToTemplate = async (catalogStepIds: string[]) => {
+    if (!selectedTemplate || !catalogStepIds.length) return;
+    const duplicateIds = catalogStepIds.filter((id) => selectedTemplateCatalogIds.has(id));
+    let allowDuplicates = false;
+    if (duplicateIds.length) {
+      allowDuplicates = window.confirm("برخی مراحل انتخاب‌شده قبلا در این قالب وجود دارند. دوباره اضافه شوند؟");
+      if (!allowDuplicates) return;
+    }
+    setSavingKey("catalog-add");
+    try {
+      const updated = await shipmentWorkflowTemplatesApi.addStepsFromCatalog(selectedTemplate.id, {
+        catalogStepIds,
+        allowDuplicates,
+      });
+      updateTemplateState(updated);
+      setSelectedCatalogStepIds((current) => current.filter((id) => !catalogStepIds.includes(id)));
+      toast.success("مراحل انتخاب‌شده از کتابخانه به قالب اضافه شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "افزودن مراحل از کتابخانه ناموفق بود.");
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const archiveTemplate = async () => {
+    if (!selectedTemplate || selectedTemplate.isSystem || !selectedTemplate.organizationId) return;
+    const confirmed = window.confirm("این قالب از انتخاب‌های عادی حذف می‌شود اما سابقه محموله‌ها حفظ می‌ماند. ادامه می‌دهید؟");
+    if (!confirmed) return;
+    setSavingKey("archive-template");
+    try {
+      const updated = await shipmentWorkflowTemplatesApi.archiveTemplate(selectedTemplate.id, {
+        reason: "Archived from workflow template admin panel.",
+      });
+      updateTemplateState(updated);
+      toast.success("قالب گردش کار بایگانی شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "بایگانی قالب ناموفق بود.");
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const deleteTemplate = async () => {
+    if (!selectedTemplate?.canDelete) return;
+    const confirmed = window.confirm("این قالب استفاده نشده برای همیشه حذف می‌شود. ادامه می‌دهید؟");
+    if (!confirmed) return;
+    setSavingKey("delete-template");
+    try {
+      await shipmentWorkflowTemplatesApi.deleteTemplate(selectedTemplate.id);
+      setTemplates((current) => current.filter((template) => template.id !== selectedTemplate.id));
+      setSelectedTemplateId("");
+      toast.success("قالب استفاده‌نشده حذف شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "حذف قالب ناموفق بود. اگر استفاده شده است، آن را بایگانی کنید.");
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
   return (
     <div className="app-page max-w-full overflow-x-hidden space-y-4 text-foreground" dir="rtl" data-testid="shipment-workflow-templates-admin-page">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -494,11 +618,17 @@ export default function ShipmentWorkflowTemplatesAdmin() {
               </CardHeader>
               <CardContent className="space-y-3 p-4 pt-2">
                 <div className="space-y-1.5">
-                  <Label className="text-[11px] font-bold text-muted-foreground">قالب فعال برای ویرایش</Label>
+                  <div className="flex items-center justify-between gap-2">
+                    <Label className="text-[11px] font-bold text-muted-foreground">قالب فعال برای ویرایش</Label>
+                    <label className="flex cursor-pointer items-center gap-1.5 text-[10px] font-black text-muted-foreground">
+                      <Checkbox checked={includeArchivedTemplates} onCheckedChange={(value) => setIncludeArchivedTemplates(Boolean(value))} />
+                      بایگانی‌ها
+                    </label>
+                  </div>
                   <select value={selectedTemplate?.id || ""} onChange={(event) => setSelectedTemplateId(event.target.value)} className="h-10 w-full rounded-lg border border-input bg-background px-3 text-xs font-black outline-none focus:ring-2 focus:ring-ring" data-testid="shipment-workflow-template-select">
                     {templates.map((template) => (
                       <option key={template.id} value={template.id}>
-                        {template.titleFa} - {shipmentTypeLabel(types, template.shipmentTypeHint)} - v{template.version} {template.organizationId ? "" : "(system)"}
+                        {template.titleFa} - {shipmentTypeLabel(types, template.shipmentTypeHint)} - v{template.version} {template.organizationId ? "" : "(system)"} {template.archivedAt ? "- archived" : ""}
                       </option>
                     ))}
                   </select>
@@ -511,6 +641,9 @@ export default function ShipmentWorkflowTemplatesAdmin() {
                     </p>
                     <div className="mt-2 flex flex-wrap gap-1">
                       <Badge variant="outline" className="text-[10px] font-black">{selectedTemplate.organizationId ? "اختصاصی شرکت" : "سیستمی"}</Badge>
+                      {selectedTemplate.archivedAt ? (
+                        <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-[10px] font-black text-amber-700">بایگانی‌شده</Badge>
+                      ) : null}
                       <Badge variant="outline" className="text-[10px] font-black">
                         {directionLabels[selectedTemplate.shipmentDirection || ""] || selectedTemplate.shipmentDirection || "بدون جهت"}
                       </Badge>
@@ -522,6 +655,23 @@ export default function ShipmentWorkflowTemplatesAdmin() {
                       </Badge>
                       <Badge variant="outline" className="text-[10px] font-black">نسخه {selectedTemplate.version}</Badge>
                       <Badge variant="outline" className="text-[10px] font-black">{stepCount(selectedTemplate)} مرحله</Badge>
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <Button type="button" variant="outline" size="sm" className="h-8 rounded-lg text-[11px] font-black" onClick={() => void archiveTemplate()} disabled={savingKey === "archive-template" || selectedTemplate.isSystem || !selectedTemplate.organizationId || Boolean(selectedTemplate.archivedAt)}>
+                        <Archive className="ml-1 h-3.5 w-3.5" />
+                        بایگانی قالب
+                      </Button>
+                      {selectedTemplate.canDelete ? (
+                        <Button type="button" variant="outline" size="sm" className="h-8 rounded-lg text-[11px] font-black text-destructive" onClick={() => void deleteTemplate()} disabled={savingKey === "delete-template"}>
+                          <Trash2 className="ml-1 h-3.5 w-3.5" />
+                          حذف امن
+                        </Button>
+                      ) : (
+                        <Button type="button" variant="outline" size="sm" className="h-8 rounded-lg text-[11px] font-black text-muted-foreground" disabled>
+                          <Trash2 className="ml-1 h-3.5 w-3.5" />
+                          حذف قفل است
+                        </Button>
+                      )}
                     </div>
                   </div>
                 ) : null}
@@ -547,7 +697,7 @@ export default function ShipmentWorkflowTemplatesAdmin() {
                 </div>
                 <ToggleBox label="قالب فعال باشد" checked={templateDraft.isActive} onChange={(isActive) => setTemplateDraft((current) => ({ ...current, isActive }))} />
                 <div className="grid gap-2">
-                  <Button type="button" className="h-9 rounded-lg text-xs font-black" onClick={() => void saveTemplate()} disabled={savingKey === "template" || !selectedTemplate || !templateDraft.titleFa.trim()}>
+                  <Button type="button" className="h-9 rounded-lg text-xs font-black" onClick={() => void saveTemplate()} disabled={savingKey === "template" || !selectedTemplate || Boolean(selectedTemplate.archivedAt) || !templateDraft.titleFa.trim()}>
                     {savingKey === "template" ? <Loader2 className="ml-1 h-4 w-4 animate-spin" /> : <Save className="ml-1 h-4 w-4" />}
                     ذخیره قالب
                   </Button>
@@ -565,11 +715,11 @@ export default function ShipmentWorkflowTemplatesAdmin() {
                     <option key={type.code} value={type.code}>{type.labelFa}</option>
                   ))}
                 </select>
-                <Button type="button" variant="outline" className="h-9 w-full rounded-lg text-xs font-black" onClick={() => void setDefaultForType()} disabled={savingKey === "mapping" || !selectedTemplate}>
+                <Button type="button" variant="outline" className="h-9 w-full rounded-lg text-xs font-black" onClick={() => void setDefaultForType()} disabled={savingKey === "mapping" || !selectedTemplate || Boolean(selectedTemplate.archivedAt)}>
                   <CheckCircle2 className="ml-1 h-4 w-4" />
                   تنظیم به عنوان پیش‌فرض
                 </Button>
-                <Button type="button" className="h-9 w-full rounded-lg text-xs font-black" onClick={() => void publishTemplate()} disabled={savingKey === "publish" || !selectedTemplate}>
+                <Button type="button" className="h-9 w-full rounded-lg text-xs font-black" onClick={() => void publishTemplate()} disabled={savingKey === "publish" || !selectedTemplate || Boolean(selectedTemplate.archivedAt)}>
                   <GitBranch className="ml-1 h-4 w-4" />
                   انتشار نسخه جدید
                 </Button>
@@ -579,7 +729,13 @@ export default function ShipmentWorkflowTemplatesAdmin() {
             {selectedTemplate ? (
               <Card className="rounded-lg border-border bg-card">
                 <CardHeader className="p-4 pb-2">
-                  <CardTitle className="text-sm font-black">افزودن مرحله اختیاری</CardTitle>
+                  <div className="flex items-center justify-between gap-2">
+                    <CardTitle className="text-sm font-black">افزودن مرحله اختیاری</CardTitle>
+                    <Button type="button" variant="outline" size="sm" className="h-8 rounded-lg text-[11px] font-black" onClick={() => document.getElementById("workflow-step-catalog-library")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                      <Library className="ml-1 h-3.5 w-3.5" />
+                      انتخاب از موجود
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent className="space-y-2 p-4 pt-2">
                   <select value={newStep.phaseId || selectedTemplate.phases[0]?.id || ""} onChange={(event) => setNewStep((current) => ({ ...current, phaseId: event.target.value }))} className="h-9 w-full rounded-lg border border-input bg-background px-3 text-xs font-bold outline-none focus:ring-2 focus:ring-ring">
@@ -590,7 +746,7 @@ export default function ShipmentWorkflowTemplatesAdmin() {
                   <Input value={newStep.stepKey} onChange={(event) => setNewStep((current) => ({ ...current, stepKey: event.target.value }))} placeholder="CUSTOM_001" className="h-9 rounded-lg bg-background text-xs font-bold" dir="ltr" />
                   <Input value={newStep.labelFa} onChange={(event) => setNewStep((current) => ({ ...current, labelFa: event.target.value }))} placeholder="عنوان مرحله" className="h-9 rounded-lg bg-background text-xs font-bold" />
                   <Input value={newStep.labelEn} onChange={(event) => setNewStep((current) => ({ ...current, labelEn: event.target.value }))} placeholder="English label" className="h-9 rounded-lg bg-background text-xs font-bold" dir="ltr" />
-                  <Button type="button" className="h-9 w-full rounded-lg text-xs font-black" onClick={() => void addStep()} disabled={savingKey === "add-step" || !newStep.stepKey.trim() || !newStep.labelFa.trim()}>
+                  <Button type="button" className="h-9 w-full rounded-lg text-xs font-black" onClick={() => void addStep()} disabled={savingKey === "add-step" || Boolean(selectedTemplate.archivedAt) || !newStep.stepKey.trim() || !newStep.labelFa.trim()}>
                     <Plus className="ml-1 h-4 w-4" />
                     افزودن مرحله
                   </Button>
@@ -625,6 +781,81 @@ export default function ShipmentWorkflowTemplatesAdmin() {
                   تغییر قالب، سابقه محموله‌های شروع‌شده را بازنویسی نمی‌کند. هر instance از snapshot خودش استفاده می‌کند.
                 </div>
 
+                <Card id="workflow-step-catalog-library" className="rounded-lg border-border bg-card">
+                  <CardHeader className="p-4 pb-2">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <CardTitle className="flex items-center gap-2 text-sm font-black">
+                        <Library className="h-4 w-4 text-primary" />
+                        کتابخانه مراحل گمرکی
+                      </CardTitle>
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="button" size="sm" className="h-8 rounded-lg text-[11px] font-black" onClick={() => void addCatalogStepsToTemplate(selectedCatalogStepIds)} disabled={savingKey === "catalog-add" || !selectedCatalogStepIds.length || Boolean(selectedTemplate.archivedAt)}>
+                          {savingKey === "catalog-add" ? <Loader2 className="ml-1 h-3.5 w-3.5 animate-spin" /> : <Plus className="ml-1 h-3.5 w-3.5" />}
+                          افزودن از کتابخانه مراحل
+                        </Button>
+                        <Button type="button" variant="outline" size="sm" className="h-8 rounded-lg text-[11px] font-black" onClick={() => setSelectedCatalogStepIds(visibleCatalogSteps.filter((step) => !step.archivedAt).map((step) => step.id))} disabled={!visibleCatalogSteps.length}>
+                          انتخاب نتایج
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-3 p-4 pt-2">
+                    <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_220px_150px]">
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input value={catalogSearch} onChange={(event) => setCatalogSearch(event.target.value)} placeholder="جستجوی مرحله، کد یا بخش" className="h-9 rounded-lg bg-background pr-9 text-xs font-bold" />
+                      </div>
+                      <select value={catalogStage} onChange={(event) => setCatalogStage(event.target.value)} className="h-9 w-full rounded-lg border border-input bg-background px-3 text-xs font-bold outline-none focus:ring-2 focus:ring-ring">
+                        <option value="">همه بخش‌ها</option>
+                        {catalogStageOptions.map((stage) => (
+                          <option key={stage.key} value={stage.key}>{stage.label}</option>
+                        ))}
+                      </select>
+                      <label className="flex h-9 cursor-pointer items-center gap-2 rounded-lg border border-border bg-background px-3 text-[11px] font-black text-muted-foreground">
+                        <Checkbox checked={includeArchivedCatalog} onCheckedChange={(value) => setIncludeArchivedCatalog(Boolean(value))} />
+                        بایگانی‌شده‌ها
+                      </label>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] font-black text-muted-foreground">
+                      <Badge variant="outline" className="text-[10px] font-black">{visibleCatalogSteps.length} مرحله</Badge>
+                      <Badge variant="outline" className="text-[10px] font-black">{selectedCatalogStepIds.length} انتخاب‌شده</Badge>
+                      <Badge variant="outline" className="text-[10px] font-black">۶۴ مرحله سیستمی گمرکی</Badge>
+                    </div>
+
+                    <div className="max-h-[420px] space-y-2 overflow-y-auto rounded-lg border border-border bg-background p-2" data-testid="shipment-workflow-step-catalog">
+                      {visibleCatalogSteps.length ? visibleCatalogSteps.map((step) => {
+                        const inTemplate = selectedTemplateCatalogIds.has(step.id);
+                        const checked = selectedCatalogStepIds.includes(step.id);
+                        return (
+                          <div key={step.id} className="grid gap-2 rounded-lg border border-border bg-card p-3 lg:grid-cols-[28px_minmax(0,1fr)_auto] lg:items-center">
+                            <Checkbox checked={checked} onCheckedChange={(value) => toggleCatalogStep(step.id, Boolean(value))} disabled={Boolean(step.archivedAt) || Boolean(selectedTemplate.archivedAt)} />
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <Badge variant="outline" className="text-[10px] font-black" dir="ltr">{step.code}</Badge>
+                                <Badge variant="outline" className="text-[10px] font-black">{step.stageTitleFa || catalogStageLabels[step.stageKey] || step.stageKey}</Badge>
+                                {step.isSystem ? <Badge variant="outline" className="border-sky-500/30 bg-sky-500/10 text-[10px] font-black text-sky-700">سیستمی</Badge> : null}
+                                {step.archivedAt ? <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-[10px] font-black text-amber-700">بایگانی‌شده</Badge> : null}
+                                {inTemplate ? <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-[10px] font-black text-emerald-700">در قالب</Badge> : null}
+                              </div>
+                              <p className="mt-1 text-xs font-black text-foreground">{step.titleFa}</p>
+                              <p className="mt-0.5 text-[11px] font-bold text-muted-foreground" dir="ltr">{step.title}</p>
+                            </div>
+                            <Button type="button" variant="outline" size="sm" className="h-8 rounded-lg text-[11px] font-black" onClick={() => void addCatalogStepsToTemplate([step.id])} disabled={savingKey === "catalog-add" || Boolean(step.archivedAt) || Boolean(selectedTemplate.archivedAt)}>
+                              <Plus className="ml-1 h-3.5 w-3.5" />
+                              افزودن به قالب
+                            </Button>
+                          </div>
+                        );
+                      }) : (
+                        <div className="rounded-lg border border-dashed border-border p-4 text-center text-xs font-bold text-muted-foreground">
+                          مرحله‌ای مطابق جستجو پیدا نشد.
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
                 <div className="space-y-3" data-testid="shipment-workflow-template-steps">
                   {selectedTemplate.phases.map((phase) => {
                     const fields = [...phase.steps].sort((a, b) => a.sortOrder - b.sortOrder);
@@ -647,7 +878,7 @@ export default function ShipmentWorkflowTemplatesAdmin() {
                                 phase={phase}
                                 canMoveUp={globalIndex > 0}
                                 canMoveDown={globalIndex >= 0 && globalIndex < orderedSteps.length - 1}
-                                saving={Boolean(savingKey)}
+                                saving={Boolean(savingKey) || Boolean(selectedTemplate.archivedAt)}
                                 onSave={saveStep}
                                 onMove={moveStep}
                                 onArchive={archiveStep}

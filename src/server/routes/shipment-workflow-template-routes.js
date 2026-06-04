@@ -1,5 +1,7 @@
 import {
   shipmentParamsSchema,
+  shipmentWorkflowStepCatalogListQuerySchema,
+  shipmentWorkflowTemplateArchiveBodySchema,
   shipmentTypeWorkflowTemplateBodySchema,
   shipmentTypeWorkflowTemplateParamsSchema,
   shipmentWorkflowTemplateListQuerySchema,
@@ -8,14 +10,19 @@ import {
   shipmentWorkflowTemplateStepCreateBodySchema,
   shipmentWorkflowTemplateStepParamsSchema,
   shipmentWorkflowTemplateStepUpdateBodySchema,
+  shipmentWorkflowTemplateStepsFromCatalogBodySchema,
   shipmentWorkflowTemplateUpdateBodySchema,
 } from "../request-schemas.js";
 import { parseRequestValue } from "../validation.js";
 import {
   addShipmentWorkflowTemplateStep,
+  addShipmentWorkflowTemplateStepsFromCatalog,
+  archiveShipmentWorkflowTemplate,
   archiveShipmentWorkflowTemplateStep,
+  deleteShipmentWorkflowTemplate,
   getActiveShipmentWorkflowTemplateForShipment,
   getShipmentWorkflowTemplate,
+  listShipmentWorkflowStepCatalog,
   listShipmentWorkflowTemplates,
   publishShipmentWorkflowTemplate,
   setShipmentTypeWorkflowTemplate,
@@ -28,7 +35,7 @@ function isWorkflowTemplateSchemaMissing(error) {
   return (
     error?.code === "42P01" ||
     error?.code === "42703" ||
-    /shipment_workflow_templates|shipment_workflow_template_phases|shipment_workflow_template_steps|shipment_type_workflow_templates/i.test(String(error?.message || ""))
+    /shipment_workflow_templates|shipment_workflow_template_phases|shipment_workflow_template_steps|shipment_type_workflow_templates|shipment_workflow_step_catalog/i.test(String(error?.message || ""))
   );
 }
 
@@ -65,6 +72,7 @@ export function registerShipmentWorkflowTemplateRoutes(
     if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
     if (error.statusCode === 404) return createApiError(res, 404, error.code || "NOT_FOUND", error.message);
     if (error.statusCode === 400) return createApiError(res, 400, error.code || "VALIDATION_ERROR", error.message);
+    if (error.statusCode === 409) return createApiError(res, 409, error.code || "CONFLICT", error.message);
     if (isWorkflowTemplateSchemaMissing(error)) {
       return createApiError(
         res,
@@ -87,6 +95,25 @@ export function registerShipmentWorkflowTemplateRoutes(
     }
   });
 
+  app.get("/api/shipment-workflow-step-catalog", async (req, res) => {
+    try {
+      const tenantRequest = await requireWorkflowTemplateReader({ req, res, requireAuthenticatedTenantUser, requirePermission });
+      if (!tenantRequest) return;
+      const query = parseRequestValue(res, shipmentWorkflowStepCatalogListQuerySchema, req.query || {});
+      if (!query) return;
+      const data = await listShipmentWorkflowStepCatalog(pool, {
+        organizationId: tenantRequest.organizationId,
+        search: query.q || query.search,
+        stageKey: query.stageKey,
+        category: query.category || "customs_import",
+        includeArchived: query.includeArchived,
+      });
+      res.json({ ok: true, data });
+    } catch (error) {
+      handleRouteError(res, error, "SHIPMENT_WORKFLOW_STEP_CATALOG_FAILED", "Could not load shipment workflow step catalog.");
+    }
+  });
+
   app.get("/api/shipment-workflow-templates", async (req, res) => {
     try {
       const tenantRequest = await requireWorkflowTemplateReader({ req, res, requireAuthenticatedTenantUser, requirePermission });
@@ -96,6 +123,7 @@ export function registerShipmentWorkflowTemplateRoutes(
       const data = await listShipmentWorkflowTemplates(pool, {
         organizationId: tenantRequest.organizationId,
         shipmentTypeCode: query.shipmentTypeCode,
+        includeArchived: query.includeArchived,
       });
       res.json({ ok: true, data });
     } catch (error) {
@@ -183,6 +211,62 @@ export function registerShipmentWorkflowTemplateRoutes(
     }
   });
 
+  app.post("/api/shipment-workflow-templates/:id/archive", async (req, res) => {
+    try {
+      const tenantRequest = await requireWorkflowTemplateManager({ req, res, requireAuthenticatedTenantUser, requirePermission });
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, shipmentWorkflowTemplateParamsSchema, req.params);
+      const body = parseRequestValue(res, shipmentWorkflowTemplateArchiveBodySchema, req.body || {});
+      if (!params || !body) return;
+      const result = await archiveShipmentWorkflowTemplate(pool, {
+        organizationId: tenantRequest.organizationId,
+        templateId: params.id,
+        actorUserId: tenantRequest.user.id,
+        body,
+      });
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "shipment_workflow_template.archive",
+        entityType: "shipment_workflow_template",
+        entityId: result.templateId,
+        summary: "Shipment workflow template was archived.",
+        before: { id: result.before.id, titleFa: result.before.titleFa, version: result.before.version },
+        after: { id: result.after.id, archivedAt: result.after.archivedAt },
+        requestContext: requestContext(req),
+      });
+      res.json({ ok: true, data: result.after });
+    } catch (error) {
+      handleRouteError(res, error, "SHIPMENT_WORKFLOW_TEMPLATE_ARCHIVE_FAILED", "Could not archive shipment workflow template.");
+    }
+  });
+
+  app.delete("/api/shipment-workflow-templates/:id", async (req, res) => {
+    try {
+      const tenantRequest = await requireWorkflowTemplateManager({ req, res, requireAuthenticatedTenantUser, requirePermission });
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, shipmentWorkflowTemplateParamsSchema, req.params);
+      if (!params) return;
+      const result = await deleteShipmentWorkflowTemplate(pool, {
+        organizationId: tenantRequest.organizationId,
+        templateId: params.id,
+      });
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "shipment_workflow_template.delete",
+        entityType: "shipment_workflow_template",
+        entityId: result.templateId,
+        summary: "Unused shipment workflow template was deleted.",
+        before: { id: result.before.id, titleFa: result.before.titleFa, version: result.before.version },
+        requestContext: requestContext(req),
+      });
+      res.json({ ok: true, data: { id: result.templateId } });
+    } catch (error) {
+      handleRouteError(res, error, "SHIPMENT_WORKFLOW_TEMPLATE_DELETE_FAILED", "Could not delete shipment workflow template.");
+    }
+  });
+
   app.patch("/api/shipment-workflow-templates/:id/publish", async (req, res) => {
     try {
       const tenantRequest = await requireWorkflowTemplateManager({ req, res, requireAuthenticatedTenantUser, requirePermission });
@@ -241,6 +325,36 @@ export function registerShipmentWorkflowTemplateRoutes(
       res.status(201).json({ ok: true, data: result.after });
     } catch (error) {
       handleRouteError(res, error, "SHIPMENT_WORKFLOW_TEMPLATE_STEP_CREATE_FAILED", "Could not add shipment workflow step.");
+    }
+  });
+
+  app.post("/api/shipment-workflow-templates/:id/steps/from-catalog", async (req, res) => {
+    try {
+      const tenantRequest = await requireWorkflowTemplateManager({ req, res, requireAuthenticatedTenantUser, requirePermission });
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, shipmentWorkflowTemplateParamsSchema, req.params);
+      const body = parseRequestValue(res, shipmentWorkflowTemplateStepsFromCatalogBodySchema, req.body || {});
+      if (!params || !body) return;
+      const result = await addShipmentWorkflowTemplateStepsFromCatalog(pool, {
+        organizationId: tenantRequest.organizationId,
+        templateId: params.id,
+        actorUserId: tenantRequest.user.id,
+        body,
+      });
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "shipment_workflow_template.steps_add_from_catalog",
+        entityType: "shipment_workflow_template",
+        entityId: result.templateId,
+        summary: "Shipment workflow template steps were added from the catalog.",
+        after: { count: result.addedSteps.length, catalogStepIds: body.catalogStepIds },
+        metadata: { forkedFromSystemTemplate: result.forked },
+        requestContext: requestContext(req),
+      });
+      res.status(201).json({ ok: true, data: result.after });
+    } catch (error) {
+      handleRouteError(res, error, "SHIPMENT_WORKFLOW_TEMPLATE_CATALOG_STEP_ADD_FAILED", "Could not add catalog steps to shipment workflow template.");
     }
   });
 

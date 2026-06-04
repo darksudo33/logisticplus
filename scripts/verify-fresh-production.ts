@@ -9,6 +9,7 @@ import {
   tenantPermissionDescriptions,
 } from "./seed-production-core.ts";
 import { PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS } from "../src/shared/shipment-workflow-template-presets.js";
+import { SYSTEM_CUSTOMS_STEP_CATALOG } from "../src/shared/shipment-workflow-step-catalog.js";
 import {
   resolveDocumentStorageConfig,
   validateObjectStorageConfig,
@@ -69,6 +70,7 @@ async function verifySchema(client: any) {
     "documents",
     "change_logs",
     "audit_logs",
+    "shipment_workflow_step_catalog",
     "shipment_workflow_templates",
     "shipment_type_workflow_templates",
   ];
@@ -137,25 +139,80 @@ async function verifyCatalog(client: any) {
       [mapping.templateId, mapping.workflowTemplateCode],
       `Missing workflow template: ${mapping.workflowTemplateCode}`
     );
-    await requireCount(
+    const mappingCount = await countQuery(
       client,
       `SELECT COUNT(*)::int AS count
-       FROM shipment_type_workflow_templates
-       WHERE organization_id IS NULL
-         AND shipment_type_code = $1
-         AND workflow_template_id = $2
-         AND workflow_template_code = $3
-         AND workflow_template_version = $4
-         AND archived_at IS NULL`,
+       FROM shipment_type_workflow_templates mapping
+       JOIN shipment_workflow_templates templates
+         ON templates.id = mapping.workflow_template_id
+        AND templates.archived_at IS NULL
+        AND templates.is_active = TRUE
+       WHERE mapping.organization_id IS NULL
+         AND mapping.shipment_type_code = $1
+         AND mapping.workflow_template_id = $2
+         AND mapping.workflow_template_code = $3
+         AND mapping.workflow_template_version = $4
+         AND mapping.archived_at IS NULL`,
       [
         mapping.shipmentTypeCode,
         mapping.templateId,
         mapping.workflowTemplateCode,
         mapping.workflowTemplateVersion,
-      ],
-      `Missing workflow template mapping: ${mapping.shipmentTypeCode}`
+      ]
     );
+    if (mappingCount !== 1) fail(`Workflow template mapping must be exactly one active default: ${mapping.shipmentTypeCode}`);
   }
+
+  const customsCatalogCount = await countQuery(
+    client,
+    `SELECT COUNT(*)::int AS count
+     FROM shipment_workflow_step_catalog
+     WHERE organization_id IS NULL
+       AND is_system = TRUE
+       AND category = 'customs_import'
+       AND archived_at IS NULL`
+  );
+  if (customsCatalogCount !== SYSTEM_CUSTOMS_STEP_CATALOG.length) {
+    fail(`Expected ${SYSTEM_CUSTOMS_STEP_CATALOG.length} active system customs catalog steps, found ${customsCatalogCount}.`);
+  }
+
+  const duplicateSystemCodes = await countQuery(
+    client,
+    `SELECT COUNT(*)::int AS count
+     FROM (
+       SELECT code
+       FROM shipment_workflow_step_catalog
+       WHERE organization_id IS NULL
+         AND is_system = TRUE
+         AND category = 'customs_import'
+       GROUP BY code
+       HAVING COUNT(*) > 1
+     ) duplicates`
+  );
+  if (duplicateSystemCodes > 0) fail("System customs catalog contains duplicate step codes.");
+
+  const importCustomsStepCount = await countQuery(
+    client,
+    `SELECT COUNT(*)::int AS count
+     FROM shipment_workflow_template_steps
+     WHERE template_id = 'swt-ir-import-customs-v1'
+       AND archived_at IS NULL
+       AND catalog_step_id IS NOT NULL`
+  );
+  if (importCustomsStepCount !== SYSTEM_CUSTOMS_STEP_CATALOG.length) {
+    fail(`Import customs workflow template must have ${SYSTEM_CUSTOMS_STEP_CATALOG.length} active catalog steps.`);
+  }
+
+  const archivedSelectable = await countQuery(
+    client,
+    `SELECT COUNT(*)::int AS count
+     FROM shipment_type_workflow_templates mapping
+     JOIN shipment_workflow_templates templates
+       ON templates.id = mapping.workflow_template_id
+     WHERE mapping.archived_at IS NULL
+       AND templates.archived_at IS NOT NULL`
+  );
+  if (archivedSelectable > 0) fail("Archived workflow templates must not be selectable through active mappings.");
 
   const platformRoleGrants = await countQuery(
     client,
@@ -171,6 +228,8 @@ async function verifyCatalog(client: any) {
     permissions: Object.keys(tenantPermissionDescriptions).length + 1,
     roles: Object.keys(rolePermissions).length,
     workflowTemplates: PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS.length,
+    customsCatalogSteps: customsCatalogCount,
+    importCustomsTemplateSteps: importCustomsStepCount,
   };
 }
 

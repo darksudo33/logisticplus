@@ -1,9 +1,11 @@
 import {
   IR_IMPORT_CUSTOMS_BLOCKERS,
-  IR_IMPORT_CUSTOMS_PHASES,
-  IR_IMPORT_CUSTOMS_STEPS,
   IR_IMPORT_CUSTOMS_WORKFLOW_KEY,
 } from "./iran-import-customs-workflow.js";
+import {
+  CUSTOMS_STEP_CATALOG_STAGES,
+  SYSTEM_CUSTOMS_STEP_CATALOG,
+} from "./shipment-workflow-step-catalog.js";
 
 function phase(phaseKey, labelFa, labelEn) {
   return { phaseKey, id: phaseKey, labelFa, labelEn, isVisible: true };
@@ -15,6 +17,7 @@ function step(phaseKey, stepKey, labelFa, labelEn, options = {}) {
     phaseId: phaseKey,
     stepKey,
     code: stepKey,
+    catalogStepId: options.catalogStepId || null,
     labelFa,
     labelEn,
     publicLabel: options.publicLabel || labelFa,
@@ -24,6 +27,7 @@ function step(phaseKey, stepKey, labelFa, labelEn, options = {}) {
     roleSuggestion: options.roleSuggestion || "",
     expectedDurationHours: options.expectedDurationHours ?? null,
     taskPolicy: options.taskPolicy || { mode: "suggested" },
+    checklist: options.checklist || [],
     expectedDocuments: options.expectedDocuments || [],
     expectedFormFields: options.expectedFormFields || [],
     nextStepRules: options.nextStepRules || {},
@@ -212,16 +216,22 @@ export const LEGACY_IR_IMPORT_CUSTOMS_WORKFLOW_TEMPLATE = template({
   transportMode: "sea",
   titleFa: "فرآیند واردات و ترخیص ایران",
   titleEn: "Iran import customs progression",
-  description: "Controlled legacy V1 shipment progress template for Iran import customs workflows.",
-  phases: IR_IMPORT_CUSTOMS_PHASES.map((item) => phase(item.id, item.labelFa, item.labelEn)),
-  steps: IR_IMPORT_CUSTOMS_STEPS.map((item) => step(
-    item.phaseId,
-    item.code,
-    item.labelFa,
-    item.labelEn,
+  description: "Controlled V1 shipment progress template for Iran import customs workflows, built from the reusable customs step catalog.",
+  phases: CUSTOMS_STEP_CATALOG_STAGES.map((item) => phase(item.key, item.titleFa, item.titleEn)),
+  steps: SYSTEM_CUSTOMS_STEP_CATALOG.map((item) => step(
+    item.stageKey,
+    item.code.replace(/^IR_IMPORT_CUSTOMS_/, ""),
+    item.titleFa,
+    item.title,
     {
-      publicLabel: item.phaseId === "customs_route" ? "پرونده در حال بررسی گمرکی است" : item.labelFa,
-      visibilityRule: item.phaseId === "customs_route" ? { type: "iran_customs_route_v1" } : {},
+      catalogStepId: item.id,
+      publicLabel: item.defaultCustomerVisible ? item.titleFa : "",
+      isRequired: item.defaultRequired,
+      isCustomerVisible: item.defaultCustomerVisible,
+      checklist: item.defaultChecklist,
+      expectedDocuments: item.defaultRequiredDocuments,
+      expectedFormFields: item.defaultFormFields,
+      visibilityRule: item.stageKey === "routing" ? { type: "iran_customs_route_v1" } : {},
     }
   )),
 });

@@ -634,6 +634,32 @@ CREATE TABLE IF NOT EXISTS shipment_form_template_fields (
   )
 );
 
+CREATE TABLE IF NOT EXISTS shipment_workflow_step_catalog (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
+  code TEXT NOT NULL,
+  title TEXT NOT NULL,
+  title_fa TEXT,
+  description TEXT,
+  category TEXT NOT NULL DEFAULT 'customs_import',
+  stage_key TEXT,
+  stage_title_fa TEXT,
+  default_order INTEGER NOT NULL DEFAULT 0,
+  default_required BOOLEAN NOT NULL DEFAULT TRUE,
+  default_customer_visible BOOLEAN NOT NULL DEFAULT TRUE,
+  default_internal_only BOOLEAN NOT NULL DEFAULT FALSE,
+  default_checklist JSONB NOT NULL DEFAULT '[]'::jsonb,
+  default_required_documents JSONB NOT NULL DEFAULT '[]'::jsonb,
+  default_form_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  is_system BOOLEAN NOT NULL DEFAULT FALSE,
+  archived_at TIMESTAMPTZ,
+  archived_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT shipment_workflow_step_catalog_order_non_negative CHECK (default_order >= 0)
+);
+
 CREATE TABLE IF NOT EXISTS shipment_workflow_templates (
   id TEXT PRIMARY KEY,
   organization_id TEXT REFERENCES organizations(id) ON DELETE CASCADE,
@@ -654,6 +680,8 @@ CREATE TABLE IF NOT EXISTS shipment_workflow_templates (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   archived_at TIMESTAMPTZ,
+  archived_by_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
+  archived_reason TEXT,
   CONSTRAINT shipment_workflow_templates_version_positive CHECK (version >= 1),
   CONSTRAINT shipment_workflow_templates_direction_check CHECK (
     shipment_direction IS NULL OR shipment_direction IN ('import', 'export', 'transit', 'domestic')
@@ -681,6 +709,7 @@ CREATE TABLE IF NOT EXISTS shipment_workflow_template_steps (
   phase_id TEXT NOT NULL REFERENCES shipment_workflow_template_phases(id) ON DELETE CASCADE,
   phase_key TEXT NOT NULL,
   step_key TEXT NOT NULL,
+  catalog_step_id TEXT REFERENCES shipment_workflow_step_catalog(id) ON DELETE SET NULL,
   label_fa TEXT NOT NULL,
   label_en TEXT,
   public_label TEXT,
@@ -691,6 +720,7 @@ CREATE TABLE IF NOT EXISTS shipment_workflow_template_steps (
   role_suggestion TEXT,
   expected_duration_hours INTEGER,
   task_policy_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  checklist_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   expected_documents_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   expected_form_fields_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   next_step_rules_json JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -1337,6 +1367,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS shipment_form_template_fields_key_idx ON shipm
 CREATE INDEX IF NOT EXISTS shipment_form_templates_active_type_idx ON shipment_form_templates (shipment_type_code, is_active, organization_id) WHERE archived_at IS NULL;
 CREATE INDEX IF NOT EXISTS shipment_form_template_sections_template_idx ON shipment_form_template_sections (template_id, sort_order);
 CREATE INDEX IF NOT EXISTS shipment_form_template_fields_template_idx ON shipment_form_template_fields (template_id, sort_order) WHERE archived_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS shipment_workflow_step_catalog_system_code_idx ON shipment_workflow_step_catalog (code) WHERE organization_id IS NULL AND is_system = TRUE;
+CREATE UNIQUE INDEX IF NOT EXISTS shipment_workflow_step_catalog_org_code_idx ON shipment_workflow_step_catalog (organization_id, code) WHERE organization_id IS NOT NULL AND archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS shipment_workflow_step_catalog_lookup_idx ON shipment_workflow_step_catalog (organization_id, category, stage_key, default_order) WHERE archived_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS shipment_workflow_templates_global_code_version_idx ON shipment_workflow_templates (code, version) WHERE organization_id IS NULL AND archived_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS shipment_workflow_templates_org_code_version_idx ON shipment_workflow_templates (organization_id, code, version) WHERE organization_id IS NOT NULL AND archived_at IS NULL;
 CREATE INDEX IF NOT EXISTS shipment_workflow_templates_active_idx ON shipment_workflow_templates (organization_id, is_active, code, version DESC) WHERE archived_at IS NULL;
@@ -1344,6 +1377,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS shipment_workflow_template_phases_key_idx ON s
 CREATE INDEX IF NOT EXISTS shipment_workflow_template_phases_template_idx ON shipment_workflow_template_phases (template_id, sort_order);
 CREATE UNIQUE INDEX IF NOT EXISTS shipment_workflow_template_steps_key_idx ON shipment_workflow_template_steps (template_id, step_key) WHERE archived_at IS NULL;
 CREATE INDEX IF NOT EXISTS shipment_workflow_template_steps_template_idx ON shipment_workflow_template_steps (template_id, sort_order) WHERE archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS shipment_workflow_template_steps_catalog_idx ON shipment_workflow_template_steps (template_id, catalog_step_id) WHERE catalog_step_id IS NOT NULL AND archived_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS shipment_type_workflow_templates_global_type_idx ON shipment_type_workflow_templates (shipment_type_code) WHERE organization_id IS NULL AND archived_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS shipment_type_workflow_templates_org_type_idx ON shipment_type_workflow_templates (organization_id, shipment_type_code) WHERE organization_id IS NOT NULL AND archived_at IS NULL;
 CREATE INDEX IF NOT EXISTS shipment_type_workflow_templates_template_idx ON shipment_type_workflow_templates (workflow_template_id) WHERE archived_at IS NULL;

@@ -659,9 +659,19 @@ export const shipmentTypeWorkflowTemplateParamsSchema = z.object({
 
 export const shipmentWorkflowTemplateListQuerySchema = z.object({
   shipmentTypeCode: z.preprocess(firstQueryValue, shipmentTypeCode.optional()),
+  includeArchived: queryBoolean(false),
+}).strict();
+
+export const shipmentWorkflowStepCatalogListQuerySchema = z.object({
+  q: z.preprocess(firstQueryValue, optionalTrimmedText(160)),
+  search: z.preprocess(firstQueryValue, optionalTrimmedText(160)),
+  stageKey: z.preprocess(firstQueryValue, optionalTrimmedText(80)),
+  category: z.preprocess(firstQueryValue, optionalTrimmedText(80)),
+  includeArchived: queryBoolean(false),
 }).strict();
 
 const workflowTemplateJsonArray = z.array(z.unknown()).max(80);
+const workflowTemplateCatalogStepIds = z.array(requiredId).min(1).max(80);
 
 export const shipmentWorkflowTemplateCreateBodySchema = z.object({
   sourceTemplateId: optionalId,
@@ -706,6 +716,7 @@ export const shipmentWorkflowTemplateStepCreateBodySchema = z.object({
   roleSuggestion: optionalTrimmedText(120),
   expectedDurationHours: optionalNonNegativeNumber,
   taskPolicy: z.record(z.unknown()).optional(),
+  checklist: workflowTemplateJsonArray.optional(),
   expectedDocuments: workflowTemplateJsonArray.optional(),
   expectedFormFields: workflowTemplateJsonArray.optional(),
   nextStepRules: z.record(z.unknown()).optional(),
@@ -727,6 +738,7 @@ export const shipmentWorkflowTemplateStepUpdateBodySchema = z.object({
   roleSuggestion: optionalTrimmedText(120),
   expectedDurationHours: optionalNonNegativeNumber,
   taskPolicy: z.record(z.unknown()).optional(),
+  checklist: workflowTemplateJsonArray.optional(),
   expectedDocuments: workflowTemplateJsonArray.optional(),
   expectedFormFields: workflowTemplateJsonArray.optional(),
   nextStepRules: z.record(z.unknown()).optional(),
@@ -734,6 +746,16 @@ export const shipmentWorkflowTemplateStepUpdateBodySchema = z.object({
   (value) => Object.values(value).some((item) => item !== undefined),
   { message: "At least one workflow step field is required." }
 );
+
+export const shipmentWorkflowTemplateStepsFromCatalogBodySchema = z.object({
+  catalogStepIds: workflowTemplateCatalogStepIds,
+  allowDuplicates: z.boolean().optional(),
+}).strict();
+
+export const shipmentWorkflowTemplateArchiveBodySchema = z.object({
+  reason: optionalTrimmedText(500),
+  archivedReason: optionalTrimmedText(500),
+}).strict();
 
 export const shipmentTypeWorkflowTemplateBodySchema = z.object({
   templateId: requiredId,

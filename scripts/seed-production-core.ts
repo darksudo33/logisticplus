@@ -6,6 +6,11 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { pricingPlans } from "../src/lib/pricing.ts";
 import { DEFAULT_SMS_TEMPLATES } from "../src/server/sms-templates.js";
+import {
+  PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS,
+  SEEDED_SHIPMENT_WORKFLOW_TEMPLATES,
+} from "../src/shared/shipment-workflow-template-presets.js";
+import { SYSTEM_CUSTOMS_STEP_CATALOG } from "../src/shared/shipment-workflow-step-catalog.js";
 
 const { Client } = pg;
 
@@ -146,6 +151,10 @@ function roleId(role: string) {
 
 function asJson(value: unknown) {
   return JSON.stringify(value ?? {});
+}
+
+function asJsonArray(value: unknown) {
+  return JSON.stringify(Array.isArray(value) ? value : []);
 }
 
 function clean(value: unknown) {
@@ -292,6 +301,245 @@ async function ensureSmsTemplates(client: any) {
   return DEFAULT_SMS_TEMPLATES.map((template) => template.key);
 }
 
+function slug(value: unknown) {
+  return clean(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || crypto.randomUUID();
+}
+
+async function ensureWorkflowStepCatalog(client: any) {
+  for (const step of SYSTEM_CUSTOMS_STEP_CATALOG) {
+    await client.query(
+      `INSERT INTO shipment_workflow_step_catalog (
+         id, organization_id, code, title, title_fa, description, category, stage_key, stage_title_fa,
+         default_order, default_required, default_customer_visible, default_internal_only,
+         default_checklist, default_required_documents, default_form_fields, metadata, is_system,
+         created_at, updated_at
+       )
+       VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+         $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, TRUE, NOW(), NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         code = EXCLUDED.code,
+         title = EXCLUDED.title,
+         title_fa = EXCLUDED.title_fa,
+         description = EXCLUDED.description,
+         category = EXCLUDED.category,
+         stage_key = EXCLUDED.stage_key,
+         stage_title_fa = EXCLUDED.stage_title_fa,
+         default_order = EXCLUDED.default_order,
+         default_required = EXCLUDED.default_required,
+         default_customer_visible = EXCLUDED.default_customer_visible,
+         default_internal_only = EXCLUDED.default_internal_only,
+         default_checklist = EXCLUDED.default_checklist,
+         default_required_documents = EXCLUDED.default_required_documents,
+         default_form_fields = EXCLUDED.default_form_fields,
+         metadata = EXCLUDED.metadata,
+         is_system = TRUE,
+         archived_at = NULL,
+         archived_by_id = NULL,
+         updated_at = NOW()`,
+      [
+        step.id,
+        step.code,
+        step.title,
+        step.titleFa,
+        step.description || "",
+        step.category,
+        step.stageKey,
+        step.stageTitleFa,
+        step.defaultOrder,
+        step.defaultRequired,
+        step.defaultCustomerVisible,
+        step.defaultInternalOnly,
+        asJsonArray(step.defaultChecklist),
+        asJsonArray(step.defaultRequiredDocuments),
+        asJsonArray(step.defaultFormFields),
+        asJson(step.metadata || {}),
+      ]
+    );
+  }
+  return SYSTEM_CUSTOMS_STEP_CATALOG.length;
+}
+
+async function ensureWorkflowTemplates(client: any) {
+  for (const template of SEEDED_SHIPMENT_WORKFLOW_TEMPLATES) {
+    await client.query(
+      `INSERT INTO shipment_workflow_templates (
+         id, organization_id, code, shipment_direction, transport_mode, shipment_type_hint,
+         title_fa, title_en, description, is_system, is_active, version, published_at, created_at, updated_at
+       )
+       VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, TRUE, $9, $10, NOW(), NOW(), NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         code = EXCLUDED.code,
+         shipment_direction = EXCLUDED.shipment_direction,
+         transport_mode = EXCLUDED.transport_mode,
+         shipment_type_hint = EXCLUDED.shipment_type_hint,
+         title_fa = EXCLUDED.title_fa,
+         title_en = EXCLUDED.title_en,
+         description = EXCLUDED.description,
+         is_system = TRUE,
+         is_active = EXCLUDED.is_active,
+         archived_at = NULL,
+         archived_by_id = NULL,
+         archived_reason = NULL,
+         updated_at = NOW()`,
+      [
+        template.id,
+        template.code,
+        template.shipmentDirection || null,
+        template.transportMode || null,
+        template.shipmentTypeHint || template.shipmentTypeCode || null,
+        template.titleFa,
+        template.titleEn || "",
+        template.description || "",
+        template.isActive !== false,
+        template.version || 1,
+      ]
+    );
+
+    const phaseIds = new Map<string, string>();
+    for (const phase of template.phases || []) {
+      const phaseId = `${template.id}-phase-${slug(phase.phaseKey)}`;
+      const result = await client.query(
+        `INSERT INTO shipment_workflow_template_phases (
+           id, template_id, phase_key, label_fa, label_en, sort_order, is_visible, created_at, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+         ON CONFLICT (template_id, phase_key) DO UPDATE SET
+           label_fa = EXCLUDED.label_fa,
+           label_en = EXCLUDED.label_en,
+           sort_order = EXCLUDED.sort_order,
+           is_visible = EXCLUDED.is_visible,
+           updated_at = NOW()
+         RETURNING id`,
+        [
+          phaseId,
+          template.id,
+          phase.phaseKey,
+          phase.labelFa,
+          phase.labelEn || "",
+          phase.sortOrder || phase.order || 0,
+          phase.isVisible !== false,
+        ]
+      );
+      phaseIds.set(phase.phaseKey, result.rows[0].id);
+    }
+
+    const activeStepKeys = new Set<string>();
+    for (const step of template.steps || []) {
+      const phaseId = phaseIds.get(step.phaseKey || step.phaseId);
+      if (!phaseId) continue;
+      activeStepKeys.add(step.stepKey);
+      await client.query(
+        `INSERT INTO shipment_workflow_template_steps (
+           id, template_id, phase_id, phase_key, step_key, catalog_step_id, label_fa, label_en, public_label,
+           sort_order, is_required, is_visible, is_customer_visible, role_suggestion,
+           expected_duration_hours, task_policy_json, checklist_json, expected_documents_json,
+           expected_form_fields_json, next_step_rules_json, visibility_rule_json, created_at, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+           $15, $16::jsonb, $17::jsonb, $18::jsonb, $19::jsonb, $20::jsonb, $21::jsonb, NOW(), NOW())
+         ON CONFLICT (template_id, step_key) WHERE archived_at IS NULL DO UPDATE SET
+           phase_id = EXCLUDED.phase_id,
+           phase_key = EXCLUDED.phase_key,
+           catalog_step_id = EXCLUDED.catalog_step_id,
+           label_fa = EXCLUDED.label_fa,
+           label_en = EXCLUDED.label_en,
+           public_label = EXCLUDED.public_label,
+           sort_order = EXCLUDED.sort_order,
+           is_required = EXCLUDED.is_required,
+           is_visible = EXCLUDED.is_visible,
+           is_customer_visible = EXCLUDED.is_customer_visible,
+           role_suggestion = EXCLUDED.role_suggestion,
+           expected_duration_hours = EXCLUDED.expected_duration_hours,
+           task_policy_json = EXCLUDED.task_policy_json,
+           checklist_json = EXCLUDED.checklist_json,
+           expected_documents_json = EXCLUDED.expected_documents_json,
+           expected_form_fields_json = EXCLUDED.expected_form_fields_json,
+           next_step_rules_json = EXCLUDED.next_step_rules_json,
+           visibility_rule_json = EXCLUDED.visibility_rule_json,
+           archived_at = NULL,
+           updated_at = NOW()`,
+        [
+          `${template.id}-step-${slug(step.stepKey)}`,
+          template.id,
+          phaseId,
+          step.phaseKey || step.phaseId,
+          step.stepKey,
+          step.catalogStepId || null,
+          step.labelFa,
+          step.labelEn || "",
+          step.publicLabel || step.labelFa,
+          step.sortOrder || step.order || 0,
+          step.isRequired !== false,
+          step.isVisible !== false,
+          step.isCustomerVisible !== false,
+          step.roleSuggestion || null,
+          step.expectedDurationHours ?? null,
+          asJson(step.taskPolicy || { mode: "suggested" }),
+          asJsonArray(step.checklist),
+          asJsonArray(step.expectedDocuments),
+          asJsonArray(step.expectedFormFields),
+          asJson(step.nextStepRules || {}),
+          asJson(step.visibilityRule || {}),
+        ]
+      );
+    }
+
+    if (template.id === "swt-ir-import-customs-v1") {
+      await client.query(
+        `UPDATE shipment_workflow_template_steps
+         SET archived_at = COALESCE(archived_at, NOW()),
+             is_visible = FALSE,
+             is_customer_visible = FALSE,
+             updated_at = NOW()
+         WHERE template_id = $1
+           AND archived_at IS NULL
+           AND step_key <> ALL($2::text[])`,
+        [template.id, [...activeStepKeys]]
+      );
+      await client.query(
+        `UPDATE shipment_workflow_template_phases
+         SET is_visible = FALSE,
+             updated_at = NOW()
+         WHERE template_id = $1
+           AND phase_key <> ALL($2::text[])`,
+        [template.id, (template.phases || []).map((phase) => phase.phaseKey)]
+      );
+    }
+  }
+
+  for (const mapping of PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS) {
+    await client.query(
+      `INSERT INTO shipment_type_workflow_templates (
+         id, organization_id, shipment_type_code, workflow_template_id,
+         workflow_template_code, workflow_template_version, created_at, updated_at
+       )
+       VALUES ($1, NULL, $2, $3, $4, $5, NOW(), NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         workflow_template_id = EXCLUDED.workflow_template_id,
+         workflow_template_code = EXCLUDED.workflow_template_code,
+         workflow_template_version = EXCLUDED.workflow_template_version,
+         archived_at = NULL,
+         updated_at = NOW()`,
+      [
+        `stwt-global-${mapping.shipmentTypeCode.toLowerCase().replace(/_/g, "-")}`,
+        mapping.shipmentTypeCode,
+        mapping.templateId,
+        mapping.workflowTemplateCode,
+        mapping.workflowTemplateVersion,
+      ]
+    );
+  }
+
+  return {
+    catalogSteps: SYSTEM_CUSTOMS_STEP_CATALOG.length,
+    workflowTemplates: SEEDED_SHIPMENT_WORKFLOW_TEMPLATES.length,
+    workflowMappings: PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS.length,
+  };
+}
+
 async function findInitialOrganization(client: any, env = process.env) {
   const organizationName = clean(env.INITIAL_ORG_NAME);
   const adminEmail = normalizeEmail(env.INITIAL_ADMIN_EMAIL);
@@ -402,6 +650,8 @@ export async function ensureProductionCoreCatalog(client: any, { env = process.e
   const plans = await ensurePlans(client);
   const access = await ensurePermissionsAndRoles(client);
   const smsTemplates = await ensureSmsTemplates(client);
+  const workflowStepCatalog = await ensureWorkflowStepCatalog(client);
+  const workflowTemplates = await ensureWorkflowTemplates(client);
   const initialSubscription = includeInitialOrgSubscription
     ? await ensureInitialOrganizationSubscription(client, { env })
     : { skipped: true, reason: "disabled" };
@@ -411,6 +661,8 @@ export async function ensureProductionCoreCatalog(client: any, { env = process.e
     permissions: access.permissions,
     roles: access.roles,
     smsTemplates,
+    workflowStepCatalog,
+    workflowTemplates,
     initialSubscription,
   };
 }
@@ -434,6 +686,9 @@ function printSummary(summary: any, logger = console) {
   logger.log(`Permissions ensured: ${summary.permissions.length}`);
   logger.log(`Roles ensured: ${summary.roles.join(", ")}`);
   logger.log(`SMS templates ensured: ${summary.smsTemplates.length}`);
+  logger.log(`Workflow catalog steps ensured: ${summary.workflowStepCatalog}`);
+  logger.log(`Workflow templates ensured: ${summary.workflowTemplates.workflowTemplates}`);
+  logger.log(`Workflow type mappings ensured: ${summary.workflowTemplates.workflowMappings}`);
   if (summary.initialSubscription?.created) {
     logger.log(`Initial organization subscription created: ${summary.initialSubscription.planId}`);
   } else if (summary.initialSubscription?.skipped) {

@@ -12,6 +12,7 @@ import {
   PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS,
   SEEDED_SHIPMENT_WORKFLOW_TEMPLATES,
 } from "../src/shared/shipment-workflow-template-presets.js";
+import { SYSTEM_CUSTOMS_STEP_CATALOG } from "../src/shared/shipment-workflow-step-catalog.js";
 import { DEFAULT_SMS_TEMPLATES } from "../src/server/sms-templates.js";
 
 const { Client } = pg;
@@ -319,6 +320,59 @@ function workflowTypeMappingId(typeCode: string) {
   return `stwt-global-${stableSlug(typeCode)}`.slice(0, 180);
 }
 
+async function seedWorkflowStepCatalog(client: Client) {
+  for (const step of SYSTEM_CUSTOMS_STEP_CATALOG) {
+    await client.query(
+      `INSERT INTO shipment_workflow_step_catalog (
+         id, organization_id, code, title, title_fa, description, category, stage_key, stage_title_fa,
+         default_order, default_required, default_customer_visible, default_internal_only,
+         default_checklist, default_required_documents, default_form_fields, metadata, is_system,
+         created_at, updated_at
+       )
+       VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+         $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, TRUE, NOW(), NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         code = EXCLUDED.code,
+         title = EXCLUDED.title,
+         title_fa = EXCLUDED.title_fa,
+         description = EXCLUDED.description,
+         category = EXCLUDED.category,
+         stage_key = EXCLUDED.stage_key,
+         stage_title_fa = EXCLUDED.stage_title_fa,
+         default_order = EXCLUDED.default_order,
+         default_required = EXCLUDED.default_required,
+         default_customer_visible = EXCLUDED.default_customer_visible,
+         default_internal_only = EXCLUDED.default_internal_only,
+         default_checklist = EXCLUDED.default_checklist,
+         default_required_documents = EXCLUDED.default_required_documents,
+         default_form_fields = EXCLUDED.default_form_fields,
+         metadata = EXCLUDED.metadata,
+         is_system = TRUE,
+         archived_at = NULL,
+         archived_by_id = NULL,
+         updated_at = NOW()`,
+      [
+        step.id,
+        step.code,
+        step.title,
+        step.titleFa,
+        step.description || "",
+        step.category,
+        step.stageKey,
+        step.stageTitleFa,
+        step.defaultOrder,
+        step.defaultRequired,
+        step.defaultCustomerVisible,
+        step.defaultInternalOnly,
+        JSON.stringify(step.defaultChecklist || []),
+        JSON.stringify(step.defaultRequiredDocuments || []),
+        JSON.stringify(step.defaultFormFields || []),
+        JSON.stringify(step.metadata || {}),
+      ]
+    );
+  }
+}
+
 async function seedShipmentFormTemplates(client: Client) {
   for (const template of DEFAULT_SHIPMENT_FORM_TEMPLATE_DEFINITIONS) {
     const templateId = shipmentTemplateId(template.shipmentTypeCode);
@@ -444,6 +498,8 @@ async function seedPredefinedShipmentWorkflowTemplates(client: Client) {
          is_system = TRUE,
          is_active = TRUE,
          archived_at = NULL,
+         archived_by_id = NULL,
+         archived_reason = NULL,
          updated_at = NOW()`,
       [
         template.id,
@@ -484,19 +540,20 @@ async function seedPredefinedShipmentWorkflowTemplates(client: Client) {
     for (const step of template.steps) {
       await client.query(
         `INSERT INTO shipment_workflow_template_steps (
-           id, template_id, phase_id, phase_key, step_key, label_fa, label_en, public_label,
+           id, template_id, phase_id, phase_key, step_key, catalog_step_id, label_fa, label_en, public_label,
            sort_order, is_required, is_visible, is_customer_visible, role_suggestion,
-           expected_duration_hours, task_policy_json, expected_documents_json,
+           expected_duration_hours, task_policy_json, checklist_json, expected_documents_json,
            expected_form_fields_json, next_step_rules_json, visibility_rule_json, created_at, updated_at
          )
          VALUES (
-           $1, $2, $3, $4, $5, $6, $7, $8,
-           $9, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb,
-           $17::jsonb, $18::jsonb, $19::jsonb, NOW(), NOW()
+           $1, $2, $3, $4, $5, $6, $7, $8, $9,
+           $10, $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb, $18::jsonb,
+           $19::jsonb, $20::jsonb, $21::jsonb, NOW(), NOW()
          )
          ON CONFLICT (template_id, step_key) WHERE archived_at IS NULL DO UPDATE SET
            phase_id = EXCLUDED.phase_id,
            phase_key = EXCLUDED.phase_key,
+           catalog_step_id = EXCLUDED.catalog_step_id,
            label_fa = EXCLUDED.label_fa,
            label_en = EXCLUDED.label_en,
            public_label = EXCLUDED.public_label,
@@ -507,6 +564,7 @@ async function seedPredefinedShipmentWorkflowTemplates(client: Client) {
            role_suggestion = EXCLUDED.role_suggestion,
            expected_duration_hours = EXCLUDED.expected_duration_hours,
            task_policy_json = EXCLUDED.task_policy_json,
+           checklist_json = EXCLUDED.checklist_json,
            expected_documents_json = EXCLUDED.expected_documents_json,
            expected_form_fields_json = EXCLUDED.expected_form_fields_json,
            next_step_rules_json = EXCLUDED.next_step_rules_json,
@@ -519,6 +577,7 @@ async function seedPredefinedShipmentWorkflowTemplates(client: Client) {
           workflowTemplatePhaseId(template.id, step.phaseKey),
           step.phaseKey,
           step.stepKey,
+          step.catalogStepId || null,
           step.labelFa,
           step.labelEn,
           step.publicLabel || step.labelFa,
@@ -529,6 +588,7 @@ async function seedPredefinedShipmentWorkflowTemplates(client: Client) {
           step.roleSuggestion || null,
           step.expectedDurationHours,
           JSON.stringify(step.taskPolicy || { mode: "suggested" }),
+          JSON.stringify(step.checklist || []),
           JSON.stringify(step.expectedDocuments || []),
           JSON.stringify(step.expectedFormFields || []),
           JSON.stringify(step.nextStepRules || {}),
@@ -587,6 +647,7 @@ async function seedPredefinedShipmentWorkflowTemplates(client: Client) {
 }
 
 async function seedShipmentWorkflowTemplates(client: Client) {
+  await seedWorkflowStepCatalog(client);
   await seedPredefinedShipmentWorkflowTemplates(client);
 }
 
