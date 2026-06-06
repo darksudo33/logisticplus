@@ -321,7 +321,7 @@ test.describe.serial("shipment detail workflow and task controls", () => {
   test("workflow sections collapse, expand, and persist per shipment", async ({ page }) => {
     await loginViaUi(page);
     await clearWorkflowStorage(page);
-    await page.goto(`/shipments/${shipmentId}`);
+    await page.goto(`/shipments/${shipmentId}/legacy`);
     await page.getByTestId("workflow-start").click();
 
     await expect(page.getByTestId("workflow-phase-body-order_registration")).toBeVisible();
@@ -368,7 +368,7 @@ test.describe.serial("shipment detail workflow and task controls", () => {
 
     await loginViaUi(page);
     await clearWorkflowStorage(page);
-    await page.goto(`/shipments/${shipmentId}`);
+    await page.goto(`/shipments/${shipmentId}/legacy`);
     await expect(page.getByTestId("workflow-phase-body-order_registration")).toBeVisible();
 
     await page.getByTestId("workflow-step-assign-001").click();
@@ -482,7 +482,7 @@ test.describe.serial("shipment detail workflow and task controls", () => {
     });
 
     await loginViaUi(page);
-    await page.goto(`/shipments/${shipmentId}`);
+    await page.goto(`/shipments/${shipmentId}/legacy`);
     await page.getByRole("button", { name: /شروع گردش کار/ }).click();
     await expect.poll(async () => {
       return page.evaluate(async (id) => {
@@ -536,7 +536,7 @@ test.describe.serial("shipment detail workflow and task controls", () => {
     });
 
     await loginViaUi(page);
-    await page.goto(`/shipments/${shipmentId}`);
+    await page.goto(`/shipments/${shipmentId}/legacy`);
 
     await expect(page.getByTestId("shipment-chat-panel")).toBeVisible();
     await expect(page.getByTestId("shipment-documents-panel")).toBeVisible();
@@ -635,7 +635,7 @@ test.describe.serial("shipment detail workflow and task controls", () => {
     });
 
     await loginViaUi(page);
-    await page.goto(`/shipments/${shipmentId}`);
+    await page.goto(`/shipments/${shipmentId}/legacy`);
 
     await expect(page.getByTestId(`related-shipment-task-${task.id}`)).toBeVisible();
     await page.getByTestId(`related-task-start-${task.id}`).click();

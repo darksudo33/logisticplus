@@ -226,6 +226,7 @@ import { registerPublicTrackingRoutes } from "./src/server/routes/public-trackin
 import { registerShipmentProgressRoutes } from "./src/server/routes/shipment-progress-routes.js";
 import { registerDailyStatusRoutes } from "./src/server/routes/daily-status-routes.js";
 import { registerBusinessEntityRoutes } from "./src/server/routes/business-entity-routes.js";
+import { registerDocumentManagementCenterRoutes } from "./src/server/routes/document-management-center-routes.js";
 import { registerShipmentV2Routes } from "./src/server/routes/shipment-v2-routes.js";
 import { registerShipmentFormTemplateRoutes } from "./src/server/routes/shipment-form-template-routes.js";
 import { registerShipmentWorkflowTemplateRoutes } from "./src/server/routes/shipment-workflow-template-routes.js";
@@ -1846,7 +1847,10 @@ async function startServer() {
         const { user, organizationId } = tenantRequest;
         const config = getFeatureConfig(feature);
         await requirePermission(user, config.permission);
-        const data = await listFeatureRecords(feature, { organizationId });
+        const data = await listFeatureRecords(feature, {
+          organizationId,
+          includeCustomerPrivateDetails: user.role === "CEO",
+        });
         res.json({ ok: true, data });
       } catch (error) {
         if (error.statusCode === 403) {
@@ -1871,6 +1875,7 @@ async function startServer() {
         actorUserId: user.id,
         tenantContext,
         shipment: body,
+        includeCustomerPrivateDetails: user.role === "CEO",
       });
       await auditLog({
         actorUserId: user.id,
@@ -2100,7 +2105,10 @@ async function startServer() {
       await requirePermission(user, "shipments.view_all");
       const params = parseRequestValue(res, shipmentParamsSchema, req.params);
       if (!params) return;
-      const data = await getShipmentOperationalRecord(params.id, { organizationId });
+      const data = await getShipmentOperationalRecord(params.id, {
+        organizationId,
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       res.json({ ok: true, data });
     } catch (error) {
@@ -2123,6 +2131,7 @@ async function startServer() {
       const result = await updateShipmentOperationalFields(params.id, body, {
         organizationId,
         actorUserId: user.id,
+        includeCustomerPrivateDetails: user.role === "CEO",
       });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       await auditLog({
@@ -2262,6 +2271,13 @@ async function startServer() {
     pool,
     requestContext,
     requireAuthenticatedTenantUser,
+  });
+
+  registerDocumentManagementCenterRoutes(app, {
+    createApiError,
+    pool,
+    requireAuthenticatedTenantUser,
+    requirePermission,
   });
 
   registerShipmentFormTemplateRoutes(app, {
@@ -4733,6 +4749,7 @@ async function startServer() {
           uploadedByName: user.name,
           shipmentId: metadata.shipmentId || null,
           customerId: metadata.customerId || null,
+          note: metadata.note || "",
           visibility: metadata.visibility,
         });
       } catch (error) {

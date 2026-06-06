@@ -5,18 +5,15 @@
 
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
-import { LayoutDashboard, Ship, CheckSquare, MessageSquare, MapPin, ShieldCheck, CreditCard, Archive, Calculator } from "lucide-react";
+import { ClipboardList, FileSearch, MessageSquare, Ship } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { QUOTATIONS_UI_ENABLED } from "@/src/config/features";
 import { motion } from "motion/react";
 
 const navItems = [
-  { icon: LayoutDashboard, label: "داشبورد", path: "/dashboard" },
-  { icon: Ship, label: "بارها", path: "/shipments" },
-  ...(QUOTATIONS_UI_ENABLED ? [{ icon: Calculator, label: "مدیریت کوتاژ", path: "/quotations" }] : []),
-  { icon: CheckSquare, label: "وظایف", path: "/tasks" },
-  { icon: CreditCard, label: "چک‌ها", path: "/cheques" },
-  { icon: Archive, label: "آرشیو", path: "/archive" },
+  { icon: ClipboardList, label: "وضعیت روزانه", path: "/daily-status" },
+  { icon: Ship, label: "محموله‌ها", path: "/shipments" },
+  { icon: MessageSquare, label: "چت داخلی", path: "/chat" },
+  { icon: FileSearch, label: "مرکز مدیریت اسناد", path: "/documents/management-center" },
 ];
 
 export const MobileBottomNav = () => {
@@ -49,7 +46,7 @@ export const MobileBottomNav = () => {
               <item.icon className={cn("w-5 h-5", isActive && "drop-shadow-[0_0_8px_rgba(37,99,235,0.25)]")} />
             </div>
             <span className={cn(
-              "text-[9px] font-black transition-all",
+              "max-w-full whitespace-normal px-1 text-center text-[9px] font-black leading-3 transition-all",
               isActive ? "opacity-100" : "opacity-60"
             )}>
               {item.label}

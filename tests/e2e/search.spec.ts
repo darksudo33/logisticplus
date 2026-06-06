@@ -22,6 +22,8 @@ const IDS = {
   otherCustomer: "qa-search-other-customer",
   otherShipment: "qa-search-other-shipment",
 };
+const SEARCH_CUSTOMER_CODE = "QA-SEARCH-CUS-001";
+const SEARCH_PERSIAN_CUSTOMER_CODE = "QA-SEARCH-CUS-FA";
 
 async function readSearch(context, params) {
   const response = await context.get(`/api/search?${new URLSearchParams(params).toString()}`);
@@ -59,12 +61,13 @@ async function seedSearchRows(client) {
   );
 
   await client.query(
-    `INSERT INTO customers (id, organization_id, owner_user_id, company_name, contact_name, email, phone, address, notes, legacy_data)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,
+    `INSERT INTO customers (id, organization_id, owner_user_id, customer_code, company_name, contact_name, email, phone, address, notes, legacy_data)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)`,
     [
       IDS.customer,
       ownerUser.organization_id,
       ownerUser.id,
+      SEARCH_CUSTOMER_CODE,
       "QA Search Customer",
       "QA Search Contact",
       "qa-search-customer@example.test",
@@ -76,12 +79,13 @@ async function seedSearchRows(client) {
   );
 
   await client.query(
-    `INSERT INTO customers (id, organization_id, owner_user_id, company_name, contact_name, email, phone, address)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    `INSERT INTO customers (id, organization_id, owner_user_id, customer_code, company_name, contact_name, email, phone, address)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
       IDS.persianCustomer,
       ownerUser.organization_id,
       ownerUser.id,
+      SEARCH_PERSIAN_CUSTOMER_CODE,
       "مشتری جستجو تست",
       "مسئول جستجو",
       "qa-search-persian@example.test",
@@ -174,8 +178,8 @@ async function seedSearchRows(client) {
     [IDS.otherOrg]
   );
   await client.query(
-    `INSERT INTO customers (id, organization_id, company_name, contact_name, email, phone)
-     VALUES ($1, $2, 'QA-OTHER-TENANT-SECRET Customer', 'Hidden Tenant', 'hidden@example.test', '09120000000')`,
+    `INSERT INTO customers (id, organization_id, customer_code, company_name, contact_name, email, phone)
+     VALUES ($1, $2, 'QA-OTHER-TENANT-CUS', 'QA-OTHER-TENANT-SECRET Customer', 'Hidden Tenant', 'hidden@example.test', '09120000000')`,
     [IDS.otherCustomer, IDS.otherOrg]
   );
   await client.query(
@@ -228,7 +232,10 @@ test.describe.serial("production-ready global search", () => {
     expect(shipmentByTracking.results[0].matchedFields).toContain("trackingNumber");
 
     const customerByName = await readSearch(owner, { q: "qa search customer", type: "customers" });
-    expect(customerByName.results.some((result) => result.id === IDS.customer && result.type === "customer")).toBe(true);
+    const customerNameMatch = customerByName.results.find((result) => result.id === IDS.customer && result.type === "customer");
+    expect(customerNameMatch).toBeTruthy();
+    expect(customerNameMatch.title).toBe(SEARCH_CUSTOMER_CODE);
+    expect(JSON.stringify(customerNameMatch)).not.toContain("QA Search Customer");
 
     const customerByPhone = await readSearch(owner, { q: "09123456789", type: "customers" });
     expect(customerByPhone.results.some((result) => result.id === IDS.customer)).toBe(true);
@@ -295,8 +302,8 @@ test.describe.serial("production-ready global search", () => {
     await page.goto(`/search?q=${encodeURIComponent("QA Search Customer")}&type=customers`);
 
     await expect(page.getByTestId("search-page-input")).toHaveValue("QA Search Customer");
-    await expect(page.getByTestId("search-result-item").filter({ hasText: "QA Search Customer" }).first()).toBeVisible();
-    await page.getByTestId("search-result-item").filter({ hasText: "QA Search Customer" }).first().click();
+    await expect(page.getByTestId("search-result-item").filter({ hasText: SEARCH_CUSTOMER_CODE }).first()).toBeVisible();
+    await page.getByTestId("search-result-item").filter({ hasText: SEARCH_CUSTOMER_CODE }).first().click();
     await expect(page).toHaveURL(new RegExp(`/customers/${IDS.customer}$`));
   });
 

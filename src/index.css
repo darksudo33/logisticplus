@@ -82,6 +82,25 @@
     font-size: 14px;
     min-height: 100vh;
   }
+
+  @media (max-width: 767px) {
+    input,
+    textarea,
+    select,
+    [contenteditable="true"] {
+      font-size: 16px !important;
+    }
+
+    button,
+    input,
+    textarea,
+    select,
+    a,
+    [role="button"],
+    [tabindex]:not([tabindex="-1"]) {
+      touch-action: manipulation;
+    }
+  }
 }
 
 .app-shell {

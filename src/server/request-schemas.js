@@ -58,6 +58,32 @@ const isRealIsoDate = (value) => {
     date.getUTCDate() === day
   );
 };
+const normalizeShipmentV2DateInput = (value) => {
+  const normalizedValue = blankToNull(value);
+  if (normalizedValue === undefined || normalizedValue === null) return normalizedValue;
+  if (typeof normalizedValue !== "string") return normalizedValue;
+  const match = normalizedValue.trim().match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
+  if (!match) return normalizedValue;
+  const year = Number(match[1]);
+  const separator = year < 1700 ? "/" : "-";
+  return `${match[1]}${separator}${padDatePart(match[2])}${separator}${padDatePart(match[3])}`;
+};
+const isPlausibleShamsiDate = (value) => {
+  if (!value) return true;
+  const match = String(value).match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1200 || year > 1600 || month < 1 || month > 12) return false;
+  const maxDay = month <= 6 ? 31 : month <= 11 ? 30 : 30;
+  return day >= 1 && day <= maxDay;
+};
+const isRealShipmentV2Date = (value) => {
+  if (!value) return true;
+  const stringValue = String(value);
+  return stringValue.includes("/") ? isPlausibleShamsiDate(stringValue) : isRealIsoDate(stringValue);
+};
 
 const optionalId = z.preprocess(
   blankToUndefined,
@@ -67,14 +93,31 @@ const optionalNullableId = z.preprocess(
   blankToNull,
   z.string().trim().min(1, "Identifier is required.").max(128).nullable().optional()
 );
-const optionalNullableNonNegativeNumber = z.preprocess((value) => {
+const normalizeLocalizedNumberInput = (value) => {
   const normalizedValue = blankToNull(value);
+  if (normalizedValue === undefined || normalizedValue === null) return normalizedValue;
+  if (typeof normalizedValue === "number") return normalizedValue;
+  const persianDigits = "۰۱۲۳۴۵۶۷۸۹";
+  const arabicDigits = "٠١٢٣٤٥٦٧٨٩";
+  return String(normalizedValue)
+    .replace(/[۰-۹٠-٩]/g, (digit) => {
+      const persianIndex = persianDigits.indexOf(digit);
+      if (persianIndex >= 0) return String(persianIndex);
+      const arabicIndex = arabicDigits.indexOf(digit);
+      return arabicIndex >= 0 ? String(arabicIndex) : digit;
+    })
+    .replace(/[٬,]/g, "")
+    .replace(/٫/g, ".")
+    .trim();
+};
+const optionalNullableNonNegativeNumber = z.preprocess((value) => {
+  const normalizedValue = normalizeLocalizedNumberInput(value);
   if (normalizedValue === undefined || normalizedValue === null) return normalizedValue;
   const numberValue = Number(normalizedValue);
   return Number.isFinite(numberValue) ? numberValue : normalizedValue;
 }, z.number().min(0, "Number fields cannot be negative.").nullable().optional());
 const optionalNullableNonNegativeInteger = z.preprocess((value) => {
-  const normalizedValue = blankToNull(value);
+  const normalizedValue = normalizeLocalizedNumberInput(value);
   if (normalizedValue === undefined || normalizedValue === null) return normalizedValue;
   const numberValue = Number(normalizedValue);
   return Number.isFinite(numberValue) ? numberValue : normalizedValue;
@@ -145,6 +188,7 @@ export const publicTrackSearchBodySchema = z.object({
 export const documentMetadataSchema = z.object({
   title: optionalTrimmedText(180),
   type: optionalTrimmedText(80),
+  note: optionalTrimmedText(2000),
   shipmentId: optionalId,
   customerId: optionalId,
   visibility: z.enum(["internal", "customer_visible"]).optional(),
@@ -161,36 +205,13 @@ export const documentParamsSchema = z.object({
   id: requiredId,
 });
 
-const customerMutationBaseSchema = z.object({
-  name: optionalTrimmedText(180),
-  contactName: optionalTrimmedText(180),
-  company: optionalTrimmedText(180),
-  companyName: optionalTrimmedText(180),
-  email: optionalTrimmedText(254),
-  phone: optionalTrimmedText(80),
-  address: optionalTrimmedText(500),
-  referrer: optionalTrimmedText(180),
-  notes: optionalTrimmedText(2000),
-  status: optionalTrimmedText(40),
-}).passthrough();
-
-export const customerParamsSchema = z.object({
-  id: requiredId,
+export const documentManagementCenterSearchQuerySchema = z.object({
+  query: z.preprocess(
+    firstQueryValue,
+    z.string().trim().min(2, "Search query is required.").max(120, "Search query is too long.")
+  ),
+  limit: queryLimit(12),
 });
-
-export const customerRelatedParamsSchema = customerParamsSchema.extend({
-  related: z.enum(["shipments", "documents", "quotations", "cheques"]),
-});
-
-export const customerCreateBodySchema = customerMutationBaseSchema.refine(
-  (value) => value.name || value.contactName || value.company || value.companyName,
-  {
-    message: "Customer name or company is required.",
-    path: ["name"],
-  }
-);
-
-export const customerUpdateBodySchema = customerMutationBaseSchema;
 
 export const shipmentParamsSchema = z.object({
   id: requiredId,
@@ -217,36 +238,147 @@ const shipmentTransportMode = z.enum(TRANSPORT_MODE_VALUES);
 const shipmentTypeCode = z.enum(SHIPMENT_TYPE_CODES);
 const lenjType = z.enum(["TEH_LENJI", "MALVANI"]);
 const shipmentV2FlowCode = z.enum(["IMPORT_LANJ", "IMPORT_SHIP"]);
+const shipmentV2CodeMode = z.enum(["new", "existing"]);
 const shipmentV2SectionKey = z.enum(SHIPMENT_V2_SECTION_KEYS);
 const shipmentV2Text = (max = 180) => z.string().trim().max(max).optional();
+const shipmentV2NumericText = (max = 80) =>
+  z.string().trim().max(max).regex(/^\d*$/, "This field must contain digits only.").optional();
 const requiredShipmentV2Text = (fieldName, max = 180) =>
   z.string().trim().min(1, `${fieldName} is required.`).max(max);
+const shipmentV2CustomsRoute = z.enum(["GREEN", "YELLOW", "RED", "DIRECT_CARRIAGE"]);
+const shipmentV2CurrencyCode = z.enum(["EUR", "CNY", "USD", "AED", "IRR"]);
+const shipmentV2CustomsTaxStatus = z.enum(["PAYABLE", "GOOD_STANDING"]);
+const shipmentV2Date = z.preprocess(
+  normalizeShipmentV2DateInput,
+  z.string().trim().refine(isRealShipmentV2Date, "Date must be a valid Shamsi YYYY/MM/DD or ISO YYYY-MM-DD date.").nullable().optional()
+);
 const optionalNonNegativeNumber = z.preprocess((value) => {
-  if (value === "" || value === undefined || value === null) return undefined;
-  const numberValue = Number(value);
+  const normalizedValue = normalizeLocalizedNumberInput(value);
+  if (normalizedValue === "" || normalizedValue === undefined || normalizedValue === null) return undefined;
+  const numberValue = Number(normalizedValue);
   return Number.isFinite(numberValue) ? numberValue : value;
 }, z.number().min(0).optional());
 
+const customerPhoneNumberMutationSchema = z.object({
+  id: optionalTrimmedText(120),
+  phoneNumber: z.string().trim().min(1, "Phone number is required.").max(80),
+  phoneLabel: optionalTrimmedText(120),
+  note: optionalTrimmedText(500),
+  isPrimary: z.boolean().optional(),
+  sortOrder: optionalNonNegativeNumber,
+}).strict();
+
+const customerMutationBaseSchema = z.object({
+  customerCode: optionalTrimmedText(80),
+  code: optionalTrimmedText(80),
+  name: optionalTrimmedText(180),
+  contactName: optionalTrimmedText(180),
+  company: optionalTrimmedText(180),
+  companyName: optionalTrimmedText(180),
+  email: optionalTrimmedText(254),
+  phone: optionalTrimmedText(80),
+  phoneNumbers: z.array(customerPhoneNumberMutationSchema).max(20).optional(),
+  address: optionalTrimmedText(500),
+  referrer: optionalTrimmedText(180),
+  notes: optionalTrimmedText(2000),
+  status: optionalTrimmedText(40),
+}).passthrough();
+
+export const customerParamsSchema = z.object({
+  id: requiredId,
+});
+
+export const customerRelatedParamsSchema = customerParamsSchema.extend({
+  related: z.enum(["shipments", "documents", "quotations", "cheques"]),
+});
+
+export const customerCreateBodySchema = customerMutationBaseSchema.refine(
+  (value) => value.name || value.contactName || value.company || value.companyName,
+  {
+    message: "Customer name or company is required.",
+    path: ["name"],
+  }
+);
+
+export const customerUpdateBodySchema = customerMutationBaseSchema;
+
 const shipmentV2GoodsRowSchema = z.object({
   description: requiredShipmentV2Text("Goods description", 300),
+  packagingType: shipmentV2Text(180),
   quantity: optionalNullableNonNegativeNumber,
   weight: optionalNullableNonNegativeNumber,
   cbm: optionalNullableNonNegativeNumber,
+  pcs: optionalNullableNonNegativeNumber,
+}).strict();
+
+const shipmentV2PermitRowSchema = z.object({
+  permitName: requiredShipmentV2Text("Permit name", 320),
+  permitState: shipmentV2Text(180),
 }).strict();
 
 const shipmentV2BaseSectionPayloadSchema = z.object({
-  shipmentTitle: shipmentV2Text(180),
+  trackingNumber: shipmentV2Text(120),
   origin: shipmentV2Text(180),
   dischargePort: shipmentV2Text(180),
   deliveryPort: shipmentV2Text(180),
   consigneeName: shipmentV2Text(180),
   lenjType: lenjType.optional().nullable(),
+  statusText: shipmentV2Text(240),
+  currentStage: shipmentV2Text(2000),
+  orderRegistrationNumber: shipmentV2NumericText(120),
+  commercialCardId: optionalNullableId,
+  commercialCardDisplayName: shipmentV2Text(240),
+  malvaniProfileId: optionalNullableId,
+  malvaniDisplayName: shipmentV2Text(240),
 }).strict();
 
 const shipmentV2GoodsSectionPayloadSchema = z.object({
-  container20Count: optionalNullableNonNegativeInteger,
-  container40Count: optionalNullableNonNegativeInteger,
+  container20Count: optionalNullableNonNegativeNumber,
+  container40Count: optionalNullableNonNegativeNumber,
   goodsRows: z.array(shipmentV2GoodsRowSchema).max(100).optional(),
+}).strict();
+
+const shipmentV2DeclarationKootajSectionPayloadSchema = z.object({
+  cotageNumber: shipmentV2Text(120),
+  customsRoute: shipmentV2CustomsRoute.optional().nullable(),
+  cotageRegistrationDate: shipmentV2Date,
+  totalValueAmount: optionalNullableNonNegativeNumber,
+  totalValueCurrency: shipmentV2CurrencyCode.optional(),
+  finalPaidAmount: optionalNullableNonNegativeNumber,
+  finalPaidCurrency: shipmentV2CurrencyCode.optional(),
+}).strict();
+
+const shipmentV2PermitsSectionPayloadSchema = z.object({
+  permitRows: z.array(shipmentV2PermitRowSchema).max(100).optional(),
+}).strict();
+
+const shipmentV2PaymentsSectionPayloadSchema = z.object({
+  customsPaymentPaid: z.boolean().optional(),
+  customsAmount: optionalNullableNonNegativeNumber,
+  customsAmountCurrency: shipmentV2CurrencyCode.optional(),
+  customsDifferenceAmount: optionalNullableNonNegativeNumber,
+  customsDifferenceCurrency: shipmentV2CurrencyCode.optional(),
+  customsDifferencePaid: z.boolean().optional(),
+  customsTaxStatus: shipmentV2CustomsTaxStatus.optional().nullable(),
+  customsTaxAmount: optionalNullableNonNegativeNumber,
+  customsTaxCurrency: shipmentV2CurrencyCode.optional(),
+  customsTaxPaid: z.boolean().optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.customsTaxStatus === "PAYABLE" && (value.customsTaxAmount === undefined || value.customsTaxAmount === null)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Customs tax amount is required when customs tax needs payment.",
+      path: ["customsTaxAmount"],
+    });
+  }
+});
+
+const shipmentV2BankingSectionPayloadSchema = z.object({
+  bankName: shipmentV2Text(180),
+  branchCode: shipmentV2NumericText(80),
+  branchName: shipmentV2Text(180),
+  paymentInstrumentCode: shipmentV2NumericText(120),
+  sataCode: shipmentV2NumericText(120),
 }).strict();
 
 const shipmentV2NotesSectionPayloadSchema = z.object({
@@ -259,18 +391,18 @@ export const shipmentV2SectionPayloadSchemas = {
   base: shipmentV2BaseSectionPayloadSchema,
   orderRegistration: shipmentV2EmptySectionPayloadSchema,
   goods: shipmentV2GoodsSectionPayloadSchema,
-  declarationKootaj: shipmentV2EmptySectionPayloadSchema,
-  permits: shipmentV2EmptySectionPayloadSchema,
-  payments: shipmentV2EmptySectionPayloadSchema,
-  banking: shipmentV2EmptySectionPayloadSchema,
+  declarationKootaj: shipmentV2DeclarationKootajSectionPayloadSchema,
+  permits: shipmentV2PermitsSectionPayloadSchema,
+  payments: shipmentV2PaymentsSectionPayloadSchema,
+  banking: shipmentV2BankingSectionPayloadSchema,
   notes: shipmentV2NotesSectionPayloadSchema,
 };
 
 export const shipmentV2CreateBodySchema = z.object({
   flowCode: shipmentV2FlowCode,
+  codeMode: shipmentV2CodeMode.optional().default("new"),
   trackingNumber: optionalTrimmedText(120),
   customerId: requiredId,
-  shipmentTitle: requiredShipmentV2Text("Shipment title"),
   origin: requiredShipmentV2Text("Origin"),
   dischargePort: requiredShipmentV2Text("Discharge port"),
   deliveryPort: requiredShipmentV2Text("Delivery port"),
@@ -285,6 +417,13 @@ export const shipmentV2CreateBodySchema = z.object({
       code: z.ZodIssueCode.custom,
       message: "Lenj type is required.",
       path: ["lenjType"],
+    });
+  }
+  if (value.codeMode === "existing" && !value.trackingNumber) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Shipment code is required.",
+      path: ["trackingNumber"],
     });
   }
 });

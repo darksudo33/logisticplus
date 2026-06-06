@@ -98,6 +98,50 @@ async function exists(filePath: string) {
   }
 }
 
+async function documentStorageMetadata(documentId: string) {
+  return withDb(async (client) => {
+    const result = await client.query(
+      `SELECT file_name, mime_type, content_type, storage_key, object_key
+       FROM documents
+       WHERE id = $1`,
+      [documentId]
+    );
+    return result.rows[0];
+  });
+}
+
+function contentDispositionUtf8Filename(header = "") {
+  const match = header.match(/(?:^|;)\s*filename\*\s*=\s*(?:"([^"]+)"|([^;]+))/i);
+  const encoded = (match?.[1] || match?.[2] || "").replace(/^UTF-8''/i, "");
+  return encoded ? decodeURIComponent(encoded) : "";
+}
+
+function expectNoStorageLeak(value: string) {
+  const lower = value.toLowerCase();
+  for (const forbidden of ["storage_key", "storagekey", "object_key", "objectkey", "local_path", "localpath", "bucket"]) {
+    expect(lower).not.toContain(forbidden);
+  }
+}
+
+async function expectDocumentDownload(
+  context: Awaited<ReturnType<typeof loginApi>>,
+  documentId: string,
+  expected: { contentType: string; filename: string; prefix: Buffer }
+) {
+  const response = await context.get(`/api/documents/${encodeURIComponent(documentId)}/download`);
+  const body = await response.body();
+  expect(response.status(), body.toString("latin1")).toBe(200);
+  expect(response.headers()["content-type"]).toBe(expected.contentType);
+  expect(response.headers()["x-content-type-options"]).toBe("nosniff");
+  const disposition = response.headers()["content-disposition"] || "";
+  expect(disposition).toContain("filename=");
+  expect(disposition).toContain("filename*=");
+  expect(contentDispositionUtf8Filename(disposition)).toBe(expected.filename);
+  expectNoStorageLeak(disposition);
+  expect(body.subarray(0, expected.prefix.length)).toEqual(expected.prefix);
+  return response;
+}
+
 function isIgnorableDevServerMessage(message: string) {
   return (
     message.includes("WebSocket connection to") ||
@@ -196,7 +240,118 @@ test.describe.serial("document download, public access, archive, and print/expor
     await disposeContexts(owner, publicContext);
   });
 
-  test("renders document download links while quotation UI remains disabled", async ({ page }) => {
+  test("preserves mobile upload MIME types, readable filenames, shipment code, and UTF-8 download headers", async () => {
+    const owner = await loginApi();
+    const publicContext = await apiContext();
+    const anonymous = await apiContext();
+    const persianInvoice = "\u0641\u0627\u06a9\u062a\u0648\u0631";
+    const pdfBytes = Buffer.from("%PDF-1.7\n% logisticplus mobile pdf\n");
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+
+    const mobilePdf = await readOk<any>(
+      await uploadDocument(
+        owner,
+        {
+          name: `${persianInvoice}.pdf`,
+          mimeType: "application/octet-stream",
+          buffer: pdfBytes,
+        },
+        {
+          title: persianInvoice,
+          shipmentId: "s1",
+          visibility: "customer_visible",
+        }
+      )
+    );
+    const pdfMetadata = await documentStorageMetadata(mobilePdf.id);
+    expect(pdfMetadata.file_name).toBe(`${persianInvoice}.pdf`);
+    expect(pdfMetadata.mime_type).toBe("application/pdf");
+    expect(pdfMetadata.content_type).toBe("application/pdf");
+    expect(pdfMetadata.storage_key).toMatch(/\.pdf$/);
+    expect(String(pdfMetadata.storage_key)).not.toContain(persianInvoice);
+
+    await expectDocumentDownload(owner, mobilePdf.id, {
+      contentType: "application/pdf",
+      filename: `LS-9801 - ${persianInvoice}.pdf`,
+      prefix: Buffer.from("%PDF"),
+    });
+
+    const noExtensionPdf = await readOk<any>(
+      await uploadDocument(
+        owner,
+        {
+          name: "mobile-pdf",
+          mimeType: "application/octet-stream",
+          buffer: pdfBytes,
+        },
+        { title: "mobile-pdf", shipmentId: "s1" }
+      )
+    );
+    await expectDocumentDownload(owner, noExtensionPdf.id, {
+      contentType: "application/pdf",
+      filename: "LS-9801 - mobile-pdf.pdf",
+      prefix: Buffer.from("%PDF"),
+    });
+
+    const mobilePng = await readOk<any>(
+      await uploadDocument(
+        owner,
+        {
+          name: "phone-scan",
+          mimeType: "application/octet-stream",
+          buffer: pngBytes,
+        },
+        { title: "phone-scan", shipmentId: "s1" }
+      )
+    );
+    await expectDocumentDownload(owner, mobilePng.id, {
+      contentType: "image/png",
+      filename: "LS-9801 - phone-scan.png",
+      prefix: pngBytes.subarray(0, 8),
+    });
+
+    const mobileJpeg = await readOk<any>(
+      await uploadDocument(
+        owner,
+        {
+          name: "phone-photo.bin",
+          mimeType: "application/octet-stream",
+          buffer: jpegBytes,
+        },
+        { title: "phone-photo", shipmentId: "s1" }
+      )
+    );
+    await expectDocumentDownload(owner, mobileJpeg.id, {
+      contentType: "image/jpeg",
+      filename: "LS-9801 - phone-photo.jpg",
+      prefix: jpegBytes.subarray(0, 3),
+    });
+
+    const unauthorized = await anonymous.get(`/api/documents/${encodeURIComponent(mobilePdf.id)}/download`);
+    expect([401, 403]).toContain(unauthorized.status());
+
+    const access = await readOk<any>(await owner.post("/api/shipments/s1/customer-access/generate"));
+    const publicTrack = await readOk<any>(await publicContext.get(`/api/public/track/${encodeURIComponent(access.token)}`));
+    expectPublicTrackingPayloadIsSafe(publicTrack);
+    const publicDocument = publicTrack.documents.find((document: any) => document.id === mobilePdf.id);
+    expect(publicDocument).toBeTruthy();
+    expectNoStorageLeak(JSON.stringify(publicDocument));
+    const publicDownload = await publicContext.get(publicDocument.downloadUrl);
+    const publicBody = await publicDownload.body();
+    expect(publicDownload.status(), publicBody.toString("latin1")).toBe(200);
+    expect(publicDownload.headers()["content-type"]).toBe("application/pdf");
+    expect(contentDispositionUtf8Filename(publicDownload.headers()["content-disposition"] || "")).toBe(
+      `LS-9801 - ${persianInvoice}.pdf`
+    );
+    expectNoStorageLeak(publicDownload.headers()["content-disposition"] || "");
+    expect(publicBody.subarray(0, 4)).toEqual(Buffer.from("%PDF"));
+
+    await readOk(await owner.post("/api/shipments/s1/customer-access/disable"));
+    await disposeContexts(owner, publicContext, anonymous);
+  });
+
+  test("renders blob-backed document download controls while quotation UI remains disabled", async ({ page }) => {
     const owner = await loginApi();
     const title = `E2E UI Download ${Date.now()}`;
     const uploaded = await readOk<any>(
@@ -256,12 +411,16 @@ test.describe.serial("document download, public access, archive, and print/expor
     await page.goto("/documents");
     const documentsDownload = page.getByLabel(`Download ${title}`).first();
     await expect(documentsDownload).toBeVisible();
-    expect(await documentsDownload.getAttribute("href")).toBe(`/api/documents/${uploaded.id}/download`);
+    const documentsDownloadEvent = page.waitForEvent("download");
+    await documentsDownload.click();
+    expect((await documentsDownloadEvent).suggestedFilename()).toBe("LS-9801 - ui-download.txt");
 
-    await page.goto("/shipments/s1");
+    await page.goto("/shipments/s1/legacy");
     const shipmentDownload = page.getByLabel(`Download ${title}`).first();
     await expect(shipmentDownload).toBeVisible();
-    expect(await shipmentDownload.getAttribute("href")).toBe(`/api/documents/${uploaded.id}/download`);
+    const shipmentDownloadEvent = page.waitForEvent("download");
+    await shipmentDownload.click();
+    expect((await shipmentDownloadEvent).suggestedFilename()).toBe("LS-9801 - ui-download.txt");
 
     await page.goto("/quotage");
     await expect(page).toHaveURL(/\/dashboard$/);

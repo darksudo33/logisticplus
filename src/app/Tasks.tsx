@@ -86,6 +86,10 @@ const PriorityBadge = ({ priority }: { priority: string }) => {
   );
 };
 
+function shipmentCustomerCode(shipment: any) {
+  return shipment?.customerCode || shipment?.customerId || shipment?.customerName || "";
+}
+
 const TaskListItem = ({ 
   task, 
   onEdit, 
@@ -680,7 +684,7 @@ export default function Tasks() {
               >
                 <option value="">بدون ارجاع</option>
                 {shipments.map(s => (
-                  <option key={s.id} value={s.id}>{s.trackingNumber} - {s.customerName}</option>
+                  <option key={s.id} value={s.id}>{s.trackingNumber} - {shipmentCustomerCode(s)}</option>
                 ))}
               </select>
             </div>

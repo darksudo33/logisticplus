@@ -31,13 +31,30 @@ export interface User {
   permissions?: string[];
 }
 
+export interface CustomerPhoneNumber {
+  id: string;
+  organizationId?: string;
+  customerId?: string;
+  phoneNumber: string;
+  phoneLabel?: string;
+  note?: string;
+  isPrimary?: boolean;
+  sortOrder?: number;
+  archivedAt?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
 export interface Customer {
   id: string;
   organization_id?: string;
   organizationId?: string;
+  customerCode?: string;
+  code?: string;
   name: string;
   company: string;
   phone: string;
+  phoneNumbers?: CustomerPhoneNumber[];
   email: string;
   address: string;
   referrer?: string;
@@ -54,10 +71,18 @@ export interface Shipment {
   trackingNumber: string;
   containerNumber: string;
   customerId: string;
+  customerCode?: string;
   customerName: string;
   origin: string;
   destination: string;
   status: ShipmentStatus;
+  v2ProfileId?: string | null;
+  v2FlowCode?: ShipmentV2FlowCode | string | null;
+  hasV2Profile?: boolean;
+  displayStatusText?: string;
+  currentStage?: string;
+  dischargePort?: string;
+  deliveryPort?: string;
   shipmentDirection?: "import" | "export" | "transit" | "domestic";
   transportMode?: "sea" | "air" | "land" | "rail" | "";
   shipmentTypeCode?: string;
@@ -92,11 +117,15 @@ export type ShipmentV2SectionKey =
   | "notes";
 
 export type ShipmentV2LenjType = "TEH_LENJI" | "MALVANI";
+export type ShipmentV2CustomsRoute = "GREEN" | "YELLOW" | "RED" | "DIRECT_CARRIAGE";
+export type ShipmentV2CurrencyCode = "EUR" | "CNY" | "USD" | "AED" | "IRR";
+export type ShipmentV2CustomsTaxStatus = "PAYABLE" | "GOOD_STANDING";
 
 export interface ShipmentV2ShipmentSummary {
   id: string;
   trackingNumber: string;
   customerId: string;
+  customerCode?: string;
   customerName: string;
   status: ShipmentStatus;
   shipmentDirection: "import" | "export" | "transit" | "domestic";
@@ -112,25 +141,74 @@ export interface ShipmentV2ShipmentSummary {
 }
 
 export interface ShipmentV2BaseSection {
-  shipmentTitle?: string;
+  trackingNumber?: string;
   origin?: string;
   dischargePort?: string;
   deliveryPort?: string;
   consigneeName?: string;
   lenjType?: ShipmentV2LenjType | null;
+  statusText?: string;
+  currentStage?: string;
+  orderRegistrationNumber?: string;
+  commercialCardId?: string | null;
+  commercialCardDisplayName?: string;
+  malvaniProfileId?: string | null;
+  malvaniDisplayName?: string;
 }
 
 export interface ShipmentV2GoodsRow {
   description: string;
+  packagingType?: string;
   quantity?: number | null;
   weight?: number | null;
   cbm?: number | null;
+  pcs?: number | null;
 }
 
 export interface ShipmentV2GoodsSection {
   container20Count?: number | null;
   container40Count?: number | null;
   goodsRows?: ShipmentV2GoodsRow[];
+}
+
+export interface ShipmentV2DeclarationKootajSection {
+  cotageNumber?: string;
+  customsRoute?: ShipmentV2CustomsRoute | null;
+  cotageRegistrationDate?: string;
+  totalValueAmount?: number | null;
+  totalValueCurrency?: ShipmentV2CurrencyCode;
+  finalPaidAmount?: number | null;
+  finalPaidCurrency?: ShipmentV2CurrencyCode;
+}
+
+export interface ShipmentV2PermitRow {
+  permitName: string;
+  permitState?: string;
+}
+
+export interface ShipmentV2PermitsSection {
+  permitRows?: ShipmentV2PermitRow[];
+}
+
+export interface ShipmentV2PaymentsSection {
+  customsPaymentPaid?: boolean;
+  customsAmount?: number | null;
+  customsAmountCurrency?: ShipmentV2CurrencyCode;
+  customsDifferenceAmount?: number | null;
+  customsDifferenceCurrency?: ShipmentV2CurrencyCode;
+  customsDifferencePaid?: boolean;
+  customsTaxStatus?: ShipmentV2CustomsTaxStatus | null;
+  customsTaxAmount?: number | null;
+  customsTaxCurrency?: ShipmentV2CurrencyCode;
+  customsTaxPaid?: boolean;
+}
+
+export interface ShipmentV2BankingSection {
+  bankName?: string;
+  branchCode?: string;
+  branchName?: string;
+  paymentInstrumentCode?: string;
+  sataCode?: string;
 }
 
 export interface ShipmentV2NotesSection {
@@ -143,10 +221,10 @@ export interface ShipmentV2Sections {
   base: ShipmentV2BaseSection;
   orderRegistration: ShipmentV2EmptySection;
   goods: ShipmentV2GoodsSection;
-  declarationKootaj: ShipmentV2EmptySection;
-  permits: ShipmentV2EmptySection;
-  payments: ShipmentV2EmptySection;
-  banking: ShipmentV2EmptySection;
+  declarationKootaj: ShipmentV2DeclarationKootajSection;
+  permits: ShipmentV2PermitsSection;
+  payments: ShipmentV2PaymentsSection;
+  banking: ShipmentV2BankingSection;
   notes: ShipmentV2NotesSection;
 }
 
@@ -389,7 +467,22 @@ export interface Demurrage {
   status: DemurrageStatus;
 }
 
-export type DocumentType = "BILL_OF_LADING" | "INVOICE" | "PACKING_LIST" | "CUSTOMS_PERMIT" | "INSURANCE" | "OTHER";
+export type DocumentType =
+  | "ORDER_REGISTRATION"
+  | "COMMERCIAL_CARD"
+  | "COMMERCIAL_DOCUMENTS"
+  | "SHIPPING_DOCUMENTS"
+  | "CUSTOMS"
+  | "PERMITS"
+  | "BANKING"
+  | "EXIT"
+  | "MISC"
+  | "BILL_OF_LADING"
+  | "INVOICE"
+  | "PACKING_LIST"
+  | "CUSTOMS_PERMIT"
+  | "INSURANCE"
+  | "OTHER";
 
 export interface ShipmentDocument {
   id: string;
@@ -397,6 +490,7 @@ export interface ShipmentDocument {
   customerId?: string;
   name: string;
   type: DocumentType;
+  note?: string;
   fileSize: string;
   uploadedBy: string;
   createdAt: string;
@@ -602,8 +696,44 @@ export interface DailyStatusBoardRow {
   customer: {
     id: string;
     name: string;
+    customerCode?: string;
   } | null;
   kootaj: DailyStatusKootajProfile;
+  v2Profile?: {
+    id: string;
+    flowCode: ShipmentV2FlowCode | null;
+    sections: ShipmentV2Sections;
+  } | null;
+  baseInfo: {
+    code: string;
+    customerCode?: string;
+    customerName: string;
+    statusText: string;
+    orderRegistrationNumber: string;
+    origin: string;
+    dischargePort: string;
+    deliveryPort: string;
+    consigneeName: string;
+    credentialType: BusinessEntityContactType;
+    credentialId: string;
+    credentialLabel: string;
+    credentialDisplayName: string;
+    documentCount: number;
+    currentStage: string;
+    updatedAt: string | null;
+    updatedByName: string;
+    goods: {
+      container20Count: number | null;
+      container40Count: number | null;
+      goodsRows: ShipmentV2GoodsRow[];
+      goodsSummary: string;
+      packagingSummary: string;
+      totalQuantity: number | null;
+      totalWeight: number | null;
+      totalCbm: number | null;
+      totalPcs: number | null;
+    };
+  };
   commercialCard: {
     id: string;
     displayName: string;

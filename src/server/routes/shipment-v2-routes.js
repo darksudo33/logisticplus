@@ -54,7 +54,7 @@ export function registerShipmentV2Routes(
       const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment v2 create API");
       if (!tenantRequest) return;
       const { user, organizationId } = tenantRequest;
-      await requirePermission(user, "shipments.create");
+      const permissions = await requirePermission(user, "shipments.create");
       const body = parseRequestValue(res, shipmentV2CreateBodySchema, req.body || {});
       if (!body) return;
 
@@ -63,6 +63,8 @@ export function registerShipmentV2Routes(
         ownerUserId: user.id,
         actorUserId: user.id,
         body,
+        canUseExistingCode: user.role === "CEO" || permissions.includes("platform.admin"),
+        includeCustomerPrivateDetails: user.role === "CEO",
       });
 
       await auditLog({
@@ -98,6 +100,7 @@ export function registerShipmentV2Routes(
       const data = await getShipmentV2Profile(pool, {
         organizationId,
         shipmentId: params.id,
+        includeCustomerPrivateDetails: user.role === "CEO",
       });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       res.json({ ok: true, data });
@@ -119,6 +122,7 @@ export function registerShipmentV2Routes(
         organizationId,
         shipmentId: params.id,
         actorUserId: user.id,
+        includeCustomerPrivateDetails: user.role === "CEO",
       });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
 
@@ -148,7 +152,7 @@ export function registerShipmentV2Routes(
       const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment v2 section update API");
       if (!tenantRequest) return;
       const { user, organizationId } = tenantRequest;
-      await requirePermission(user, "shipments.update");
+      const permissions = await requirePermission(user, "shipments.update");
       const params = parseRequestValue(res, shipmentV2SectionParamsSchema, req.params);
       if (!params) return;
       const payloadSchema = shipmentV2SectionPayloadSchemas[params.sectionKey];
@@ -161,6 +165,8 @@ export function registerShipmentV2Routes(
         sectionKey: params.sectionKey,
         actorUserId: user.id,
         payload,
+        canEditShipmentCode: user.role === "CEO" || permissions.includes("platform.admin"),
+        includeCustomerPrivateDetails: user.role === "CEO",
       });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
 

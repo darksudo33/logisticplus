@@ -46,6 +46,14 @@ function typeLabel(types: ShipmentTypeOption[], code?: string) {
   return type?.labelFa || code || "ثبت نشده";
 }
 
+function customerOptionLabel(customer: Customer) {
+  return customer.customerCode || customer.code || customer.id;
+}
+
+function shipmentCustomerCode(shipment: ExitedShipment) {
+  return shipment.customerCode || shipment.customerId || shipment.customerDisplayName || shipment.customerName || "";
+}
+
 export default function ExitedShipments() {
   const navigate = useNavigate();
   const currentUser = useMockStore((state) => state.currentUser);
@@ -184,7 +192,7 @@ export default function ExitedShipments() {
               >
                 <option value="">همه مشتریان</option>
                 {customersResource.data.filter((customer) => !customer.isArchived).map((customer) => (
-                  <option key={customer.id} value={customer.id}>{customer.name || customer.company}</option>
+                  <option key={customer.id} value={customer.id}>{customerOptionLabel(customer)}</option>
                 ))}
               </select>
             </div>
@@ -289,7 +297,7 @@ export default function ExitedShipments() {
                       </div>
 
                       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                        <Fact icon={UserRound} label="مشتری" value={shipment.customerDisplayName || shipment.customerName} />
+                        <Fact icon={UserRound} label="مشتری" value={shipmentCustomerCode(shipment)} />
                         <Fact icon={Ship} label="نوع محموله" value={typeLabel(typesResource.data, shipment.shipmentTypeCode)} />
                         <Fact icon={FileText} label="کوتاژ / اظهارنامه" value={[shipment.cotageNumber, shipment.declarationReference].filter(Boolean).join(" / ") || "ثبت نشده"} />
                         <Fact icon={Calendar} label="خروج / آخرین بروزرسانی" value={`${displayDate(shipment.exitDate)} / ${displayDate(shipment.lastUpdatedAt)}`} />

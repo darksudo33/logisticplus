@@ -1,5 +1,5 @@
 import React from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { Navigate, useParams, useNavigate } from "react-router-dom";
 import { useMockStore } from "@/src/store/useMockStore";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,7 @@ export default function CustomerDetail() {
   const shipments = useMockStore(state => state.shipments);
   const currentUser = useMockStore(state => state.currentUser);
   const [remoteShipments, setRemoteShipments] = React.useState<any[]>([]);
+  const isCeo = currentUser?.role === "CEO";
 
   React.useEffect(() => {
     let isActive = true;
@@ -54,6 +55,10 @@ export default function CustomerDetail() {
       isActive = false;
     };
   }, [id]);
+
+  if (currentUser && !isCeo) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   const customer = customers.find(c => c.id === id && !c.isArchived);
   const customerShipments = remoteShipments.length > 0 ? remoteShipments : shipments.filter(s => s.customerId === id);
@@ -76,6 +81,12 @@ export default function CustomerDetail() {
 
   const activeShipments = customerShipments.filter(s => s.status !== "DELIVERED" && s.status !== "CLOSED" && !s.isArchived && !s.isExitedArchived);
   const canViewPrivateDetails = currentUser?.role === "CEO" && customer.canViewPrivateDetails !== false;
+  const displayCustomerCode = customer.customerCode || customer.code || customer.id;
+  const phoneNumbers = customer.phoneNumbers?.length
+    ? customer.phoneNumbers
+    : customer.phone
+      ? [{ phoneNumber: customer.phone, phoneLabel: "اصلی", isPrimary: true }]
+      : [];
 
   return (
     <div className="app-page space-y-6 text-foreground">
@@ -91,6 +102,7 @@ export default function CustomerDetail() {
         <div className="flex flex-col">
           <h1 className="text-xl font-bold tracking-tight text-foreground">{customer.name}</h1>
           <p className="text-[12px] text-muted-foreground">{customer.company}</p>
+          <p className="text-[11px] font-mono font-black text-primary" dir="ltr">{displayCustomerCode}</p>
         </div>
       </div>
 
@@ -115,6 +127,22 @@ export default function CustomerDetail() {
                 <span className="text-xs text-foreground" dir="ltr">{customer.phone || "ثبت نشده"}</span>
               </div>
             </div>
+            {phoneNumbers.length > 1 ? (
+              <div className="flex items-start gap-3 p-3 bg-muted/40 rounded-xl">
+                <Phone className="w-4 h-4 text-primary mt-1" />
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-muted-foreground font-bold uppercase">همه شماره‌ها</span>
+                  <div className="mt-1 grid gap-1">
+                    {phoneNumbers.map((phone, index) => (
+                      <span key={`${phone.phoneNumber}-${index}`} className="text-xs text-foreground" dir="ltr">
+                        {phone.phoneNumber}
+                        {phone.phoneLabel ? <span dir="rtl"> ({phone.phoneLabel})</span> : null}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <div className="flex items-start gap-3 p-3 bg-muted/40 rounded-xl">
               <MapPin className="w-4 h-4 text-primary mt-1" />
               <div className="flex flex-col">

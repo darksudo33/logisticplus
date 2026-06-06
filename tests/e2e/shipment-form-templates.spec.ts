@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 import {
   apiContext,
   disposeContexts,
@@ -26,8 +26,8 @@ async function createCompanyUser(owner: Awaited<ReturnType<typeof loginApi>>, ro
   return { id: data.id, email, name: data.name };
 }
 
-async function createShipmentThroughWizard(
-  page: Page,
+async function createShipmentWithTemplateApi(
+  request: APIRequestContext,
   options: {
     operation: "import" | "export";
     method: "sea" | "lenj" | "air" | "land";
@@ -35,69 +35,48 @@ async function createShipmentThroughWizard(
     trackingNumber: string;
   }
 ) {
-  await page.goto("/shipments");
-  await page.getByTestId("open-shipment-dialog").click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog.getByTestId("shipment-wizard-step")).toBeVisible();
-  await expect(dialog.locator("#container")).toHaveCount(0);
-  await expect(dialog.getByTestId("shamsi-date-time-trigger")).toHaveCount(0);
-
-  await page.getByTestId(`shipment-operation-${options.operation}`).click();
-  await page.getByTestId("shipment-wizard-next").click();
-  await expect(page.getByTestId(`shipment-method-${options.method}`)).toBeVisible();
-  await page.getByTestId(`shipment-method-${options.method}`).click();
-  await page.getByTestId("shipment-wizard-next").click();
-  await expect(page.getByTestId(`shipment-type-${options.typeCode}`)).toBeVisible();
-  await page.getByTestId(`shipment-type-${options.typeCode}`).click();
-  await page.getByTestId("shipment-wizard-next").click();
-
-  await page.getByTestId("shipment-create-tracking").fill(options.trackingNumber);
-  await page.getByTestId("shipment-create-customer").selectOption({ index: 1 });
-  await page.getByTestId("shipment-create-origin").fill(options.operation === "export" ? "Tehran" : "Dubai");
-  await page.getByTestId("shipment-create-destination").fill(options.operation === "export" ? "Dubai" : "Tehran");
-  await expect(page.getByTestId("shipment-create-date")).toHaveAttribute("type", "date");
-  if (options.typeCode.includes("SEA_CONTAINER")) {
-    await page.getByTestId("shipment-create-container-count").fill("2");
-  } else {
-    await expect(page.getByTestId("shipment-create-container-count")).toHaveCount(0);
-  }
-  await page.getByTestId("shipment-wizard-next").click();
-  await expect(page.getByTestId("shipment-wizard-review")).toBeVisible();
-  await page.getByTestId("submit-shipment").click();
-  await page.waitForURL(/\/shipments\/[^/]+$/);
-
-  const shipmentId = new URL(page.url()).pathname.split("/").pop();
-  expect(shipmentId).toBeTruthy();
+  const shipment = await readOk<any>(
+    await request.post("/api/shipments", {
+      data: {
+        trackingNumber: options.trackingNumber,
+        containerNumber: options.typeCode.includes("SEA_CONTAINER") ? `CONT-${Date.now()}` : undefined,
+        customerId: "c1",
+        customerName: "Shipment template QA customer",
+        origin: options.operation === "export" ? "Tehran" : "Dubai",
+        destination: options.operation === "export" ? "Dubai" : "Tehran",
+        status: "PENDING",
+        shipmentTypeCode: options.typeCode,
+        shipmentDirection: options.operation,
+        transportMode: options.method === "lenj" ? "sea" : options.method,
+        estimatedDelivery: "2026-06-10",
+        freeTimeDays: 7,
+      },
+    })
+  );
   const activeTemplate = await readOk<any>(
-    await page.request.get(`/api/shipments/${encodeURIComponent(shipmentId!)}/form-template`)
+    await request.get(`/api/shipments/${encodeURIComponent(shipment.id)}/form-template`)
   );
   expect(activeTemplate.shipment.shipmentTypeCode).toBe(options.typeCode);
   expect(activeTemplate.template).toEqual(expect.objectContaining({ shipmentTypeCode: options.typeCode }));
 }
 
 test.describe.serial("shipment form templates", () => {
-  test("creates import and export shipments through the step-by-step wizard", async ({ page }) => {
+  test("keeps template selection for API-created shipments after removing the old create wizard", async ({ page }) => {
     await loginViaUi(page);
+    await page.goto("/shipments");
+    await expect(page.getByTestId("open-shipment-dialog")).toHaveCount(0);
+    await page.getByTestId("open-shipment-v2-create").click();
+    await expect(page).toHaveURL(/\/shipments\/new-v2$/);
+    await expect(page.getByTestId("shipment-v2-create-page")).toBeVisible();
 
-    await createShipmentThroughWizard(page, {
+    await createShipmentWithTemplateApi(page.request, {
       operation: "import",
       method: "sea",
       typeCode: "IMPORT_SEA_CONTAINER",
       trackingNumber: `WIZ-IMP-${Date.now()}`,
     });
 
-    await page.goto("/shipments");
-    await page.getByTestId("open-shipment-dialog").click();
-    await page.getByTestId("shipment-operation-export").click();
-    await page.getByTestId("shipment-wizard-next").click();
-    await page.getByTestId("shipment-method-sea").click();
-    await page.getByTestId("shipment-wizard-next").click();
-    await expect(page.getByTestId("shipment-type-EXPORT_SEA_BULK")).toBeVisible();
-    await expect(page.getByTestId("shipment-type-IMPORT_SEA_CONTAINER")).toHaveCount(0);
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-
-    await createShipmentThroughWizard(page, {
+    await createShipmentWithTemplateApi(page.request, {
       operation: "export",
       method: "sea",
       typeCode: "EXPORT_SEA_BULK",

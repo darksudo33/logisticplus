@@ -92,17 +92,24 @@ test.describe.serial("customer private detail visibility", () => {
       contexts.push(employee);
 
       const privatePhone = "09125550177";
+      const secondaryPhone = "09125550178";
       const privateEmail = `${marker}-customer@example.test`;
       const privateAddress = `${marker} private address`;
       const privateReferrer = `${marker} private referrer`;
       const privateNotes = `${marker} private notes`;
+      const privateCustomerCode = `${marker}-code`.toUpperCase();
       const customer = await readOk<any>(
         await owner.post("/api/customers", {
           data: {
+            customerCode: privateCustomerCode,
             name: `${marker} Customer`,
             company: `${marker} Company`,
             email: privateEmail,
             phone: privatePhone,
+            phoneNumbers: [
+              { phoneNumber: privatePhone, phoneLabel: "CEO", isPrimary: true },
+              { phoneNumber: secondaryPhone, phoneLabel: "Finance", isPrimary: false },
+            ],
             address: privateAddress,
             referrer: privateReferrer,
             notes: privateNotes,
@@ -110,17 +117,21 @@ test.describe.serial("customer private detail visibility", () => {
         })
       );
       expect(customer.referrer).toBe(privateReferrer);
+      expect(customer.customerCode).toBe(privateCustomerCode);
+      expect(customer.phoneNumbers.map((phone: any) => phone.phoneNumber)).toEqual([privatePhone, secondaryPhone]);
       expect(customer.canViewPrivateDetails).toBe(true);
 
       const employeeCustomers = await readOk<any[]>(
-        await employee.get(`/api/customers?includeArchived=true&search=${encodeURIComponent(`${marker} Company`)}`)
+        await employee.get(`/api/customers?includeArchived=true&search=${encodeURIComponent(privateCustomerCode)}`)
       );
       const employeeCustomer = employeeCustomers.find((item) => item.id === customer.id);
       expect(employeeCustomer).toMatchObject({
         id: customer.id,
-        name: `${marker} Customer`,
-        company: `${marker} Company`,
+        customerCode: privateCustomerCode,
+        name: privateCustomerCode,
+        company: privateCustomerCode,
         phone: "",
+        phoneNumbers: [],
         email: "",
         address: "",
         referrer: "",
@@ -130,7 +141,11 @@ test.describe.serial("customer private detail visibility", () => {
 
       const employeeDetail = await readOk<any>(await employee.get(`/api/customers/${customer.id}`));
       expect(employeeDetail).toMatchObject({
+        customerCode: privateCustomerCode,
+        name: privateCustomerCode,
+        company: privateCustomerCode,
         phone: "",
+        phoneNumbers: [],
         email: "",
         address: "",
         referrer: "",
@@ -142,17 +157,28 @@ test.describe.serial("customer private detail visibility", () => {
         await employee.get(`/api/customers?search=${encodeURIComponent(privatePhone)}`)
       );
       expect(privateFieldCustomerSearch.some((item) => item.id === customer.id)).toBe(false);
+      const privateNameCustomerSearch = await readOk<any[]>(
+        await employee.get(`/api/customers?search=${encodeURIComponent(`${marker} Company`)}`)
+      );
+      expect(privateNameCustomerSearch.some((item) => item.id === customer.id)).toBe(false);
 
       const globalSearch = await readSearch(employee, { q: privatePhone, type: "customers" });
       expect(globalSearch.results.some((result) => result.id === customer.id)).toBe(false);
       expect(JSON.stringify(globalSearch.results)).not.toContain(privatePhone);
+      const codeGlobalSearch = await readSearch(employee, { q: privateCustomerCode, type: "customers" });
+      expect(codeGlobalSearch.results.some((result) => result.id === customer.id)).toBe(true);
+      expect(JSON.stringify(codeGlobalSearch.results)).not.toContain(`${marker} Company`);
 
       const bootstrap = await employee.get(`/api/users/${employeeUser.id}/bootstrap`);
       expect(bootstrap.status(), await bootstrap.text()).toBeLessThan(400);
       const bootstrapPayload = await bootstrap.json();
       const bootstrapCustomer = (bootstrapPayload.records?.customers || []).find((item: any) => item.id === customer.id);
       expect(bootstrapCustomer).toMatchObject({
+        customerCode: privateCustomerCode,
+        name: privateCustomerCode,
+        company: privateCustomerCode,
         phone: "",
+        phoneNumbers: [],
         email: "",
         address: "",
         referrer: "",
@@ -160,6 +186,7 @@ test.describe.serial("customer private detail visibility", () => {
         canViewPrivateDetails: false,
       });
       expect(JSON.stringify(bootstrapPayload.records?.customers || [])).not.toContain(privatePhone);
+      expect(JSON.stringify(bootstrapPayload.records?.customers || [])).not.toContain(secondaryPhone);
       expect(JSON.stringify(bootstrapPayload.records?.customers || [])).not.toContain(privateAddress);
       expect(JSON.stringify(bootstrapPayload.records?.customers || [])).not.toContain(privateReferrer);
 

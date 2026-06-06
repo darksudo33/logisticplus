@@ -412,7 +412,8 @@ export async function getPublicDocumentByTrackingToken(queryable, token, documen
        d.content_type,
        d.storage_verified_at,
        d.storage_migration_status,
-       d.legacy_data
+       d.legacy_data,
+       s.shipment_code
      FROM documents d
      JOIN shipments s
         ON (

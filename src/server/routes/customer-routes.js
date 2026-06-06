@@ -114,7 +114,10 @@ export function registerCustomerRoutes(
       if (!params) return;
       const body = parseRequestValue(res, customerUpdateBodySchema, req.body || {});
       if (!body) return;
-      const result = await updateCustomerRecord(params.id, body, { organizationId: tenantContext.organizationId });
+      const result = await updateCustomerRecord(params.id, body, {
+        organizationId: tenantContext.organizationId,
+        actorUserId: user.id,
+      });
       if (!result.after) return createApiError(res, 404, "NOT_FOUND", "Customer was not found.");
       await auditLog({
         actorUserId: user.id,

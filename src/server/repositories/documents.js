@@ -1,9 +1,13 @@
 import { organizationScopeClause } from "../tenant-scope.js";
 
 function documentSelect() {
-  return `SELECT d.*, u.name AS uploaded_by_user_name
+  return `SELECT d.*,
+                 u.name AS uploaded_by_user_name,
+                 s.shipment_code,
+                 s.legacy_data->>'trackingNumber' AS shipment_tracking_number
           FROM documents d
-          LEFT JOIN app_users u ON u.id = d.uploaded_by_id`;
+          LEFT JOIN app_users u ON u.id = d.uploaded_by_id
+          LEFT JOIN shipments s ON s.id = d.shipment_id AND s.organization_id = d.organization_id`;
 }
 
 function toUiDocument(row) {
@@ -15,6 +19,7 @@ function toUiDocument(row) {
     customerId: row.customer_id || legacy.customerId || undefined,
     name: row.title || row.file_name || legacy.name || row.id,
     type: legacy.type || "OTHER",
+    note: legacy.note || legacy.notes || "",
     fileSize: row.file_size || legacy.fileSize || "",
     uploadedBy: row.uploaded_by_name || legacy.uploadedBy || "",
     createdAt: row.created_at || legacy.createdAt || new Date().toISOString(),

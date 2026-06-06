@@ -335,7 +335,7 @@ test.describe.serial("exited shipments archive", () => {
     await disposeContexts(owner);
 
     await loginViaUi(page);
-    await page.goto(`/shipments/${encodeURIComponent(shipmentId)}`);
+    await page.goto(`/shipments/${encodeURIComponent(shipmentId)}/legacy`);
     await expect(page.getByTestId("shipment-move-to-exited")).toBeVisible();
     await page.getByTestId("shipment-move-to-exited").click();
     await expect(page.getByRole("dialog")).toBeVisible();
@@ -374,7 +374,7 @@ test.describe.serial("exited shipments archive", () => {
     await card.getByTestId("exited-shipment-restore").click();
     await page.getByTestId("exited-shipment-restore-confirm").click();
     await expect(card).toHaveCount(0);
-    await page.goto(`/shipments/${encodeURIComponent(shipmentId)}`);
+    await page.goto(`/shipments/${encodeURIComponent(shipmentId)}/legacy`);
     await expect(page.getByTestId("shipment-exited-badge")).toHaveCount(0);
     await expect(page.getByTestId("shipment-move-to-exited")).toBeVisible();
   });

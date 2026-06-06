@@ -78,15 +78,31 @@ const normalizeShipmentStatus = (status: unknown): ShipmentStatus => {
 const normalizeShipmentRecord = (record: any): Shipment => {
   const legacy = record?.legacy_data || record || {};
   const freeTimeDays = Number(record?.freeTimeDays ?? legacy.freeTimeDays ?? record?.free_time_days ?? 0);
+  const customerCode = record.customerCode || record.customer_code || legacy.customerCode || legacy.customer_code || record.customerId || record.customer_id || legacy.customerId || "";
   return {
     id: record.id,
     trackingNumber: record.trackingNumber || record.shipment_code || legacy.trackingNumber || record.id,
     containerNumber: record.containerNumber || legacy.containerNumber || "",
     customerId: record.customerId || record.customer_id || legacy.customerId || "",
-    customerName: record.customerName || record.customer_name || legacy.customerName || "",
+    customerCode,
+    customerName: customerCode || record.customerName || record.customer_name || legacy.customerName || "",
     origin: record.origin || legacy.origin || "",
     destination: record.destination || legacy.destination || "",
     status: normalizeShipmentStatus(record.status || legacy.status),
+    v2ProfileId: record.v2ProfileId || record.v2_profile_id || null,
+    v2FlowCode: record.v2FlowCode || record.v2_flow_code || null,
+    hasV2Profile: Boolean(
+      record.hasV2Profile ||
+        record.has_v2_profile ||
+        record.v2ProfileId ||
+        record.v2_profile_id ||
+        record.v2FlowCode ||
+        record.v2_flow_code
+    ),
+    displayStatusText: record.displayStatusText || record.display_status_text || "",
+    currentStage: record.currentStage || record.current_stage || "",
+    dischargePort: record.dischargePort || record.discharge_port || "",
+    deliveryPort: record.deliveryPort || record.delivery_port || "",
     shipmentDirection: record.shipmentDirection || record.shipment_direction || legacy.shipmentDirection || legacy.shipment_direction || "import",
     transportMode: record.transportMode || record.transport_mode || legacy.transportMode || legacy.transport_mode || "",
     shipmentTypeCode: record.shipmentTypeCode || record.shipment_type_code || legacy.shipmentTypeCode || legacy.shipment_type_code || "IMPORT_SEA_CONTAINER",
@@ -350,57 +366,65 @@ export const useMockStore = create<MockStore>((set) => ({
     if (!user) return;
 
     useMockStore.setState({ isHydratingFromDatabase: true });
-    const authResponse = await fetch("/api/auth/me", { cache: "no-store" });
-    if (!authResponse.ok) {
-      const error = await createApiRequestError(authResponse, "Could not restore current session.");
-      if (authResponse.status === 401 || authResponse.status === 403) {
+    try {
+      const authResponse = await fetch("/api/auth/me", { cache: "no-store" });
+      if (!authResponse.ok) {
+        const error = await createApiRequestError(authResponse, "Could not restore current session.");
+        if (authResponse.status === 401 || authResponse.status === 403) {
+          persistCurrentUser(null);
+          useMockStore.setState({
+            currentUser: null,
+            hasHydratedFromDatabase: false,
+            isHydratingFromDatabase: false,
+          });
+        } else {
+          useMockStore.setState({ isHydratingFromDatabase: false });
+        }
+        throw error;
+      }
+
+      const authPayload = await authResponse.json();
+      const restoredUser = normalizeUser({
+        ...authPayload.data?.user,
+        permissions: authPayload.data?.permissions || authPayload.data?.user?.permissions || [],
+      });
+      if (!restoredUser) {
         persistCurrentUser(null);
         useMockStore.setState({
           currentUser: null,
           hasHydratedFromDatabase: false,
           isHydratingFromDatabase: false,
         });
-      } else {
+        throw new Error("Could not restore current session.");
+      }
+      persistCurrentUser(restoredUser);
+      useMockStore.setState({ currentUser: restoredUser });
+
+      const response = await fetch(`/api/users/${encodeURIComponent(restoredUser.id)}/bootstrap`);
+      if (!response.ok) {
+        const error = await createApiRequestError(response, "Could not load database records.");
+        if (response.status === 401 || response.status === 403) {
+          persistCurrentUser(null);
+          useMockStore.setState({
+            currentUser: null,
+            hasHydratedFromDatabase: false,
+            isHydratingFromDatabase: false,
+          });
+        } else {
+          useMockStore.setState({ hasHydratedFromDatabase: true, isHydratingFromDatabase: false });
+        }
+        throw error;
+      }
+      const payload = await response.json();
+      useMockStore.getState().hydrateFromRecords(payload.records || {});
+      useMockStore.getState().refreshNotifications().catch(logBackgroundNotificationRefreshError);
+    } catch (error) {
+      const status = Number((error as { status?: number })?.status || 0);
+      if (status !== 401 && status !== 403) {
         useMockStore.setState({ isHydratingFromDatabase: false });
       }
       throw error;
     }
-
-    const authPayload = await authResponse.json();
-    const restoredUser = normalizeUser({
-      ...authPayload.data?.user,
-      permissions: authPayload.data?.permissions || authPayload.data?.user?.permissions || [],
-    });
-    if (!restoredUser) {
-      persistCurrentUser(null);
-      useMockStore.setState({
-        currentUser: null,
-        hasHydratedFromDatabase: false,
-        isHydratingFromDatabase: false,
-      });
-      throw new Error("Could not restore current session.");
-    }
-    persistCurrentUser(restoredUser);
-    useMockStore.setState({ currentUser: restoredUser });
-
-    const response = await fetch(`/api/users/${encodeURIComponent(restoredUser.id)}/bootstrap`);
-    if (!response.ok) {
-      const error = await createApiRequestError(response, "Could not load database records.");
-      if (response.status === 401 || response.status === 403) {
-        persistCurrentUser(null);
-        useMockStore.setState({
-          currentUser: null,
-          hasHydratedFromDatabase: false,
-          isHydratingFromDatabase: false,
-        });
-      } else {
-        useMockStore.setState({ hasHydratedFromDatabase: true, isHydratingFromDatabase: false });
-      }
-      throw error;
-    }
-    const payload = await response.json();
-    useMockStore.getState().hydrateFromRecords(payload.records || {});
-    useMockStore.getState().refreshNotifications().catch(logBackgroundNotificationRefreshError);
   },
 
   restoreCurrentUserFromSession: async () => {

@@ -150,6 +150,9 @@ For large forms, especially Shipment Details:
 * Search boxes should show matching fields/results.
 * Selecting a result should take the user to the correct field or allow direct editing.
 * Keep the user flow simple and obvious.
+* For Shipment Detail and Shipment Module V2 changes, proactively apply compact mobile UX standards without waiting to be asked: reduce oversized cards, avoid one-field-per-large-box layouts on phones, use dense responsive grids or rows, keep labels readable but small, make long text full-width only when needed, and verify narrow/mobile screens for no horizontal overflow.
+* For all monetary/value amount fields, store and show an explicit currency type next to the amount. Do not add bare amount-only fields unless the value is structurally currency-free.
+* For date boxes/date inputs, use the app's shared Shamsi calendar/date field instead of native Gregorian date inputs unless an external integration explicitly requires ISO-only input.
 
 ## Feature relationship awareness
 

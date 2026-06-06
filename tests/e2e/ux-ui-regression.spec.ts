@@ -21,6 +21,20 @@ async function ownerOrganizationId() {
   }
 }
 
+function validManualShipmentCode(sequence = (Date.now() % 899) + 100) {
+  const parts = new Intl.DateTimeFormat("en-US-u-ca-persian", {
+    timeZone: "Asia/Tehran",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const valueByType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const year = String(valueByType.year || "").padStart(4, "0");
+  const month = String(valueByType.month || "").padStart(2, "0");
+  const day = String(valueByType.day || "").padStart(2, "0");
+  return `${year}${month}${day}${String(sequence).padStart(3, "0")}`;
+}
+
 async function seedLegacyShipmentWithoutSteps(id: string) {
   const client = await dbClient();
   const shipment = {
@@ -90,48 +104,41 @@ async function collectConsoleErrors(page: Page) {
   return errors;
 }
 
-async function createShipmentFromWizard(page: Page, trackingNumber: string) {
-  await page.getByTestId("open-shipment-dialog").click();
-  await expect(page.getByTestId("shipment-wizard-step")).toBeVisible();
+async function createShipmentFromV2(page: Page) {
+  await page.goto("/shipments/new-v2");
+  await expect(page.getByTestId("shipment-v2-create-page")).toBeVisible();
   await expect(page.locator("#container")).toHaveCount(0);
   await expect(page.getByTestId("shamsi-date-time-trigger")).toHaveCount(0);
 
-  await page.getByTestId("shipment-operation-import").click();
-  await page.getByTestId("shipment-wizard-next").click();
-  await page.getByTestId("shipment-method-sea").click();
-  await page.getByTestId("shipment-wizard-next").click();
-  await page.getByTestId("shipment-type-IMPORT_SEA_CONTAINER").click();
-  await page.getByTestId("shipment-wizard-next").click();
-
-  await page.getByTestId("shipment-create-tracking").fill(trackingNumber);
-  await page.getByTestId("shipment-create-customer").selectOption({ index: 1 });
-  await page.getByTestId("shipment-create-origin").fill("Tehran");
-  await page.getByTestId("shipment-create-destination").fill("Bandar Abbas");
-  await page.getByTestId("shipment-create-container-count").fill("1");
-  await page.getByTestId("shipment-wizard-next").click();
-  await page.getByTestId("submit-shipment").click();
+  await page.getByTestId("shipment-v2-flow-IMPORT_LANJ").click();
+  await page.getByTestId("shipment-v2-customer").selectOption({ index: 1 });
+  await expect(page.getByTestId("shipment-v2-code-mode-new")).toBeVisible();
+  await page.getByTestId("shipment-v2-origin").fill("Dubai");
+  await page.getByTestId("shipment-v2-discharge-port").fill("Bandar Abbas");
+  await page.getByTestId("shipment-v2-delivery-port").fill("Tehran");
+  await page.getByTestId("shipment-v2-lenj-type").selectOption("MALVANI");
+  await page.getByTestId("shipment-v2-submit").click();
 }
 
 test.describe.serial("UX/UI regression sweep", () => {
-  test("new shipments get workflow steps and numeric progress immediately", async ({ page }) => {
+  test("new V2 shipments open clean detail without numeric progress regressions", async ({ page }) => {
     await loginViaUi(page);
     await page.goto("/shipments");
 
-    const trackingNumber = `UX-${Date.now()}`;
-    await createShipmentFromWizard(page, trackingNumber);
+    await expect(page.getByTestId("open-shipment-dialog")).toHaveCount(0);
+    await createShipmentFromV2(page);
 
-    await expect(page).toHaveURL(/\/shipments\/[^/]+$/);
-    await expect(page.getByRole("heading", { name: trackingNumber })).toBeVisible();
+    await expect(page).toHaveURL(/\/shipments\/[^/]+\/v2$/);
+    await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
+    await expect(page.getByTestId("shipment-v2-header-shipment-id")).toHaveText(/^\d{11}$/);
     await expect(page.getByText("NaN%")).toHaveCount(0);
-    expect(await page.locator('[data-slot="progress"]').count()).toBeGreaterThan(0);
-    await expect(page.locator("body")).toContainText("%");
   });
 
   test("shipment detail loads records created after the page list was hydrated", async ({ page }) => {
     await loginViaUi(page);
 
     const api = await loginApi();
-    const trackingNumber = `UX-STALE-${Date.now()}`;
+    const trackingNumber = validManualShipmentCode();
     try {
       const shipment = await readOk<any>(
         await api.post("/api/shipments", {
@@ -150,7 +157,8 @@ test.describe.serial("UX/UI regression sweep", () => {
       );
 
       await page.goto(`/shipments/${shipment.id}`);
-      await expect(page.getByRole("heading", { name: trackingNumber })).toBeVisible();
+      await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
+      await expect(page.locator("body")).toContainText(trackingNumber);
       await expect(page.getByText("Shipment was not found.")).toHaveCount(0);
     } finally {
       await api.dispose();
@@ -184,7 +192,7 @@ test.describe.serial("UX/UI regression sweep", () => {
     const id = `nosteps-${Date.now()}`;
     await seedLegacyShipmentWithoutSteps(id);
     await loginViaUi(page);
-    await page.goto(`/shipments/${id}`);
+    await page.goto(`/shipments/${id}/legacy`);
     await expect(page.getByRole("heading", { name: id.toUpperCase() })).toBeVisible();
     await expect(page.getByText("NaN%")).toHaveCount(0);
     expect(await page.locator('[data-slot="progress"]').count()).toBeGreaterThan(0);
@@ -301,9 +309,9 @@ test.describe.serial("UX/UI regression sweep", () => {
     await expect(page.getByTestId("public-support-cta")).toHaveCount(0);
   });
 
-  test("shipment detail hides the legacy logistics progress card but keeps replacement panels", async ({ page }) => {
+  test("legacy shipment detail fallback hides the legacy logistics progress card but keeps replacement panels", async ({ page }) => {
     await loginViaUi(page);
-    await page.goto("/shipments/s1");
+    await page.goto("/shipments/s1/legacy");
     await expect(page.getByRole("heading", { name: "LS-9801", exact: true })).toBeVisible();
 
     await expect(page.getByText("پیشرفت لجستیک")).toHaveCount(0);
@@ -335,19 +343,20 @@ test.describe.serial("UX/UI regression sweep", () => {
     await expect(page.locator('[data-empty-state="setup-checklist"]')).toHaveCount(0);
   });
 
-  test("shipment wizard stays inside the viewport on mobile dialogs", async ({ page }) => {
+  test("shipment V2 creation stays inside the viewport on mobile", async ({ page }) => {
     await loginViaUi(page);
     await page.setViewportSize({ width: 390, height: 700 });
     await page.goto("/shipments");
-    await page.getByTestId("open-shipment-dialog").click();
-    await expect(page.getByTestId("shipment-wizard-step")).toBeVisible();
+    await expect(page.getByTestId("open-shipment-dialog")).toHaveCount(0);
+    await page.getByTestId("open-shipment-v2-create").click();
+    await expect(page).toHaveURL(/\/shipments\/new-v2$/);
+    await expect(page.getByTestId("shipment-v2-create-page")).toBeVisible();
     await expect(page.getByTestId("shamsi-date-time-trigger")).toHaveCount(0);
-    const box = await page.getByRole("dialog").boundingBox();
+    const box = await page.getByTestId("shipment-v2-create-page").boundingBox();
     expect(box).not.toBeNull();
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.y).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(390);
-    expect(box!.y + box!.height).toBeLessThanOrEqual(700);
     await expectNoHorizontalOverflow(page);
   });
 

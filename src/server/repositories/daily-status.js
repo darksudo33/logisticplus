@@ -111,6 +111,23 @@ function normalizeText(value) {
   return String(value);
 }
 
+function jsonObject(value, fallback = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fallback;
+  return value;
+}
+
+function v2BaseSection(row) {
+  return jsonObject(row.v2_sections_json?.base);
+}
+
+function v2GoodsSection(row) {
+  return jsonObject(row.v2_sections_json?.goods);
+}
+
+function v2ProfileSections(row) {
+  return jsonObject(row.v2_sections_json);
+}
+
 function nullableNumber(value) {
   if (value === undefined || value === null || value === "") return null;
   const parsed = Number(value);
@@ -141,6 +158,53 @@ function summarizeCommercialCard(row) {
     displayName: card.holderName || card.responsibleName || card.cardNumber || id,
     cardNumber: card.cardNumber || "",
     status: commercialCardStatus(card),
+  };
+}
+
+function isLenjShipment(row, base = {}) {
+  const flowCode = normalizeText(row.v2_flow_code).toUpperCase();
+  const shipmentTypeCode = normalizeText(row.shipment_type_code).toUpperCase();
+  const lenjType = normalizeText(base.lenjType).toUpperCase();
+  return (
+    flowCode === "IMPORT_LANJ" ||
+    flowCode === "IMPORT_LENJ" ||
+    shipmentTypeCode.includes("LENJ") ||
+    shipmentTypeCode.includes("LANJ") ||
+    lenjType === "MALVANI" ||
+    lenjType === "TEH_LENJI"
+  );
+}
+
+function composeBaseInfo(row, { commercialCard, workflow, includeCustomerPrivateDetails = true } = {}) {
+  const base = v2BaseSection(row);
+  const isLenj = isLenjShipment(row, base);
+  const credentialLabel = isLenj ? "ملوانی" : "کارت بازرگانی";
+  const credentialId = isLenj
+    ? normalizeText(base.malvaniProfileId)
+    : normalizeText(base.commercialCardId || commercialCard?.id || row.kootaj_commercial_card_id);
+  const credentialDisplayName = isLenj
+    ? normalizeText(base.malvaniDisplayName || base.malvaniProfileId)
+    : normalizeText(base.commercialCardDisplayName || commercialCard?.displayName || row.kootaj_commercial_card_id);
+  const customerCode = normalizeText(row.customer_code || row.customer_id);
+  const customerName = customerCode;
+  return {
+    code: normalizeText(row.shipment_code || row.shipment_id),
+    customerCode,
+    customerName,
+    statusText: normalizeText(base.statusText || row.shipment_status),
+    orderRegistrationNumber: normalizeText(base.orderRegistrationNumber || row.order_registration_number),
+    origin: normalizeText(base.origin || row.origin),
+    dischargePort: normalizeText(base.dischargePort),
+    deliveryPort: normalizeText(base.deliveryPort || row.destination),
+    consigneeName: normalizeText(base.consigneeName),
+    credentialType: isLenj ? "malvani" : "commercial_card",
+    credentialId,
+    credentialLabel,
+    credentialDisplayName,
+    documentCount: numberValue(row.document_total_count),
+    currentStage: normalizeText(base.currentStage || workflow?.currentStepLabel),
+    updatedAt: row.v2_profile_updated_at || row.kootaj_updated_at || row.shipment_updated_at || null,
+    updatedByName: normalizeText(row.v2_updated_by_name),
   };
 }
 
@@ -186,10 +250,48 @@ function summarizeWorkflow(row) {
   };
 }
 
-export function composeDailyStatusRow(row) {
+function sumNullable(values) {
+  const numbers = values.filter((value) => typeof value === "number" && Number.isFinite(value));
+  if (!numbers.length) return null;
+  return numbers.reduce((sum, value) => sum + value, 0);
+}
+
+function composeGoodsInfo(row) {
+  const goods = v2GoodsSection(row);
+  const goodsRows = Array.isArray(goods.goodsRows)
+    ? goods.goodsRows
+      .map((item) => ({
+        description: normalizeText(item?.description).trim(),
+        packagingType: normalizeText(item?.packagingType).trim(),
+        quantity: nullableNumber(item?.quantity),
+        weight: nullableNumber(item?.weight),
+        cbm: nullableNumber(item?.cbm),
+        pcs: nullableNumber(item?.pcs),
+      }))
+      .filter((item) => item.description)
+    : [];
+  const goodsSummary = goodsRows.map((item) => item.description).filter(Boolean).join("، ") || normalizeText(row.goods_summary);
+  const packagingSummary = goodsRows.map((item) => item.packagingType).filter(Boolean).join("، ") ||
+    (row.package_count ? `${row.package_count} بسته` : "");
+  return {
+    container20Count: nullableNumber(goods.container20Count),
+    container40Count: nullableNumber(goods.container40Count),
+    goodsRows,
+    goodsSummary,
+    packagingSummary,
+    totalQuantity: sumNullable(goodsRows.map((item) => item.quantity)),
+    totalWeight: sumNullable(goodsRows.map((item) => item.weight)),
+    totalCbm: sumNullable(goodsRows.map((item) => item.cbm)),
+    totalPcs: sumNullable(goodsRows.map((item) => item.pcs)),
+  };
+}
+
+export function composeDailyStatusRow(row, { includeCustomerPrivateDetails = true } = {}) {
   const customerId = row.customer_id || null;
-  const customerName = normalizeText(row.customer_display_name || row.customer_name);
+  const customerCode = normalizeText(row.customer_code || row.customer_id);
+  const customerName = customerCode;
   const commercialCard = summarizeCommercialCard(row);
+  const workflow = summarizeWorkflow(row);
   return {
     id: row.shipment_id,
     shipment: {
@@ -209,6 +311,7 @@ export function composeDailyStatusRow(row) {
       ? {
           id: customerId || "",
           name: customerName,
+          customerCode,
         }
       : null,
     kootaj: {
@@ -294,8 +397,19 @@ export function composeDailyStatusRow(row) {
       updatedAt: row.kootaj_updated_at || null,
       updatedById: row.kootaj_updated_by_id || null,
     },
+    v2Profile: row.v2_profile_id
+      ? {
+          id: row.v2_profile_id,
+          flowCode: row.v2_flow_code || null,
+          sections: v2ProfileSections(row),
+        }
+      : null,
+    baseInfo: {
+      ...composeBaseInfo(row, { commercialCard, workflow, includeCustomerPrivateDetails }),
+      goods: composeGoodsInfo(row),
+    },
     commercialCard,
-    workflow: summarizeWorkflow(row),
+    workflow,
     tasks: {
       openCount: numberValue(row.open_task_count),
       overdueCount: numberValue(row.overdue_task_count),
@@ -321,7 +435,7 @@ function appendFilter(values, conditions, sql, value) {
   conditions.push(sql.replace("?", `$${values.length}`));
 }
 
-function dailyStatusQuery(filters = {}, organizationId) {
+function dailyStatusQuery(filters = {}, organizationId, { includeCustomerPrivateDetails = true } = {}) {
   const values = [organizationId];
   const conditions = ["s.organization_id = $1", "s.archived_at IS NULL"];
   if (!filters.includeExited) conditions.push("s.exited_archived_at IS NULL");
@@ -335,11 +449,16 @@ function dailyStatusQuery(filters = {}, organizationId) {
     const searchParam = `%${filters.q}%`;
     values.push(searchParam);
     const param = `$${values.length}`;
-    conditions.push(`(
-      s.shipment_code ILIKE ${param}
+    const privateCustomerSearch = includeCustomerPrivateDetails
+      ? `
       OR s.customer_name ILIKE ${param}
       OR c.company_name ILIKE ${param}
-      OR c.contact_name ILIKE ${param}
+      OR c.contact_name ILIKE ${param}`
+      : "";
+    conditions.push(`(
+      s.shipment_code ILIKE ${param}
+      OR c.customer_code ILIKE ${param}
+      ${privateCustomerSearch}
       OR k.cotage_number ILIKE ${param}
       OR k.customs_office ILIKE ${param}
       OR k.declaration_reference ILIKE ${param}
@@ -350,6 +469,10 @@ function dailyStatusQuery(filters = {}, organizationId) {
       OR k.manifest_number ILIKE ${param}
       OR k.payment_reference ILIKE ${param}
       OR k.truck_plate ILIKE ${param}
+      OR sv2.sections_json #>> '{base,orderRegistrationNumber}' ILIKE ${param}
+      OR sv2.sections_json #>> '{base,currentStage}' ILIKE ${param}
+      OR sv2.sections_json #>> '{base,commercialCardDisplayName}' ILIKE ${param}
+      OR sv2.sections_json #>> '{base,malvaniDisplayName}' ILIKE ${param}
       OR cards.data->>'holderName' ILIKE ${param}
       OR cards.data->>'cardNumber' ILIKE ${param}
     )`);
@@ -450,6 +573,7 @@ function dailyStatusQuery(filters = {}, organizationId) {
         assigned_manager.name AS assigned_manager_name,
         s.customer_id,
         s.customer_name,
+        c.customer_code AS customer_code,
         COALESCE(c.company_name, c.contact_name, s.customer_name, s.legacy_data->>'customerName') AS customer_display_name,
         k.commercial_card_id AS kootaj_commercial_card_id,
         k.order_registration_number,
@@ -531,6 +655,11 @@ function dailyStatusQuery(filters = {}, organizationId) {
         k.custom_fields_json,
         k.updated_at AS kootaj_updated_at,
         k.updated_by_id AS kootaj_updated_by_id,
+        sv2.id AS v2_profile_id,
+        sv2.flow_code AS v2_flow_code,
+        sv2.sections_json AS v2_sections_json,
+        sv2.updated_at AS v2_profile_updated_at,
+        v2_updated_user.name AS v2_updated_by_name,
         cards.item_id AS commercial_card_id,
         cards.data AS commercial_card_data,
         wf.id AS workflow_id,
@@ -552,6 +681,12 @@ function dailyStatusQuery(filters = {}, organizationId) {
       LEFT JOIN shipment_kootaj_details k
         ON k.shipment_id = s.id
        AND k.organization_id = s.organization_id
+      LEFT JOIN shipment_v2_profiles sv2
+        ON sv2.shipment_id = s.id
+       AND sv2.organization_id = s.organization_id
+      LEFT JOIN app_users v2_updated_user
+        ON v2_updated_user.id = COALESCE(sv2.updated_by_id, sv2.created_by_id)
+       AND v2_updated_user.organization_id = s.organization_id
       LEFT JOIN commercial_cards cards
         ON cards.organization_id = s.organization_id
        AND (cards.item_id = k.commercial_card_id OR cards.data->>'id' = k.commercial_card_id)
@@ -568,23 +703,24 @@ function dailyStatusQuery(filters = {}, organizationId) {
         ON assigned_manager.id = s.assigned_manager_id
        AND assigned_manager.organization_id = s.organization_id
       WHERE ${conditions.join(" AND ")}
-      ORDER BY COALESCE(k.updated_at, s.updated_at) DESC, s.created_at DESC
+      ORDER BY COALESCE(sv2.updated_at, k.updated_at, s.updated_at) DESC, s.created_at DESC
       LIMIT ${limitParam}
     `,
   };
 }
 
-export async function getDailyStatusBoardRows(queryable, { organizationId, filters = {} } = {}) {
+export async function getDailyStatusBoardRows(queryable, { organizationId, filters = {}, includeCustomerPrivateDetails = true } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "getDailyStatusBoardRows");
-  const query = dailyStatusQuery(filters, scopedOrganizationId);
+  const query = dailyStatusQuery(filters, scopedOrganizationId, { includeCustomerPrivateDetails });
   const result = await queryable.query(query.sql, query.values);
-  return result.rows.map(composeDailyStatusRow);
+  return result.rows.map((row) => composeDailyStatusRow(row, { includeCustomerPrivateDetails }));
 }
 
-export async function getDailyStatusBoardRow(queryable, { organizationId, shipmentId } = {}) {
+export async function getDailyStatusBoardRow(queryable, { organizationId, shipmentId, includeCustomerPrivateDetails = true } = {}) {
   const rows = await getDailyStatusBoardRows(queryable, {
     organizationId,
     filters: { shipmentId, limit: 1, includeExited: true },
+    includeCustomerPrivateDetails,
   });
   return rows[0] || null;
 }
@@ -658,7 +794,13 @@ export function dailyStatusAuditSnapshot(row, fields) {
   }, {});
 }
 
-export async function updateDailyStatusRow(pool, { organizationId, shipmentId, actorUserId, updates = {} } = {}) {
+export async function updateDailyStatusRow(pool, {
+  organizationId,
+  shipmentId,
+  actorUserId,
+  updates = {},
+  includeCustomerPrivateDetails = true,
+} = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "updateDailyStatusRow");
   return withTransaction(pool, async (client) => {
     const shipment = await client.query(
@@ -698,6 +840,7 @@ export async function updateDailyStatusRow(pool, { organizationId, shipmentId, a
     const before = await getDailyStatusBoardRow(client, {
       organizationId: scopedOrganizationId,
       shipmentId,
+      includeCustomerPrivateDetails,
     });
 
     await client.query(
@@ -738,6 +881,7 @@ export async function updateDailyStatusRow(pool, { organizationId, shipmentId, a
     const after = await getDailyStatusBoardRow(client, {
       organizationId: scopedOrganizationId,
       shipmentId,
+      includeCustomerPrivateDetails,
     });
     return {
       before,

@@ -10,9 +10,9 @@ import { apiGet, apiPatch, apiPost } from "./api";
 
 export type ShipmentV2CreateInput = {
   flowCode: ShipmentV2FlowCode;
+  codeMode?: "new" | "existing";
   trackingNumber?: string;
   customerId: string;
-  shipmentTitle: string;
   origin: string;
   dischargePort: string;
   deliveryPort: string;

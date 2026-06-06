@@ -1,11 +1,14 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import {
+  Anchor,
   ClipboardList,
+  CreditCard,
   Edit3,
   ExternalLink,
   Filter,
   Loader2,
+  Package,
   RefreshCw,
   Save,
   Search,
@@ -23,6 +26,13 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   commonStatusOptions,
   customsStatusOptions,
   labelForOption,
@@ -33,25 +43,43 @@ import {
 import {
   iranImportDateFieldKeys,
   iranImportEditableFields,
-  iranImportFieldTypeLabel,
   iranImportNumberFieldKeys,
+  iranImportProfileSections,
   flattenProfileSections,
-  profileSectionsFromTemplate,
   type IranImportProfileField,
   type IranImportProfileSection,
 } from "@/src/components/shipments/iranImportProfileFields";
-import { toPersianDigits } from "@/src/components/ShamsiDateTimeField";
+import { toEnglishDigits, toPersianDigits } from "@/src/components/ShamsiDateTimeField";
 import { dailyStatusApi, type DailyStatusListFilters } from "@/src/lib/dailyStatusApi";
-import { shipmentFormTemplatesApi, type ShipmentFormTemplate } from "@/src/lib/shipmentFormTemplatesApi";
+import { businessEntitiesApi } from "@/src/lib/businessEntitiesApi";
 import { cn } from "@/lib/utils";
 import { useMockStore } from "@/src/store/useMockStore";
-import type { CommercialCard, DailyStatusBoardRow, DailyStatusPatch } from "@/src/types";
+import type { BusinessEntityContact, CommercialCard, Customer, DailyStatusBoardRow, DailyStatusPatch, MalvaniProfile, Shipment } from "@/src/types";
 
 const ALL_VALUE = "__all__";
 const NONE_VALUE = "__none__";
 const EMPTY_TEXT = "ثبت نشده";
 
 type ActiveMode = "view" | "edit";
+type CustomerEditDraft = {
+  name: string;
+  company: string;
+  phone: string;
+  email: string;
+  address: string;
+  referrer: string;
+  notes: string;
+};
+
+const emptyCustomerEditDraft: CustomerEditDraft = {
+  name: "",
+  company: "",
+  phone: "",
+  email: "",
+  address: "",
+  referrer: "",
+  notes: "",
+};
 
 const shipmentStatusLabels: Record<string, string> = {
   PENDING: "در انتظار",
@@ -62,6 +90,26 @@ const shipmentStatusLabels: Record<string, string> = {
   CLEARED: "ترخیص شده",
   DELIVERED: "تحویل شده",
   CLOSED: "بسته شده",
+};
+
+const v2CustomsRouteLabels: Record<string, string> = {
+  GREEN: "سبز",
+  YELLOW: "زرد",
+  RED: "قرمز",
+  DIRECT_CARRIAGE: "حمل یکسره",
+};
+
+const v2CurrencyLabels: Record<string, string> = {
+  EUR: "یورو",
+  CNY: "یوان",
+  USD: "دلار",
+  AED: "درهم",
+  IRR: "ریال",
+};
+
+const v2CustomsTaxStatusLabels: Record<string, string> = {
+  PAYABLE: "نیاز به پرداخت",
+  GOOD_STANDING: "خوش حسابی",
 };
 
 function padDatePart(value: string) {
@@ -87,11 +135,35 @@ function displayValue(value?: React.ReactNode) {
   return value;
 }
 
+function customerEditDraftFromCustomer(customer: Customer | null, fallbackName = ""): CustomerEditDraft {
+  return {
+    name: customer?.name || fallbackName || "",
+    company: customer?.company || "",
+    phone: customer?.phone || "",
+    email: customer?.email || "",
+    address: customer?.address || "",
+    referrer: customer?.referrer || "",
+    notes: customer?.notes || "",
+  };
+}
+
+function trimCustomerDraft(draft: CustomerEditDraft): CustomerEditDraft {
+  return {
+    name: draft.name.trim(),
+    company: draft.company.trim(),
+    phone: draft.phone.trim(),
+    email: draft.email.trim(),
+    address: draft.address.trim(),
+    referrer: draft.referrer.trim(),
+    notes: draft.notes.trim(),
+  };
+}
+
 function optionLabel(options: Array<{ value: string; label: string }>, value?: string | null) {
   return value ? labelForOption(options, value) || value : EMPTY_TEXT;
 }
 
-function statusBadge(status: string) {
+function statusBadge(status: string, label?: string) {
   const tone: Record<string, string> = {
     CLEARED: "border-emerald-500/20 bg-emerald-500/10 text-emerald-700",
     DELIVERED: "border-emerald-500/20 bg-emerald-500/10 text-emerald-700",
@@ -101,7 +173,7 @@ function statusBadge(status: string) {
   };
   return (
     <Badge variant="outline" className={cn("whitespace-nowrap text-[11px] font-black", tone[status])}>
-      {shipmentStatusLabels[status] || status}
+      {label || shipmentStatusLabels[status] || status}
     </Badge>
   );
 }
@@ -118,8 +190,54 @@ function selectableCommercialCards(commercialCards: CommercialCard[]) {
   return commercialCards.filter((card) => !card.isArchived && !card.archivedAt);
 }
 
+function commercialCardDisplayName(card?: CommercialCard | null) {
+  if (!card) return "";
+  return card.holderName || card.cardNumber || card.id || "";
+}
+
+function commercialCardDescription(card: CommercialCard) {
+  return [card.cardNumber, card.responsibleName].filter(Boolean).join(" • ");
+}
+
+function malvaniDisplayName(profile?: MalvaniProfile | null) {
+  if (!profile) return "";
+  return profile.displayName || profile.captainName || profile.lenjName || profile.id || "";
+}
+
+function malvaniDescription(profile: MalvaniProfile) {
+  return [profile.captainName, profile.lenjName, profile.lenjRegistrationNumber].filter(Boolean).join(" • ");
+}
+
+function activeBusinessContacts(contacts?: Array<{ archivedAt?: string | null }>) {
+  return (contacts || []).filter((contact) => !contact.archivedAt);
+}
+
+function isActiveCustomerShipment(shipment: Shipment) {
+  return !shipment.isArchived && !shipment.isExitedArchived && !["DELIVERED", "CLOSED"].includes(shipment.status);
+}
+
+function formatShamsiDateForDialog(value?: string | null) {
+  if (!value) return EMPTY_TEXT;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString("fa-IR-u-ca-persian");
+}
+
+const malvaniActiveStatusLabels: Record<MalvaniProfile["activeStatus"], string> = {
+  ACTIVE: "فعال",
+  INACTIVE: "غیرفعال",
+  NEEDS_REVIEW: "نیازمند بررسی",
+};
+
 function editableProfileFields(fields: IranImportProfileField[]) {
   return fields.filter((field) => field.editable && (field.patchKey || field.customFieldKey));
+}
+
+function normalizeLocalizedDecimalText(value: unknown) {
+  return toEnglishDigits(String(value ?? ""))
+    .replace(/[٬,]/g, "")
+    .replace(/٫/g, ".")
+    .trim();
 }
 
 function normalizeCustomDraftValue(field: IranImportProfileField, value: unknown) {
@@ -127,7 +245,7 @@ function normalizeCustomDraftValue(field: IranImportProfileField, value: unknown
   if (value === null) return null;
   if (field.type === "number") {
     if (value === "") return null;
-    const numberValue = Number(value);
+    const numberValue = Number(normalizeLocalizedDecimalText(value));
     return Number.isFinite(numberValue) ? numberValue : value;
   }
   if (typeof value !== "string") return value;
@@ -168,7 +286,7 @@ function normalizePatchValue(field: keyof DailyStatusPatch, value: unknown) {
   if (value === null) return null;
   if (iranImportNumberFieldKeys.has(field)) {
     if (value === "") return null;
-    const numberValue = Number(value);
+    const numberValue = Number(normalizeLocalizedDecimalText(value));
     return Number.isFinite(numberValue) ? numberValue : value;
   }
   if (typeof value !== "string") return value;
@@ -198,26 +316,76 @@ function cleanPatch(draft: DailyStatusPatch, fields: IranImportProfileField[] = 
   return patch;
 }
 
+function baseStatusText(row: DailyStatusBoardRow) {
+  const text = row.baseInfo?.statusText;
+  if (text && text !== row.shipment.status) return text;
+  return shipmentStatusLabels[row.shipment.status] || text || row.shipment.status;
+}
+
+function isLenjShipment(row: DailyStatusBoardRow) {
+  const shipmentTypeCode = (row.shipment.shipmentTypeCode || "").toUpperCase();
+  return (
+    shipmentTypeCode.includes("LENJ") ||
+    shipmentTypeCode.includes("LANJ") ||
+    row.baseInfo?.credentialType === "malvani" ||
+    row.baseInfo?.credentialLabel === "ملوانی"
+  );
+}
+
+const dailyGoodsSection: IranImportProfileSection = {
+  id: "goods-v2",
+  title: "کالا و بسته‌بندی",
+  defaultOpen: true,
+  fields: [],
+};
+
+function dailyStatusSectionsForRow(row: DailyStatusBoardRow | null): IranImportProfileSection[] {
+  const sections = iranImportProfileSections.filter((section) => section.id !== "commercial-card" || !row || !isLenjShipment(row));
+  const baseIndex = sections.findIndex((section) => section.id === "base");
+  if (baseIndex < 0) return [dailyGoodsSection, ...sections];
+  return [
+    ...sections.slice(0, baseIndex + 1),
+    dailyGoodsSection,
+    ...sections.slice(baseIndex + 1),
+  ];
+}
+
+function credentialInfo(row: DailyStatusBoardRow) {
+  const isLenj = isLenjShipment(row);
+  return {
+    type: isLenj ? "malvani" as const : "commercial_card" as const,
+    id: row.baseInfo?.credentialId || (!isLenj ? row.commercialCard?.id || row.kootaj.commercialCardId || "" : ""),
+    label: isLenj ? "ملوانی" : row.baseInfo?.credentialLabel || "کارت بازرگانی",
+    displayName: isLenj
+      ? row.baseInfo?.credentialDisplayName
+      : row.baseInfo?.credentialDisplayName || row.commercialCard?.displayName || row.kootaj.commercialCardId,
+  };
+}
+
+function rowCustomerCode(row: DailyStatusBoardRow) {
+  return row.baseInfo?.customerCode || row.customer?.customerCode || row.customer?.id || row.baseInfo?.customerName || row.customer?.name || "";
+}
+
 function readonlyValue(row: DailyStatusBoardRow, key: string) {
   switch (key) {
     case "shipmentCode":
-      return row.shipment.code;
+      return row.baseInfo?.code || row.shipment.code;
     case "customerName":
-      return row.customer?.name;
+      return rowCustomerCode(row);
     case "shipmentStatus":
-      return shipmentStatusLabels[row.shipment.status] || row.shipment.status;
+      return baseStatusText(row);
     case "workflowStep":
-      return row.workflow?.currentStepLabel;
+      return row.baseInfo?.currentStage || row.workflow?.currentStepLabel;
     case "workflowRoute":
       return optionLabel(routeOptions, row.workflow?.route);
     case "documentCount":
-      return `${toPersianDigits(row.documents.customerVisibleCount)}/${toPersianDigits(row.documents.totalCount)}`;
+      return toPersianDigits(row.baseInfo?.documentCount ?? row.documents.totalCount);
     case "taskCount":
       return toPersianDigits(row.tasks.openCount);
     case "profileUpdatedAt":
-      return formatDate(row.kootaj.updatedAt);
+      return formatDate(row.baseInfo?.updatedAt || row.kootaj.updatedAt);
     case "commercialCardDisplay":
-      return row.commercialCard?.displayName || row.kootaj.commercialCardId;
+      return credentialInfo(row).displayName;
     default:
       return "";
   }
@@ -248,6 +416,50 @@ function rowExitOrCustomsLabel(row: DailyStatusBoardRow) {
   return optionLabel(releaseStatusOptions, row.kootaj.releaseStatus) || optionLabel(customsStatusOptions, row.kootaj.customsStatus);
 }
 
+function formatDailyNumber(value?: number | null) {
+  if (value === null || value === undefined) return "";
+  return Number(value).toLocaleString("fa-IR", { maximumFractionDigits: 6 });
+}
+
+function v2RouteLabel(value?: string | null) {
+  return value ? v2CustomsRouteLabels[value] || value : "";
+}
+
+function v2TaxStatusLabel(value?: string | null) {
+  return value ? v2CustomsTaxStatusLabels[value] || value : "";
+}
+
+function v2MoneyValue(amount?: number | null, currency?: string | null) {
+  if (amount === null || amount === undefined) return "";
+  return `${formatDailyNumber(amount)} ${v2CurrencyLabels[currency || "IRR"] || currency || "IRR"}`;
+}
+
+function v2PaymentStateLabel(isPaid?: boolean) {
+  return isPaid ? "پرداخت شده" : "بدون پرداخت";
+}
+
+function v2DisplayDate(value?: string | null) {
+  return value ? String(value) : "";
+}
+
+function goodsDescriptionSummary(row: DailyStatusBoardRow) {
+  return row.baseInfo?.goods?.goodsSummary || row.kootaj.goodsSummary || "";
+}
+
+function goodsPackagingSummary(row: DailyStatusBoardRow) {
+  const goods = row.baseInfo?.goods;
+  const containerParts = [
+    goods?.container20Count ? `${formatDailyNumber(goods.container20Count)} کانتینر ۲۰ فوت` : "",
+    goods?.container40Count ? `${formatDailyNumber(goods.container40Count)} کانتینر ۴۰ فوت` : "",
+  ].filter(Boolean);
+  const packageText = goods?.packagingSummary || (row.kootaj.packageCount ? `${formatDailyNumber(row.kootaj.packageCount)} بسته` : "");
+  return [...containerParts, packageText].filter(Boolean).join("، ");
+}
+
+function goodsCompactSummary(row: DailyStatusBoardRow) {
+  return [goodsDescriptionSummary(row), goodsPackagingSummary(row)].filter(Boolean).join(" / ");
+}
+
 function SummaryTile({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="min-w-0 rounded-lg border border-border bg-background px-3 py-2">
@@ -264,6 +476,93 @@ function ReadField({ label, value, wide }: { label: string; value?: React.ReactN
       <p className="mt-1 min-h-5 whitespace-pre-wrap break-words text-xs font-black leading-6 text-foreground">
         {displayValue(value)}
       </p>
+    </div>
+  );
+}
+
+function DialogFactRow({ label, value }: { label: string; value?: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 px-2.5 py-2">
+      <span className="shrink-0 text-[10px] font-black text-muted-foreground">{label}</span>
+      <span className="min-w-0 break-words text-left text-[11px] font-black text-foreground" dir="auto">
+        {displayValue(value)}
+      </span>
+    </div>
+  );
+}
+
+function CustomerEditField({
+  label,
+  value,
+  onChange,
+  multiline,
+  dir,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  multiline?: boolean;
+  dir?: "rtl" | "ltr";
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-[10px] font-black text-muted-foreground">{label}</Label>
+      {multiline ? (
+        <textarea
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="min-h-20 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-xs font-bold leading-5 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+          dir={dir || "rtl"}
+        />
+      ) : (
+        <Input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-9 rounded-lg bg-background text-xs font-bold"
+          dir={dir || "rtl"}
+        />
+      )}
+    </div>
+  );
+}
+
+function CompactContactList({
+  contacts,
+  emptyText,
+  testId,
+}: {
+  contacts: BusinessEntityContact[];
+  emptyText: string;
+  testId: string;
+}) {
+  const activeContacts = activeBusinessContacts(contacts) as BusinessEntityContact[];
+  if (!activeContacts.length) {
+    return (
+      <div data-testid={testId} className="rounded-lg border border-dashed border-border bg-muted/20 px-2.5 py-2 text-[11px] font-bold text-muted-foreground">
+        {emptyText}
+      </div>
+    );
+  }
+  return (
+    <div data-testid={testId} className="grid gap-1.5">
+      {activeContacts.map((contact) => (
+        <div key={contact.id} className="rounded-lg border border-border bg-muted/20 px-2.5 py-2">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-1.5">
+            <p className="min-w-0 break-words text-[11px] font-black text-foreground">{contact.contactName}</p>
+            {contact.isPrimary ? (
+              <Badge variant="outline" className="h-5 rounded-md px-1.5 text-[9px] font-black">
+                اصلی
+              </Badge>
+            ) : null}
+          </div>
+          <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[10px] font-bold text-muted-foreground">
+            {contact.roleTitle ? <span>{contact.roleTitle}</span> : null}
+            <span dir="ltr">{contact.phoneNumber}</span>
+            {contact.phoneLabel ? <span>{contact.phoneLabel}</span> : null}
+          </div>
+          {contact.note ? <p className="mt-1 text-[10px] font-bold leading-4 text-muted-foreground">{contact.note}</p> : null}
+        </div>
+      ))}
     </div>
   );
 }
@@ -314,6 +613,541 @@ function CompactFact({ label, value, className }: { label: string; value?: React
       <p className="truncate text-[10px] font-bold text-muted-foreground">{label}</p>
       <p className="mt-1 line-clamp-2 break-words text-[11px] font-black leading-4 text-foreground">{displayValue(value)}</p>
     </div>
+  );
+}
+
+function DailyBaseInfoBox({
+  label,
+  children,
+  wide,
+  testId,
+}: {
+  label: string;
+  children: React.ReactNode;
+  wide?: boolean;
+  testId?: string;
+}) {
+  return (
+    <div className={cn("min-w-0 rounded-lg border border-border bg-background px-3 py-2", wide && "col-span-2")} data-testid={testId}>
+      <p className="truncate text-[11px] font-bold text-muted-foreground">{label}</p>
+      <div className="mt-1 min-h-5 break-words text-xs font-black leading-6 text-foreground">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function DailyBaseInfoGrid({
+  row,
+  surface,
+  customers,
+  shipments,
+  commercialCards,
+  malvaniProfiles,
+}: {
+  row: DailyStatusBoardRow;
+  surface: "desktop" | "mobile";
+  customers: Customer[];
+  shipments: Shipment[];
+  commercialCards: CommercialCard[];
+  malvaniProfiles: MalvaniProfile[];
+}) {
+  const base = row.baseInfo;
+  const credential = credentialInfo(row);
+  const testId = (name: string) => `daily-status-${surface}-base-${name}-${row.id}`;
+  const [dialog, setDialog] = React.useState<"customer" | "credential" | null>(null);
+  const [isEditingCustomer, setIsEditingCustomer] = React.useState(false);
+  const [isSavingCustomer, setIsSavingCustomer] = React.useState(false);
+  const [customerDraft, setCustomerDraft] = React.useState<CustomerEditDraft>(emptyCustomerEditDraft);
+  const currentUser = useMockStore((state) => state.currentUser);
+  const loadCurrentUserRecords = useMockStore((state) => state.loadCurrentUserRecords);
+  const customer = customers.find((item) => item.id === row.customer?.id) || null;
+  const activeCustomerShipments = React.useMemo(() => {
+    if (!row.customer?.id) return [];
+    return shipments.filter((item) => item.customerId === row.customer?.id && isActiveCustomerShipment(item));
+  }, [row.customer?.id, shipments]);
+  const linkedCommercialCard = React.useMemo(() => (
+    commercialCards.find((card) => (
+      card.id === credential.id ||
+      card.id === row.commercialCard?.id ||
+      commercialCardDisplayName(card) === credential.displayName
+    )) || null
+  ), [commercialCards, credential.displayName, credential.id, row.commercialCard?.id]);
+  const linkedMalvaniProfile = React.useMemo(() => (
+    malvaniProfiles.find((profile) => (
+      profile.id === credential.id ||
+      malvaniDisplayName(profile) === credential.displayName
+    )) || null
+  ), [credential.displayName, credential.id, malvaniProfiles]);
+  const canOpenCredential = Boolean(credential.displayName || linkedCommercialCard || linkedMalvaniProfile);
+  const customerName = customer?.name || base?.customerName || row.customer?.name;
+  const customerIdentifier = customer?.customerCode || customer?.code || row.customer?.customerCode || base?.customerCode || row.customer?.id || customerName || "";
+  const customerDisplay = customerIdentifier;
+  const canEditCustomer = currentUser?.role === "CEO" && Boolean(row.customer?.id);
+
+  React.useEffect(() => {
+    if (dialog === "customer" && !isEditingCustomer) {
+      setCustomerDraft(customerEditDraftFromCustomer(customer, customerName || ""));
+    }
+  }, [customer, customerName, dialog, isEditingCustomer]);
+
+  const startCustomerEdit = () => {
+    setCustomerDraft(customerEditDraftFromCustomer(customer, customerName || ""));
+    setIsEditingCustomer(true);
+  };
+
+  const saveCustomerEdit = async () => {
+    if (!row.customer?.id) return;
+    const payload = trimCustomerDraft(customerDraft);
+    if (!payload.name && !payload.company) {
+      toast.error("نام مشتری یا نام شرکت را وارد کنید.");
+      return;
+    }
+    setIsSavingCustomer(true);
+    try {
+      const response = await fetch(`/api/customers/${encodeURIComponent(row.customer.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error?.message || "بروزرسانی مشتری ناموفق بود.");
+      }
+      await loadCurrentUserRecords();
+      setIsEditingCustomer(false);
+      toast.success("اطلاعات مشتری بروزرسانی شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "بروزرسانی مشتری ناموفق بود.");
+    } finally {
+      setIsSavingCustomer(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="grid grid-flow-row-dense grid-cols-2 gap-2" data-testid={`daily-status-${surface}-base-info-${row.id}`}>
+        <DailyBaseInfoBox label="کد محموله" testId={testId("code")}>
+          <Link to={row.links.shipmentDetailUrl} className="inline-flex max-w-full items-center gap-1 text-primary underline-offset-4 hover:underline">
+            <span className="truncate font-mono" dir="ltr">{displayValue(base?.code || row.shipment.code)}</span>
+            <ExternalLink className="h-3 w-3 shrink-0" />
+          </Link>
+        </DailyBaseInfoBox>
+        <DailyBaseInfoBox label="مشتری" testId={testId("customer")}>
+          {customerDisplay ? (
+            <button
+              type="button"
+              data-testid={testId("customer-button")}
+              className="inline-flex max-w-full items-center gap-1 text-right text-primary underline-offset-4 hover:underline"
+              onClick={() => setDialog("customer")}
+            >
+              <span className="truncate">{displayValue(customerDisplay)}</span>
+              <ExternalLink className="h-3 w-3 shrink-0" />
+            </button>
+          ) : (
+            displayValue(customerDisplay)
+          )}
+        </DailyBaseInfoBox>
+        <DailyBaseInfoBox label="وضعیت" testId={testId("status")}>
+          {displayValue(baseStatusText(row))}
+        </DailyBaseInfoBox>
+        <DailyBaseInfoBox label="شماره ثبت سفارش" testId={testId("order-registration-number")}>
+          <span dir="ltr">{displayValue(base?.orderRegistrationNumber || row.kootaj.orderRegistrationNumber)}</span>
+        </DailyBaseInfoBox>
+        <DailyBaseInfoBox label={credential.label} testId={testId("business-credential")}>
+          {canOpenCredential ? (
+            <button
+              type="button"
+              data-testid={testId("business-credential-button")}
+              className="inline-flex max-w-full items-center gap-1 text-right text-primary underline-offset-4 hover:underline"
+              onClick={() => setDialog("credential")}
+            >
+              <span className="truncate">{displayValue(credential.displayName)}</span>
+              <ExternalLink className="h-3 w-3 shrink-0" />
+            </button>
+          ) : (
+            displayValue(credential.displayName)
+          )}
+        </DailyBaseInfoBox>
+        <DailyBaseInfoBox label="تعداد اسناد" testId={testId("document-count")}>
+          {toPersianDigits(base?.documentCount ?? row.documents.totalCount)}
+        </DailyBaseInfoBox>
+        <DailyBaseInfoBox label="مبدا" testId={testId("origin")}>
+          {displayValue(base?.origin || row.shipment.origin)}
+        </DailyBaseInfoBox>
+        <DailyBaseInfoBox label="بندر تحویل" testId={testId("delivery-port")}>
+          {displayValue(base?.deliveryPort || row.shipment.destination)}
+        </DailyBaseInfoBox>
+        <DailyBaseInfoBox label="بندر تخلیه" testId={testId("discharge-port")}>
+          {displayValue(base?.dischargePort)}
+        </DailyBaseInfoBox>
+        <DailyBaseInfoBox label="گیرنده کالا" testId={testId("consignee")}>
+          {displayValue(base?.consigneeName)}
+        </DailyBaseInfoBox>
+        <DailyBaseInfoBox label="مرحله فعلی" wide testId={testId("current-stage")}>
+          <p className="whitespace-pre-wrap">{displayValue(base?.currentStage || row.workflow?.currentStepLabel)}</p>
+        </DailyBaseInfoBox>
+        <DailyBaseInfoBox label="آخرین به روز رسانی" wide testId={testId("last-update")}>
+          <p>{displayValue(formatDate(base?.updatedAt || row.kootaj.updatedAt || row.shipment.updatedAt))}</p>
+          <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">توسط {displayValue(base?.updatedByName)}</p>
+        </DailyBaseInfoBox>
+      </div>
+
+      <Dialog open={dialog === "customer"} onOpenChange={(open) => {
+        if (!open) {
+          setDialog(null);
+          setIsEditingCustomer(false);
+        }
+      }}>
+        <DialogContent data-testid={`daily-status-${surface}-customer-dialog-${row.id}`} className="max-h-[90vh] overflow-y-auto rounded-xl border-border bg-card p-4 text-right text-foreground sm:max-w-xl" dir="rtl">
+          <DialogHeader className="gap-1 border-b border-border/60 pb-3">
+            <DialogTitle className="flex items-center gap-2 text-sm font-black">
+              <Package className="h-4 w-4 text-primary" />
+              {displayValue(customerIdentifier)}
+            </DialogTitle>
+            <DialogDescription className="text-right text-[11px] font-bold text-muted-foreground">
+              شناسه مشتری و محموله‌های فعال
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-1.5">
+            <DialogFactRow label="کد مشتری" value={customerIdentifier} />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-[10px] font-black text-muted-foreground">محموله‌های فعال</p>
+            <div data-testid={`daily-status-${surface}-customer-active-shipments-${row.id}`} className="grid gap-1.5">
+              {(activeCustomerShipments.length ? activeCustomerShipments : [{
+                id: row.id,
+                trackingNumber: base?.code || row.shipment.code,
+                origin: row.shipment.origin,
+                destination: row.shipment.destination,
+                status: row.shipment.status as Shipment["status"],
+              }]).map((item) => (
+                <Link
+                  key={item.id}
+                  to={`/shipments/${item.id}`}
+                  className="group rounded-lg border border-border bg-muted/20 px-2.5 py-2 text-right hover:border-primary/50 hover:bg-primary/5"
+                  onClick={() => setDialog(null)}
+                >
+                  <div className="flex min-w-0 items-center justify-between gap-2">
+                    <span className="min-w-0 truncate font-mono text-[11px] font-black text-primary" dir="ltr">
+                      {item.trackingNumber}
+                    </span>
+                    <Badge variant="outline" className="h-5 shrink-0 rounded-md px-1.5 text-[9px] font-black">
+                      {shipmentStatusLabels[item.status] || item.status}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
+                    {[item.origin, item.destination].filter(Boolean).join(" ← ") || EMPTY_TEXT}
+                  </p>
+                </Link>
+              ))}
+            </div>
+            {currentUser?.role === "CEO" && row.links.customerDetailUrl ? (
+              <Button asChild variant="outline" size="sm" className="mt-2 h-8 rounded-lg text-[11px] font-black">
+                <Link to={row.links.customerDetailUrl} onClick={() => setDialog(null)}>باز کردن صفحه مشتری</Link>
+              </Button>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={dialog === "credential"} onOpenChange={(open) => !open && setDialog(null)}>
+        <DialogContent data-testid={`daily-status-${surface}-business-credential-dialog-${row.id}`} className="max-h-[90vh] overflow-y-auto rounded-xl border-border bg-card p-4 text-right text-foreground sm:max-w-xl" dir="rtl">
+          {credential.type === "commercial_card" ? (
+            <>
+              <DialogHeader className="gap-1 border-b border-border/60 pb-3">
+                <DialogTitle className="flex items-center gap-2 text-sm font-black">
+                  <CreditCard className="h-4 w-4 text-primary" />
+                  {displayValue(commercialCardDisplayName(linkedCommercialCard) || credential.displayName)}
+                </DialogTitle>
+                <DialogDescription className="text-right text-[11px] font-bold text-muted-foreground">
+                  اطلاعات کارت بازرگانی لینک شده به محموله
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-1.5">
+                <DialogFactRow label="شماره کارت" value={linkedCommercialCard?.cardNumber || row.commercialCard?.cardNumber} />
+                <DialogFactRow label="تاریخ صدور" value={formatShamsiDateForDialog(linkedCommercialCard?.issueDate)} />
+                <DialogFactRow label="تاریخ انقضا" value={formatShamsiDateForDialog(linkedCommercialCard?.expirationDate)} />
+                <DialogFactRow label="شناسه ملی" value={linkedCommercialCard?.nationalId} />
+                <DialogFactRow label="اسناد" value={toPersianDigits(linkedCommercialCard?.documents?.length || 0)} />
+                {linkedCommercialCard?.description ? (
+                  <div className="rounded-lg border border-border bg-muted/20 px-2.5 py-2">
+                    <p className="text-[10px] font-black text-muted-foreground">توضیحات</p>
+                    <p className="mt-1 text-[11px] font-bold leading-5 text-foreground">{linkedCommercialCard.description}</p>
+                  </div>
+                ) : null}
+                <div className="pt-1">
+                  <p className="mb-1.5 text-[10px] font-black text-muted-foreground">مخاطبین</p>
+                  <CompactContactList
+                    contacts={(linkedCommercialCard?.contacts || []) as BusinessEntityContact[]}
+                    emptyText="مخاطبی برای این کارت ثبت نشده است."
+                    testId={`daily-status-${surface}-business-credential-contacts-${row.id}`}
+                  />
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <DialogHeader className="gap-1 border-b border-border/60 pb-3">
+                <DialogTitle className="flex items-center gap-2 text-sm font-black">
+                  <Anchor className="h-4 w-4 text-primary" />
+                  {displayValue(malvaniDisplayName(linkedMalvaniProfile) || credential.displayName)}
+                </DialogTitle>
+                <DialogDescription className="text-right text-[11px] font-bold text-muted-foreground">
+                  اطلاعات ملوانی لینک شده به محموله
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-1.5">
+                <DialogFactRow label="نام ناخدا" value={linkedMalvaniProfile?.captainName} />
+                <DialogFactRow label="نام لنج" value={linkedMalvaniProfile?.lenjName} />
+                <DialogFactRow label="شماره/شناسه لنج" value={linkedMalvaniProfile?.lenjRegistrationNumber} />
+                <DialogFactRow label="نوع لنج" value={linkedMalvaniProfile?.lenjType} />
+                <DialogFactRow label="بندر اصلی" value={linkedMalvaniProfile?.homePort} />
+                <DialogFactRow label="وضعیت" value={linkedMalvaniProfile ? malvaniActiveStatusLabels[linkedMalvaniProfile.activeStatus] || linkedMalvaniProfile.activeStatus : null} />
+                {linkedMalvaniProfile?.note ? (
+                  <div className="rounded-lg border border-border bg-muted/20 px-2.5 py-2">
+                    <p className="text-[10px] font-black text-muted-foreground">یادداشت</p>
+                    <p className="mt-1 text-[11px] font-bold leading-5 text-foreground">{linkedMalvaniProfile.note}</p>
+                  </div>
+                ) : null}
+                <div className="pt-1">
+                  <p className="mb-1.5 text-[10px] font-black text-muted-foreground">مخاطبین</p>
+                  <CompactContactList
+                    contacts={(linkedMalvaniProfile?.contacts || []) as BusinessEntityContact[]}
+                    emptyText="مخاطبی برای این ملوانی ثبت نشده است."
+                    testId={`daily-status-${surface}-business-credential-contacts-${row.id}`}
+                  />
+                </div>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function DailyGoodsInfoPanel({ row, surface }: { row: DailyStatusBoardRow; surface: "desktop" | "mobile" }) {
+  const goods = row.baseInfo?.goods;
+  const rows = goods?.goodsRows || [];
+  const containerParts = [
+    goods?.container20Count ? ["کانتینر ۲۰ فوت", formatDailyNumber(goods.container20Count)] : null,
+    goods?.container40Count ? ["کانتینر ۴۰ فوت", formatDailyNumber(goods.container40Count)] : null,
+  ].filter(Boolean) as Array<[string, string]>;
+  return (
+    <div className="space-y-2.5" data-testid={`daily-status-${surface}-goods-v2-${row.id}`}>
+      {containerParts.length ? (
+        <div className="grid grid-cols-2 gap-2">
+          {containerParts.map(([label, value]) => (
+            <React.Fragment key={label}>
+              <ReadField label={label} value={value} />
+            </React.Fragment>
+          ))}
+        </div>
+      ) : null}
+      {rows.length ? (
+        <div className="space-y-2">
+          {rows.map((item, index) => (
+            <div key={`${item.description}-${index}`} className="rounded-lg border border-border bg-muted/20 p-2.5 text-xs">
+              <div className="flex min-w-0 items-start gap-2">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-black text-primary">
+                  {(index + 1).toLocaleString("fa-IR")}
+                </span>
+                <p className="min-w-0 flex-1 break-words font-black leading-5 text-foreground">{item.description}</p>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+                {[
+                  ["تعداد", formatDailyNumber(item.quantity)],
+                  ["وزن", formatDailyNumber(item.weight)],
+                  ["CBM", formatDailyNumber(item.cbm)],
+                  ["PCS", formatDailyNumber(item.pcs)],
+                  ["بسته‌بندی", item.packagingType],
+                ].map(([label, value]) => (
+                  <div key={label} className="min-w-0 rounded-md bg-background/80 px-2 py-1">
+                    <p className="truncate text-[9px] font-black text-muted-foreground">{label}</p>
+                    <p className="mt-0.5 truncate text-[11px] font-black text-foreground">{displayValue(value)}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div className="rounded-lg border border-primary/20 bg-primary/5 p-2.5" data-testid={`daily-status-${surface}-goods-total-${row.id}`}>
+            <p className="text-[10px] font-black text-primary">مجموع</p>
+            <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+              {[
+                ["تعداد", formatDailyNumber(goods?.totalQuantity), "quantity"],
+                ["وزن", formatDailyNumber(goods?.totalWeight), "weight"],
+                ["CBM", formatDailyNumber(goods?.totalCbm), "cbm"],
+                ["PCS", formatDailyNumber(goods?.totalPcs), "pcs"],
+              ].map(([label, value, key]) => (
+                <div key={key} className="min-w-0 rounded-md bg-background/80 px-2 py-1" data-testid={`daily-status-${surface}-goods-total-${key}-${row.id}`}>
+                  <p className="truncate text-[9px] font-black text-muted-foreground">{label}</p>
+                  <p className="mt-0.5 truncate text-[11px] font-black text-foreground">{displayValue(value)}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 p-2.5 text-[11px] font-bold leading-5 text-muted-foreground">
+          <Package className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span>هنوز کالایی در V2 ثبت نشده است.</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DailyV2DetailSection({
+  row,
+  surface,
+  id,
+  title,
+  children,
+}: {
+  row: DailyStatusBoardRow;
+  surface: "desktop" | "mobile";
+  id: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <details open className="rounded-lg border border-border bg-card" data-testid={`daily-status-${surface}-section-${id}-${row.id}`}>
+      <summary className="cursor-pointer px-3 py-2 text-xs font-black text-foreground">
+        {title}
+      </summary>
+      <div className="border-t border-border p-3">
+        {children}
+      </div>
+    </details>
+  );
+}
+
+function DailyDeclarationKootajPanel({ row }: { row: DailyStatusBoardRow }) {
+  const declaration = row.v2Profile?.sections?.declarationKootaj || {};
+  return (
+    <div className="grid gap-2 md:grid-cols-2">
+      <ReadField label="شماره کوتاژ" value={declaration.cotageNumber || row.kootaj.cotageNumber} />
+      <ReadField label="مسیر گمرکی" value={v2RouteLabel(declaration.customsRoute) || rowRouteLabel(row)} />
+      <ReadField label="تاریخ ثبت کوتاژ" value={v2DisplayDate(declaration.cotageRegistrationDate) || row.kootaj.cotageDate} />
+      <ReadField label="ارزش کل" value={v2MoneyValue(declaration.totalValueAmount, declaration.totalValueCurrency)} />
+      <ReadField label="مبلغ نهایی پرداختی" value={v2MoneyValue(declaration.finalPaidAmount, declaration.finalPaidCurrency)} />
+    </div>
+  );
+}
+
+function DailyPermitsPanel({ row }: { row: DailyStatusBoardRow }) {
+  const permitRows = row.v2Profile?.sections?.permits?.permitRows || [];
+  if (!permitRows.length) {
+    return (
+      <div className="rounded-lg border border-dashed border-border bg-muted/20 p-2.5 text-[11px] font-bold text-muted-foreground">
+        ثبت نشده
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      {permitRows.map((permit, index) => (
+        <div key={`${permit.permitName}-${index}`} className="flex min-w-0 items-start gap-2 rounded-lg border border-border bg-muted/20 p-2.5">
+          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-black text-primary">
+            {(index + 1).toLocaleString("fa-IR")}
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="break-words text-[11px] font-black leading-5 text-foreground sm:text-xs">{permit.permitName}</p>
+            <p className="mt-0.5 break-words text-[10px] font-bold leading-4 text-muted-foreground">
+              وضعیت: {displayValue(permit.permitState)}
+            </p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DailyPaymentsPanel({ row }: { row: DailyStatusBoardRow }) {
+  const payments = row.v2Profile?.sections?.payments || {};
+  const taxAmount =
+    payments.customsTaxStatus === "GOOD_STANDING"
+      ? 0
+      : payments.customsTaxAmount ?? row.kootaj.taxAmount;
+  return (
+    <div className="grid gap-2 md:grid-cols-2">
+      <ReadField label="پرداخت گمرکی" value={v2PaymentStateLabel(payments.customsPaymentPaid)} />
+      <ReadField label="مبلغ گمرکی" value={v2MoneyValue(payments.customsAmount ?? row.kootaj.dutiesAmount, payments.customsAmountCurrency)} />
+      <ReadField label="مابه‌التفاوت گمرکی" value={v2MoneyValue(payments.customsDifferenceAmount, payments.customsDifferenceCurrency)} />
+      <ReadField label="پرداخت مابه‌التفاوت" value={v2PaymentStateLabel(payments.customsDifferencePaid)} />
+      <ReadField label="وضعیت مالیات" value={v2TaxStatusLabel(payments.customsTaxStatus) || optionLabel(taxPaymentStatusOptions, row.kootaj.taxPaymentStatus)} />
+      <ReadField label="مبلغ مالیات" value={v2MoneyValue(taxAmount, payments.customsTaxCurrency)} />
+    </div>
+  );
+}
+
+function DailyBankingPanel({ row }: { row: DailyStatusBoardRow }) {
+  const banking = row.v2Profile?.sections?.banking || {};
+  return (
+    <div className="grid gap-2 md:grid-cols-2">
+      <ReadField label="بانک" value={banking.bankName || row.kootaj.bankName} />
+      <ReadField label="کد شعبه" value={banking.branchCode} />
+      <ReadField label="نام شعبه" value={banking.branchName} />
+      <ReadField label="کد ابزار پرداخت" value={banking.paymentInstrumentCode} />
+      <ReadField label="کد ساتا" value={banking.sataCode} />
+    </div>
+  );
+}
+
+function DailyNotesPanel({ row }: { row: DailyStatusBoardRow }) {
+  const notes = row.v2Profile?.sections?.notes || {};
+  return (
+    <ReadField label="یادداشت‌ها" value={notes.internalNote || row.kootaj.internalNote} wide />
+  );
+}
+
+function DailyKootajV2Details({
+  row,
+  surface,
+  customers,
+  shipments,
+  commercialCards,
+  malvaniProfiles,
+}: {
+  row: DailyStatusBoardRow;
+  surface: "desktop" | "mobile";
+  customers: Customer[];
+  shipments: Shipment[];
+  commercialCards: CommercialCard[];
+  malvaniProfiles: MalvaniProfile[];
+}) {
+  return (
+    <>
+      <DailyV2DetailSection row={row} surface={surface} id="base" title="اطلاعات پایه">
+        <DailyBaseInfoGrid
+          row={row}
+          surface={surface}
+          customers={customers}
+          shipments={shipments}
+          commercialCards={commercialCards}
+          malvaniProfiles={malvaniProfiles}
+        />
+      </DailyV2DetailSection>
+      <DailyV2DetailSection row={row} surface={surface} id="goods-v2" title="مشخصات کالا">
+        <DailyGoodsInfoPanel row={row} surface={surface} />
+      </DailyV2DetailSection>
+      <DailyV2DetailSection row={row} surface={surface} id="declarationKootaj" title="اظهار و کوتاژ">
+        <DailyDeclarationKootajPanel row={row} />
+      </DailyV2DetailSection>
+      <DailyV2DetailSection row={row} surface={surface} id="permits" title="مجوزها">
+        <DailyPermitsPanel row={row} />
+      </DailyV2DetailSection>
+      <DailyV2DetailSection row={row} surface={surface} id="payments" title="پرداخت‌ها">
+        <DailyPaymentsPanel row={row} />
+      </DailyV2DetailSection>
+      <DailyV2DetailSection row={row} surface={surface} id="banking" title="بانکی">
+        <DailyBankingPanel row={row} />
+      </DailyV2DetailSection>
+      <DailyV2DetailSection row={row} surface={surface} id="notes" title="یادداشت‌ها">
+        <DailyNotesPanel row={row} />
+      </DailyV2DetailSection>
+    </>
   );
 }
 
@@ -472,6 +1306,9 @@ function RowDetailsPanel({
   draft,
   sections,
   commercialCards,
+  customers,
+  shipments,
+  malvaniProfiles,
   isSaving,
   onModeChange,
   onDraftChange,
@@ -485,6 +1322,9 @@ function RowDetailsPanel({
   draft: DailyStatusPatch;
   sections: IranImportProfileSection[];
   commercialCards: CommercialCard[];
+  customers: Customer[];
+  shipments: Shipment[];
+  malvaniProfiles: MalvaniProfile[];
   isSaving: boolean;
   onModeChange: (mode: ActiveMode) => void;
   onDraftChange: (field: keyof DailyStatusPatch, value: string | null) => void;
@@ -495,13 +1335,14 @@ function RowDetailsPanel({
   const isEdit = mode === "edit";
   const panelHeightClass = surface === "desktop" ? "max-h-[calc(100dvh-15.5rem)]" : "max-h-[75dvh]";
   const panelTestId = (name: string) => `daily-status-${surface}-${name}-${row.id}`;
+  const shipmentCode = row.baseInfo?.code || row.shipment.code;
   return (
     <div className={cn("flex min-h-0 flex-col overflow-hidden rounded-xl border border-primary/15 bg-primary/5", panelHeightClass)} data-testid={panelTestId(`${mode}-panel`)}>
       <div className="shrink-0 p-3 pb-3 md:p-4 md:pb-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <p className="truncate text-sm font-black text-foreground">
-              {isEdit ? "ویرایش وضعیت روزانه" : "جزئیات وضعیت روزانه"} {row.shipment.code}
+              {isEdit ? "ویرایش وضعیت روزانه" : "جزئیات وضعیت روزانه"} {shipmentCode}
             </p>
             <p className="mt-1 text-[11px] font-bold text-muted-foreground">
               داده‌های محموله، مشتری، workflow، اسناد و وظایف از ماژول‌های اصلی خوانده می‌شوند.
@@ -524,38 +1365,64 @@ function RowDetailsPanel({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 md:px-4 md:pb-4">
         <div className="space-y-3">
-          {sections.map((section) => (
-            <details key={section.id} open={Boolean(section.defaultOpen)} className="rounded-lg border border-border bg-card" data-testid={`daily-status-${surface}-section-${section.id}-${row.id}`}>
-              <summary className="cursor-pointer px-3 py-2 text-xs font-black text-foreground">
-                {section.title}
-              </summary>
-              <div className="grid gap-2 border-t border-border p-3 md:grid-cols-2">
-                {section.fields.map((field) => (
-                  <React.Fragment key={field.key}>
-                    {isEdit && field.editable ? (
-                      <FormInput label={field.label} wide={field.wide}>
-                        {renderEditor({
-                          row,
-                          field,
-                          draft,
-                          commercialCards,
-                          onDraftChange,
-                          onCustomDraftChange,
-                          prefix: `daily-status-${surface}-${field.key}-${row.id}`,
-                        })}
-                      </FormInput>
-                    ) : (
-                      <ReadField
-                        label={field.label}
-                        value={renderProfileValue(row, draft, field, isEdit)}
-                        wide={field.wide}
-                      />
-                    )}
-                  </React.Fragment>
-                ))}
-              </div>
-            </details>
-          ))}
+          {isEdit ? (
+            sections.map((section) => (
+              <details key={section.id} open={Boolean(section.defaultOpen)} className="rounded-lg border border-border bg-card" data-testid={`daily-status-${surface}-section-${section.id}-${row.id}`}>
+                <summary className="cursor-pointer px-3 py-2 text-xs font-black text-foreground">
+                  {section.title}
+                </summary>
+                <div className="border-t border-border p-3">
+                  {section.id === "base" ? (
+                    <DailyBaseInfoGrid
+                      row={row}
+                      surface={surface}
+                      customers={customers}
+                      shipments={shipments}
+                      commercialCards={commercialCards}
+                      malvaniProfiles={malvaniProfiles}
+                    />
+                  ) : section.id === "goods-v2" ? (
+                    <DailyGoodsInfoPanel row={row} surface={surface} />
+                  ) : (
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {section.fields.map((field) => (
+                        <React.Fragment key={field.key}>
+                          {field.editable ? (
+                            <FormInput label={field.label} wide={field.wide}>
+                              {renderEditor({
+                                row,
+                                field,
+                                draft,
+                                commercialCards,
+                                onDraftChange,
+                                onCustomDraftChange,
+                                prefix: `daily-status-${surface}-${field.key}-${row.id}`,
+                              })}
+                            </FormInput>
+                          ) : (
+                            <ReadField
+                              label={field.label}
+                              value={renderProfileValue(row, draft, field, true)}
+                              wide={field.wide}
+                            />
+                          )}
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </details>
+            ))
+          ) : (
+            <DailyKootajV2Details
+              row={row}
+              surface={surface}
+              customers={customers}
+              shipments={shipments}
+              commercialCards={commercialCards}
+              malvaniProfiles={malvaniProfiles}
+            />
+          )}
         </div>
       </div>
 
@@ -612,28 +1479,34 @@ function CompactRow({
   isActive: boolean;
   onOpen: (mode: ActiveMode) => void;
 }) {
+  const credential = credentialInfo(row);
+  const shipmentCode = row.baseInfo?.code || row.shipment.code;
+  const customerDisplay = rowCustomerCode(row);
+  const statusText = baseStatusText(row);
   return (
     <div className={cn("rounded-lg border border-border bg-card p-3 transition", isActive && "border-primary/40 bg-primary/5")} data-testid={`daily-status-row-${row.id}`}>
       <div className="grid gap-3">
         <div className="grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           <div className="min-h-[58px] min-w-0 rounded-lg border border-border bg-background px-2.5 py-2">
             <Link to={row.links.shipmentDetailUrl} className="inline-flex max-w-full items-center gap-1 truncate text-sm font-black text-primary">
-              <span className="truncate">{row.shipment.code}</span>
+              <span className="truncate">{shipmentCode}</span>
               <ExternalLink className="h-3.5 w-3.5 shrink-0" />
             </Link>
             <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">کد محموله / شماره پرونده</p>
           </div>
-          <CompactFact label="مشتری" value={row.customer?.name} />
+          <CompactFact label="مشتری" value={customerDisplay} />
           <div className="min-h-[58px] min-w-0 rounded-lg border border-border bg-background px-2.5 py-2">
             <p className="truncate text-[10px] font-bold text-muted-foreground">وضعیت محموله</p>
-            <div className="mt-1">{statusBadge(row.shipment.status)}</div>
+            <div className="mt-1">{statusBadge(row.shipment.status, statusText)}</div>
           </div>
-          <CompactFact label="مرحله فعلی" value={row.workflow?.currentStepLabel} />
+          <CompactFact label="مرحله فعلی" value={row.baseInfo?.currentStage || row.workflow?.currentStepLabel} />
+          <CompactFact label="کالا و بسته‌بندی" value={goodsCompactSummary(row)} />
           <CompactFact label="مسیر گمرکی" value={rowRouteLabel(row)} />
           <CompactFact label="شماره کوتاژ" value={row.kootaj.cotageNumber} />
-          <CompactFact label="کارت بازرگانی" value={row.commercialCard?.displayName} />
+          <CompactFact label="شماره ثبت سفارش" value={row.baseInfo?.orderRegistrationNumber || row.kootaj.orderRegistrationNumber} />
+          <CompactFact label={credential.label} value={credential.displayName} />
           <CompactFact label="وضعیت خروج/گمرک" value={rowExitOrCustomsLabel(row)} />
-          <CompactFact label="آخرین بروزرسانی" value={formatDate(row.kootaj.updatedAt || row.shipment.updatedAt)} />
+          <CompactFact label="آخرین بروزرسانی" value={formatDate(row.baseInfo?.updatedAt || row.kootaj.updatedAt || row.shipment.updatedAt)} />
         </div>
         <div className="flex flex-wrap justify-end gap-2 border-t border-border/70 pt-2">
           <Button size="sm" className="h-8 rounded-lg text-[11px] font-black" onClick={() => onOpen("view")} data-testid={`daily-status-details-${row.id}`}>
@@ -656,6 +1529,9 @@ function MobileCard({
   draft,
   sections,
   commercialCards,
+  customers,
+  shipments,
+  malvaniProfiles,
   isSaving,
   onOpen,
   onModeChange,
@@ -670,6 +1546,9 @@ function MobileCard({
   draft: DailyStatusPatch;
   sections: IranImportProfileSection[];
   commercialCards: CommercialCard[];
+  customers: Customer[];
+  shipments: Shipment[];
+  malvaniProfiles: MalvaniProfile[];
   isSaving: boolean;
   onOpen: (mode: ActiveMode) => void;
   onModeChange: (mode: ActiveMode) => void;
@@ -678,26 +1557,32 @@ function MobileCard({
   onCancel: () => void;
   onSave: () => void;
 }) {
+  const credential = credentialInfo(row);
+  const shipmentCode = row.baseInfo?.code || row.shipment.code;
+  const customerDisplay = rowCustomerCode(row);
+  const statusText = baseStatusText(row);
   return (
     <div className="rounded-lg border border-border bg-card p-3" data-testid={`daily-status-mobile-card-${row.id}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <Link to={row.links.shipmentDetailUrl} className="inline-flex max-w-full items-center gap-1 truncate text-sm font-black text-primary">
-            <span className="truncate">{row.shipment.code}</span>
+            <span className="truncate">{shipmentCode}</span>
             <ExternalLink className="h-3.5 w-3.5 shrink-0" />
           </Link>
-          <p className="mt-1 truncate text-xs font-bold text-muted-foreground">{row.customer?.name || "مشتری ثبت نشده"}</p>
+          <p className="mt-1 truncate text-xs font-bold text-muted-foreground">{customerDisplay || "مشتری ثبت نشده"}</p>
         </div>
-        {statusBadge(row.shipment.status)}
+        {statusBadge(row.shipment.status, statusText)}
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-2">
-        <ReadField label="مرحله فعلی" value={row.workflow?.currentStepLabel} />
+        <ReadField label="مرحله فعلی" value={row.baseInfo?.currentStage || row.workflow?.currentStepLabel} />
+        <ReadField label="کالا و بسته‌بندی" value={goodsCompactSummary(row)} />
         <ReadField label="مسیر گمرکی" value={rowRouteLabel(row)} />
         <ReadField label="شماره کوتاژ" value={row.kootaj.cotageNumber} />
-        <ReadField label="کارت بازرگانی" value={row.commercialCard?.displayName} />
+        <ReadField label="شماره ثبت سفارش" value={row.baseInfo?.orderRegistrationNumber || row.kootaj.orderRegistrationNumber} />
+        <ReadField label={credential.label} value={credential.displayName} />
         <ReadField label="وضعیت خروج/گمرک" value={rowExitOrCustomsLabel(row)} />
-        <ReadField label="آخرین بروزرسانی" value={formatDate(row.kootaj.updatedAt || row.shipment.updatedAt)} />
+        <ReadField label="آخرین بروزرسانی" value={formatDate(row.baseInfo?.updatedAt || row.kootaj.updatedAt || row.shipment.updatedAt)} />
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
@@ -718,6 +1603,9 @@ function MobileCard({
             draft={draft}
             sections={sections}
             commercialCards={commercialCards}
+            customers={customers}
+            shipments={shipments}
+            malvaniProfiles={malvaniProfiles}
             isSaving={isSaving}
             onModeChange={onModeChange}
             onDraftChange={onDraftChange}
@@ -733,27 +1621,22 @@ function MobileCard({
 
 export default function DailyStatus() {
   const commercialCards = useMockStore((state) => state.commercialCards);
+  const customers = useMockStore((state) => state.customers);
+  const shipments = useMockStore((state) => state.shipments);
   const [rows, setRows] = React.useState<DailyStatusBoardRow[]>([]);
   const [filters, setFilters] = React.useState<DailyStatusListFilters>({ limit: 50 });
   const [searchText, setSearchText] = React.useState("");
   const [loading, setLoading] = React.useState(true);
+  const [malvaniProfiles, setMalvaniProfiles] = React.useState<MalvaniProfile[]>([]);
   const [activeRowId, setActiveRowId] = React.useState<string | null>(null);
   const [activeMode, setActiveMode] = React.useState<ActiveMode>("view");
   const [draft, setDraft] = React.useState<DailyStatusPatch>({});
-  const [templates, setTemplates] = React.useState<ShipmentFormTemplate[]>([]);
   const [savingId, setSavingId] = React.useState<string | null>(null);
   const [showMobileFilters, setShowMobileFilters] = React.useState(false);
   const hasLoadedRowsRef = React.useRef(false);
 
   const activeRow = React.useMemo(() => rows.find((row) => row.id === activeRowId) || null, [rows, activeRowId]);
-  const templateByType = React.useMemo(
-    () => new Map(templates.map((template) => [template.shipmentTypeCode, template])),
-    [templates]
-  );
-  const sectionsForRow = React.useCallback((row: DailyStatusBoardRow | null) => {
-    const template = row ? templateByType.get(row.shipment.shipmentTypeCode || "") : null;
-    return profileSectionsFromTemplate(template, "dailyStatus");
-  }, [templateByType]);
+  const sectionsForRow = React.useCallback((row: DailyStatusBoardRow | null) => dailyStatusSectionsForRow(row), []);
   const fieldsForRow = React.useCallback((row: DailyStatusBoardRow | null) => flattenProfileSections(sectionsForRow(row)), [sectionsForRow]);
 
   const loadRows = React.useCallback(async (nextFilters: DailyStatusListFilters = { limit: 50 }) => {
@@ -790,10 +1673,10 @@ export default function DailyStatus() {
   }, [loadRows]);
 
   React.useEffect(() => {
-    shipmentFormTemplatesApi.list()
-      .then(setTemplates)
+    businessEntitiesApi.listMalvaniProfiles()
+      .then(setMalvaniProfiles)
       .catch((error) => {
-        console.error("Shipment form templates failed:", error);
+        console.error("Malvani profiles failed:", error);
       });
   }, []);
 
@@ -975,6 +1858,9 @@ export default function DailyStatus() {
                 draft={draft}
                 sections={sectionsForRow(activeRow)}
                 commercialCards={commercialCards}
+                customers={customers}
+                shipments={shipments}
+                malvaniProfiles={malvaniProfiles}
                 isSaving={savingId === activeRow.id}
                 onModeChange={setActiveMode}
                 onDraftChange={changeDraft}
@@ -1011,6 +1897,9 @@ export default function DailyStatus() {
                   draft={draft}
                   sections={sectionsForRow(row)}
                   commercialCards={commercialCards}
+                  customers={customers}
+                  shipments={shipments}
+                  malvaniProfiles={malvaniProfiles}
                   isSaving={savingId === row.id}
                   onOpen={(mode) => openRow(row, mode)}
                   onModeChange={setActiveMode}

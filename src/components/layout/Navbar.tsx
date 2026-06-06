@@ -7,9 +7,9 @@ import React, { useState, useEffect } from "react";
 import { format } from "date-fns-jalali";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { LayoutDashboard, Ship, Users, CheckSquare, MessageSquare, ChevronRight, ChevronLeft, LogOut, Search, Bell, FileText, History, Settings as SettingsIcon, Menu, ShieldCheck, CreditCard, Archive, Calculator, X, Sun, Moon, IdCard, ClipboardList, GitBranch } from "lucide-react";
+import { LayoutDashboard, Ship, Users, CheckSquare, MessageSquare, ChevronRight, ChevronLeft, LogOut, Search, Bell, FileText, FileSearch, History, Settings as SettingsIcon, Menu, ShieldCheck, CreditCard, Archive, Calculator, X, Sun, Moon, IdCard, ClipboardList, GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { QUOTATIONS_UI_ENABLED } from "@/src/config/features";
+import { EXITED_SHIPMENTS_NAV_ENABLED, QUOTATIONS_UI_ENABLED, SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED } from "@/src/config/features";
 import { useMockStore } from "../../store/useMockStore";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -32,30 +32,46 @@ import {
 const sidebarItems = [
   { icon: ShieldCheck, label: "ادمین پلتفرم", path: "/admin", platformOnly: true },
   { icon: LayoutDashboard, label: "داشبورد", path: "/dashboard" },
-  { icon: Users, label: "مراجعات حضوری", path: "/compliance-meetings" },
-  { icon: CreditCard, label: "مدیریت چک‌ها", path: "/cheques" },
-  { icon: IdCard, label: "کارت‌های بازرگانی", path: "/commercial-cards" },
+  { icon: FileSearch, label: "مرکز مدیریت اسناد", path: "/documents/management-center", permissions: ["documents.view_all", "shipments.view_all"] },
   { icon: ClipboardList, label: "وضعیت روزانه", path: "/daily-status" },
   { icon: Ship, label: "محموله‌ها", path: "/shipments" },
-  { icon: Archive, label: "محموله‌های خروج‌شده", path: "/shipments/exited", permission: "shipments.view_all" },
-  { icon: SettingsIcon, label: "فرم‌های نوع محموله", path: "/admin/shipment-form-templates", permission: "shipment_forms.manage" },
-  { icon: GitBranch, label: "قالب گردش کار محموله‌ها", path: "/admin/workflow-templates", permission: "shipment_workflows.manage" },
-  ...(QUOTATIONS_UI_ENABLED ? [{ icon: Calculator, label: "مدیریت کوتاژ", path: "/quotations" }] : []),
-  { icon: Users, label: "مشتریان", path: "/customers" },
-  { icon: Archive, label: "بایگانی", path: "/archive" },
-  { icon: ShieldCheck, label: "مدیریت کاربران", path: "/management", ceoOnly: true },
+  { icon: Archive, label: "محموله‌های خروج‌شده", path: "/shipments/exited", permission: "shipments.view_all", enabled: EXITED_SHIPMENTS_NAV_ENABLED },
+  { icon: MessageSquare, label: "چت داخلی", path: "/chat", permission: "chat.use" },
+  { icon: Users, label: "مراجعات حضوری", path: "/compliance-meetings" },
   { icon: CheckSquare, label: "وظایف", path: "/tasks" },
+  { icon: IdCard, label: "کارت‌های بازرگانی", path: "/commercial-cards" },
+  ...(SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED
+    ? [
+      { icon: SettingsIcon, label: "فرم‌های نوع محموله", path: "/admin/shipment-form-templates", permission: "shipment_forms.manage" },
+      { icon: GitBranch, label: "قالب گردش کار محموله‌ها", path: "/admin/workflow-templates", permission: "shipment_workflows.manage" },
+    ]
+    : []),
+  ...(QUOTATIONS_UI_ENABLED ? [{ icon: Calculator, label: "مدیریت کوتاژ", path: "/quotations" }] : []),
+  { icon: Users, label: "مشتریان", path: "/customers", ceoOnly: true },
+  { icon: ShieldCheck, label: "مدیریت کاربران", path: "/management", ceoOnly: true },
   { icon: FileText, label: "اسناد", path: "/documents" },
+  { icon: CreditCard, label: "چک‌ها", path: "/cheques" },
+  { icon: Archive, label: "آرشیو", path: "/archive" },
   { icon: History, label: "تغییرات", path: "/changelog" },
-  { icon: MessageSquare, label: "چت", path: "/chat", permission: "chat.use" },
 ];
 
 function canShowSidebarItem(item: (typeof sidebarItems)[number], currentUser: any) {
+  if ((item as any).enabled === false) return false;
   if ((item as any).platformOnly) return false;
   if ((item as any).ceoOnly && currentUser?.role !== "CEO") return false;
   const permission = (item as any).permission;
+  const permissions = (item as any).permissions;
+  const userPermissions = Array.isArray(currentUser?.permissions) ? currentUser.permissions : [];
+  if (Array.isArray(permissions) && permissions.length) {
+    return permissions.every((requiredPermission) => userPermissions.includes(requiredPermission));
+  }
   if (!permission) return true;
-  return Array.isArray(currentUser?.permissions) && currentUser.permissions.includes(permission);
+  return userPermissions.includes(permission);
+}
+
+function isSidebarItemActive(pathname: string, itemPath: string) {
+  if (itemPath === "/documents") return pathname === "/documents";
+  return pathname === itemPath || pathname.startsWith(`${itemPath}/`);
 }
 
 export function Sidebar() {
@@ -144,19 +160,19 @@ export function Sidebar() {
               to={item.path}
               className={cn(
                 "group relative flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] transition-colors",
-                location.pathname.startsWith(item.path)
+                isSidebarItemActive(location.pathname, item.path)
                   ? "bg-primary/10 text-primary"
                   : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
                 collapsed && "justify-center px-0"
               )}
             >
-              {location.pathname.startsWith(item.path) && !collapsed && (
+              {isSidebarItemActive(location.pathname, item.path) && !collapsed && (
                 <span className="absolute right-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-l-full bg-primary" />
               )}
               <span
                 className={cn(
                   "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors",
-                  location.pathname.startsWith(item.path)
+                  isSidebarItemActive(location.pathname, item.path)
                     ? "bg-primary text-primary-foreground shadow-sm"
                     : "bg-muted/50 text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary"
                 )}
@@ -259,14 +275,14 @@ export function TopBar() {
                       to={item.path}
                       className={cn(
                         "flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all text-sm group relative overflow-hidden",
-                        location.pathname.startsWith(item.path)
+                        isSidebarItemActive(location.pathname, item.path)
                           ? "bg-primary text-primary-foreground font-black shadow-[0_4px_12px_rgba(37,99,235,0.18)]"
                           : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                       )}
                     >
-                      <item.icon className={cn("w-4 h-4", location.pathname.startsWith(item.path) ? "text-primary-foreground" : "group-hover:text-primary")} />
+                      <item.icon className={cn("w-4 h-4", isSidebarItemActive(location.pathname, item.path) ? "text-primary-foreground" : "group-hover:text-primary")} />
                       <span className="relative z-10">{item.label}</span>
-                      {location.pathname.startsWith(item.path) && (
+                      {isSidebarItemActive(location.pathname, item.path) && (
                         <motion.div 
                           layoutId="active-pill"
                           className="absolute inset-0 bg-white/10"

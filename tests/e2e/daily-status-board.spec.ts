@@ -118,6 +118,10 @@ test.describe.serial("daily status board", () => {
     const driverName = `Driver ${suffix}`;
     const taskTitle = `Daily status derived task ${suffix}`;
     const internalSecret = `daily-status-private-${suffix}`;
+    const lenjShipmentId = `daily-lenj-${suffix}`;
+    const lenjProfileId = `daily-lenj-profile-${suffix}`;
+    const lenjShipmentCode = `DAILY-LENJ-${suffix}`;
+    const malvaniDisplayName = `Daily Malvani ${suffix}`;
     let tenantInfo: any = null;
 
     try {
@@ -140,6 +144,7 @@ test.describe.serial("daily status board", () => {
       const seedRow = rows.find((row) => row.shipment.id === "s1");
       expect(seedRow).toBeTruthy();
       expect(Object.keys(seedRow).sort()).toEqual([
+        "baseInfo",
         "commercialCard",
         "customer",
         "documents",
@@ -148,14 +153,70 @@ test.describe.serial("daily status board", () => {
         "links",
         "shipment",
         "tasks",
+        "v2Profile",
         "workflow",
       ]);
       expect(seedRow.shipment.id).toBe("s1");
-      expect(seedRow.customer).toEqual(expect.objectContaining({ id: expect.any(String), name: expect.any(String) }));
+      expect(seedRow.customer).toEqual(expect.objectContaining({
+        id: expect.any(String),
+        customerCode: expect.any(String),
+        name: expect.any(String),
+      }));
+      expect(seedRow.customer.name).toBe(seedRow.customer.customerCode);
+      expect(seedRow.baseInfo).toEqual(expect.objectContaining({
+        code: seedRow.shipment.code,
+        customerCode: seedRow.customer.customerCode,
+        customerName: seedRow.customer.customerCode,
+        statusText: expect.any(String),
+        orderRegistrationNumber: expect.any(String),
+        origin: expect.any(String),
+        dischargePort: expect.any(String),
+        deliveryPort: expect.any(String),
+        consigneeName: expect.any(String),
+        credentialLabel: expect.any(String),
+        credentialDisplayName: expect.any(String),
+        documentCount: expect.any(Number),
+        currentStage: expect.any(String),
+        updatedByName: expect.any(String),
+      }));
 
       const detailAliasRow = await readOk<any>(await owner.get("/api/shipments/s1/daily-status"));
       expect(detailAliasRow.id).toBe("s1");
       expect(detailAliasRow.kootaj).toEqual(expect.any(Object));
+      expect(detailAliasRow.baseInfo).toEqual(expect.objectContaining({ code: seedRow.shipment.code }));
+
+      await dbQuery(
+        `INSERT INTO shipments (
+           id, organization_id, owner_user_id, shipment_code, customer_id, customer_name,
+           status, shipment_direction, transport_mode, shipment_type_code, origin, destination,
+           created_by_id, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'import', 'sea', 'IMPORT_LENJ', 'Bushehr', 'Dubai', $3, NOW())`,
+        [lenjShipmentId, ownerOrganizationId, ownerUserId, lenjShipmentCode, seedRow.customer.id, seedRow.customer.customerCode]
+      );
+      await dbQuery(
+        `INSERT INTO shipment_v2_profiles (
+           id, organization_id, shipment_id, flow_code, sections_json, created_by_id, updated_by_id
+         )
+         VALUES ($1, $2, $3, 'IMPORT_LANJ', $4::jsonb, $5, $5)`,
+        [
+          lenjProfileId,
+          ownerOrganizationId,
+          lenjShipmentId,
+          JSON.stringify({
+            base: {
+              lenjType: "MALVANI",
+              malvaniDisplayName,
+              commercialCardDisplayName: "",
+            },
+          }),
+          ownerUserId,
+        ]
+      );
+      const lenjRows = await readOk<any[]>(await owner.get(`/api/daily-status?shipmentId=${encodeURIComponent(lenjShipmentId)}`));
+      expect(lenjRows[0].shipment.shipmentTypeCode).toBe("IMPORT_LENJ");
+      expect(lenjRows[0].baseInfo.credentialLabel).toBe("ملوانی");
+      expect(lenjRows[0].baseInfo.credentialDisplayName).toBe(malvaniDisplayName);
 
       const spoofedList = await owner.get(`/api/daily-status?organizationId=${encodeURIComponent(tenantInfo.organizationId)}`);
       await expectForbidden(spoofedList);
@@ -277,6 +338,8 @@ test.describe.serial("daily status board", () => {
       await dbQuery("DELETE FROM tasks WHERE title = $1", [taskTitle]).catch(() => null);
       await dbQuery("DELETE FROM shipment_kootaj_details WHERE cotage_number = $1", [cotageNumber]).catch(() => null);
       await dbQuery("DELETE FROM user_records WHERE item_id IN ($1, $2)", [ownerCardId, tenantCardId]).catch(() => null);
+      await dbQuery("DELETE FROM shipment_v2_profiles WHERE shipment_id = $1", [lenjShipmentId]).catch(() => null);
+      await dbQuery("DELETE FROM shipments WHERE id = $1", [lenjShipmentId]).catch(() => null);
       await disposeContexts(owner, publicContext);
     }
   });
@@ -322,6 +385,10 @@ test.describe.serial("daily status board", () => {
           },
         })
       );
+      const uiRows = await readOk<any[]>(await owner.get("/api/daily-status"));
+      const uiSeedRow = uiRows.find((row) => row.shipment.id === "s1");
+      const expectedCustomerCode = uiSeedRow?.baseInfo?.customerCode || uiSeedRow?.customer?.customerCode || uiSeedRow?.customer?.id;
+      expect(expectedCustomerCode).toBeTruthy();
 
       await loginPageByApi(page);
       await page.setViewportSize({ width: 1280, height: 800 });
@@ -337,20 +404,42 @@ test.describe.serial("daily status board", () => {
       await page.getByTestId("daily-status-details-s1").click();
       await expect(page.getByTestId("daily-status-desktop-view-panel-s1")).toBeVisible();
       await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-base-s1"), true);
-      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-order-registration-s1"), false);
-      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-declaration-s1"), false);
-      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-payments-release-s1"), false);
+      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-goods-v2-s1"), true);
+      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-declarationKootaj-s1"), true);
+      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-permits-s1"), true);
+      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-payments-s1"), true);
+      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-banking-s1"), true);
+      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-notes-s1"), true);
       await expect(page.getByTestId("daily-status-desktop-view-panel-s1")).toContainText("Owner daily status UI card");
       await expect(page.getByTestId("daily-status-desktop-view-panel-s1")).toContainText(originalCotageNumber);
-      await expect(page.getByTestId("daily-status-desktop-view-panel-s1")).toContainText("شماره پیگیری بانکی");
-      await expect(page.getByTestId("daily-status-desktop-view-panel-s1")).toContainText("وظایف باز");
+      await expect(page.getByTestId("daily-status-desktop-base-info-s1")).toBeVisible();
+      await expect(page.getByTestId("daily-status-desktop-base-customer-s1")).toContainText(expectedCustomerCode);
+      await expect(page.getByTestId("daily-status-desktop-base-business-credential-s1")).toContainText("Owner daily status UI card");
+      await expect(page.getByTestId("daily-status-desktop-base-document-count-s1")).toBeVisible();
+      await expect(page.getByTestId("daily-status-desktop-base-origin-s1")).toBeVisible();
+      await expect(page.getByTestId("daily-status-desktop-base-delivery-port-s1")).toBeVisible();
+      await expect(page.getByTestId("daily-status-desktop-base-discharge-port-s1")).toBeVisible();
+      await expect(page.getByTestId("daily-status-desktop-base-consignee-s1")).toBeVisible();
+      await expect(page.getByTestId("daily-status-desktop-base-current-stage-s1")).toBeVisible();
+      await expect(page.getByTestId("daily-status-desktop-base-goods-s1")).toHaveCount(0);
+      await expect(page.getByTestId("daily-status-desktop-base-packaging-s1")).toHaveCount(0);
+      await page.getByTestId("daily-status-desktop-base-customer-button-s1").click();
+      await expect(page.getByTestId("daily-status-desktop-customer-dialog-s1")).toBeVisible();
+      await expect(page.getByTestId("daily-status-desktop-customer-active-shipments-s1")).toContainText("LS-9801");
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("daily-status-desktop-customer-dialog-s1")).toBeHidden();
+      await page.getByTestId("daily-status-desktop-base-business-credential-button-s1").click();
+      await expect(page.getByTestId("daily-status-desktop-business-credential-dialog-s1")).toContainText("Owner daily status UI card");
+      await page.keyboard.press("Escape");
+      await expect(page.getByTestId("daily-status-desktop-business-credential-dialog-s1")).toBeHidden();
 
       await page.getByTestId("daily-status-edit-s1").click();
       await expect(page.getByTestId("daily-status-desktop-edit-panel-s1")).toBeVisible();
       await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-base-s1"), true);
       await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-order-registration-s1"), false);
       await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-declaration-s1"), false);
-      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-payments-release-s1"), false);
+      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-payments-s1"), false);
+      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-release-s1"), false);
       await page.getByTestId("daily-status-desktop-section-declaration-s1").locator("summary").click();
       await page.getByTestId("daily-status-desktop-section-commercial-card-s1").locator("summary").click();
       await page.getByTestId("daily-status-desktop-commercialCardId-s1-select").click();
@@ -365,7 +454,7 @@ test.describe.serial("daily status board", () => {
       expect((await saveResponse).status()).toBeLessThan(400);
       await expect(page.getByTestId("daily-status-desktop-view-panel-s1")).toContainText(editedCotageNumber);
 
-      await page.goto("/shipments/s1");
+      await page.goto("/shipments/s1/legacy");
       await expect(page.getByTestId("shipment-daily-status-panel")).toBeVisible();
       await expect(page.getByTestId("shipment-daily-status-title")).toContainText("اطلاعات واردات، کوتاژ و ترخیص");
       await expect(page.locator("body")).not.toContainText("فرآیند حمل و ترخیص");

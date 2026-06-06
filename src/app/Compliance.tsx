@@ -602,32 +602,9 @@ export default function Compliance() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)_360px] gap-5">
-        {/* Left Side: Calendar & Stats */}
+        {/* Left Side: Calendar */}
         <div className="space-y-5">
           {renderCalendar()}
-          
-          <Card className="bg-card border-border rounded-xl overflow-hidden shadow-sm">
-             <CardHeader className="p-5 pb-0">
-               <CardTitle className="text-[11px] font-black text-muted-foreground uppercase tracking-[0.2em] mb-4">آمار انطباق تیم</CardTitle>
-             </CardHeader>
-             <CardContent className="p-5 pt-0 space-y-6">
-                {[
-                  { label: "نرخ تکمیل مدارک", val: 82, color: "bg-primary" },
-                  { label: "جلسات با خروجی مثبت", val: 68, color: "bg-emerald-500" },
-                  { label: "انحراف از ددلاین", val: 12, color: "bg-destructive" },
-                ].map((s, i) => (
-                  <div key={i} className="space-y-2">
-                    <div className="flex justify-between text-[10px] font-bold">
-                       <span className="text-muted-foreground">{s.label}</span>
-                       <span className="text-foreground">{s.val}%</span>
-                    </div>
-                    <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                      <div className={cn("h-full rounded-full", s.color)} style={{ width: `${s.val}%` }} />
-                    </div>
-                  </div>
-                ))}
-             </CardContent>
-          </Card>
         </div>
 
         {/* Center: Appointment List */}

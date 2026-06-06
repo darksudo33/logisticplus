@@ -64,6 +64,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { downloadBinaryFile } from "@/src/lib/downloads";
 import { shipmentApi, type PostExitStatus } from "@/src/lib/shipmentApi";
 import {
   DocumentType,
@@ -191,6 +192,14 @@ const DocumentView = ({ shipmentId }: { shipmentId: string }) => {
     }
     await refreshDocuments();
     toast.success("دسترسی سند بروزرسانی شد.");
+  };
+
+  const handleDownloadDocument = async (doc: { id: string; name: string; url?: string }) => {
+    try {
+      await downloadBinaryFile(doc.url || `/api/documents/${encodeURIComponent(doc.id)}/download`, doc.name);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Document download failed.");
+    }
   };
 
   const getDocTypeInfo = (type: string) => {
@@ -377,20 +386,14 @@ const DocumentView = ({ shipmentId }: { shipmentId: string }) => {
                     </a>
                   </Button>
                   <Button
-                    asChild
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground"
+                    onClick={() => handleDownloadDocument(doc)}
+                    aria-label={`Download ${doc.name}`}
+                    title="Download document"
                   >
-                    <a
-                      href={documentHref}
-                      target="_blank"
-                      rel="noreferrer"
-                      aria-label={`Download ${doc.name}`}
-                      title="Download document"
-                    >
-                      <Download className="h-4 w-4" />
-                    </a>
+                    <Download className="h-4 w-4" />
                   </Button>
                   <Button
                     variant="ghost"
@@ -1240,6 +1243,7 @@ export default function ShipmentDetail() {
     return [shipment, ...shipments];
   }, [shipments, shipment]);
   const customer = React.useMemo(() => customers.find(c => c.id === shipment?.customerId), [customers, shipment?.customerId]);
+  const customerIdentifier = customer?.customerCode || customer?.code || shipment?.customerCode || shipment?.customerId || shipment?.customerName || "";
   const customerShipments = React.useMemo(
     () => visibleShipments.filter(s => s.customerId === shipment?.customerId),
     [visibleShipments, shipment?.customerId]
@@ -1622,8 +1626,8 @@ export default function ShipmentDetail() {
                           <Users className="w-6 h-6" />
                        </div>
                        <div>
-                          <DialogTitle className="text-xl font-black">{customer?.name || shipment.customerName}</DialogTitle>
-                          <DialogDescription className="text-muted-foreground text-xs">{customer?.company || "شرکت بازرگانی مربوطه"}</DialogDescription>
+                          <DialogTitle className="text-xl font-black">{customerIdentifier}</DialogTitle>
+                          <DialogDescription className="text-muted-foreground text-xs">شناسه مشتری</DialogDescription>
                        </div>
                     </div>
                     <DialogClose render={

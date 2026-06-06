@@ -10,18 +10,21 @@ import {
   CheckSquare,
   Clock,
   CreditCard,
+  FileSearch,
   FileText,
   LayoutDashboard,
   Package,
   PlusCircle,
+  Search,
   Ship,
   TrendingUp,
   Users,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "motion/react";
-import { differenceInSeconds, format, parse } from "date-fns-jalali";
+import { format } from "date-fns-jalali";
 import { EmptyState, EmptyTableRow, SetupChecklist } from "@/src/components/EmptyState";
+import { Input } from "@/components/ui/input";
 
 const cardBase = "rounded-lg border-border bg-card shadow-none transition-all";
 
@@ -78,15 +81,9 @@ const PriorityBadge = ({ priority }: { priority: string }) => (
   </Badge>
 );
 
-const getRiskMeta = (days: number) => {
-  if (days < 2) return { label: "ریسک فوری", className: "bg-rose-500 text-white", bar: "bg-rose-500" };
-  if (days < 5) return { label: "نیازمند پیگیری", className: "bg-amber-500 text-black", bar: "bg-amber-500" };
-  return { label: "تحت کنترل", className: "bg-blue-500 text-white", bar: "bg-primary" };
-};
-
-function safeNumber(value: unknown, fallback = 0) {
-  const numberValue = Number(value);
-  return Number.isFinite(numberValue) ? numberValue : fallback;
+function shipmentCustomerCode(shipment: any, shipmentLookup?: Map<string, any>) {
+  const storeShipment = shipment?.id ? shipmentLookup?.get(shipment.id) : null;
+  return shipment?.customerCode || shipment?.customerId || storeShipment?.customerCode || storeShipment?.customerId || shipment?.customerName || "";
 }
 
 type DashboardApiData = {
@@ -101,7 +98,6 @@ type DashboardApiData = {
     missingMeetingDocuments?: number;
   };
   latestShipments?: any[];
-  priorityShipments?: any[];
   myTasks?: any[];
   alerts?: any[];
   management?: any;
@@ -115,22 +111,23 @@ export default function Dashboard() {
   const documents = useMockStore((state) => state.documents);
   const currentUser = useMockStore((state) => state.currentUser);
   const [dashboardData, setDashboardData] = React.useState<DashboardApiData | null>(null);
+  const [documentShipmentSearch, setDocumentShipmentSearch] = React.useState("");
+  const [documentShipmentSearchError, setDocumentShipmentSearchError] = React.useState("");
 
   React.useEffect(() => {
     let cancelled = false;
     const loadDashboard = async () => {
       try {
-        const endpoints = ["summary", "latest-shipments", "priority-shipments", "my-tasks", "alerts", "management"];
+        const endpoints = ["summary", "latest-shipments", "my-tasks", "alerts", "management"];
         const responses = await Promise.all(endpoints.map((endpoint) => fetch(`/api/dashboard/${endpoint}`)));
         const payloads = await Promise.all(responses.map((response) => response.json()));
         if (cancelled) return;
         setDashboardData({
           summary: payloads[0]?.data,
           latestShipments: payloads[1]?.data,
-          priorityShipments: payloads[2]?.data,
-          myTasks: payloads[3]?.data,
-          alerts: payloads[4]?.data,
-          management: payloads[5]?.data,
+          myTasks: payloads[2]?.data,
+          alerts: payloads[3]?.data,
+          management: payloads[4]?.data,
         });
       } catch {
         if (!cancelled) setDashboardData(null);
@@ -141,6 +138,17 @@ export default function Dashboard() {
       cancelled = true;
     };
   }, []);
+
+  const handleDocumentShipmentSearch = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const searchTerm = documentShipmentSearch.trim();
+    if (!searchTerm) {
+      setDocumentShipmentSearchError("شماره محموله یا شماره رهگیری را وارد کنید.");
+      return;
+    }
+    setDocumentShipmentSearchError("");
+    navigate(`/documents/management-center?shipment=${encodeURIComponent(searchTerm)}`);
+  };
 
   const today = format(new Date(), "yyyy/MM/dd");
   const activeCustomers = customers.filter((customer) => !customer.isArchived);
@@ -193,6 +201,7 @@ export default function Dashboard() {
   ];
 
   const recentShipments = React.useMemo(() => dashboardData?.latestShipments?.length ? dashboardData.latestShipments : visibleShipments.slice(0, 8), [dashboardData, visibleShipments]);
+  const shipmentLookup = React.useMemo(() => new Map(visibleShipments.map((shipment) => [shipment.id, shipment])), [visibleShipments]);
   const recentTasks = React.useMemo(() => tasks.slice(0, 4), [tasks]);
 
   const myTasks = React.useMemo(() => {
@@ -242,27 +251,6 @@ export default function Dashboard() {
     },
   ];
 
-  const criticalShipments = React.useMemo(() => {
-    const sourceShipments = dashboardData?.priorityShipments?.length ? dashboardData.priorityShipments : visibleShipments;
-    return sourceShipments
-      .filter((s) => ["ARRIVED", "CUSTOMS", "IN_TRANSIT"].includes(s.status))
-      .map((s) => {
-        let daysRem = 5;
-        try {
-          if (s.estimatedDelivery) {
-            const delivery = parse(s.estimatedDelivery, "yyyy/MM/dd", new Date());
-            daysRem = differenceInSeconds(delivery, new Date()) / (24 * 3600);
-          }
-        } catch (error) {
-          daysRem = 5;
-        }
-
-        return { ...s, daysRemaining: Math.max(0, safeNumber(daysRem, 5)) };
-      })
-      .sort((a, b) => a.daysRemaining - b.daysRemaining)
-      .slice(0, 3);
-  }, [visibleShipments, dashboardData]);
-
   return (
     <div className="app-page space-y-5 font-sans rtl">
       <div className="flex flex-col gap-1.5">
@@ -291,89 +279,54 @@ export default function Dashboard() {
 
       <SetupChecklist items={setupItems} />
 
-      <section className="space-y-2.5">
-        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h2 className="flex items-center gap-2 text-base font-black text-foreground">
-              <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
-              محموله‌های بحرانی
-            </h2>
-            <p className="mt-1 text-[11px] font-bold text-muted-foreground">بر اساس نزدیک‌ترین زمان تحویل یا پایان فری‌تایم مرتب شده‌اند.</p>
+      <section
+        className="rounded-lg border border-border bg-card p-4 shadow-sm"
+        data-testid="dashboard-document-shipment-search-section"
+      >
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.55fr)] lg:items-center">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <FileSearch className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <h2 className="text-base font-black text-foreground">جستجوی سریع اسناد محموله</h2>
+              <p className="mt-1 text-[11px] font-bold leading-6 text-muted-foreground">
+                شماره محموله یا شماره رهگیری را وارد کنید تا پرونده همان محموله در مرکز مدیریت اسناد باز شود.
+              </p>
+            </div>
           </div>
-          <Button variant="ghost" className="h-8 justify-start text-xs font-black text-primary" onClick={() => navigate("/shipments")}>
-            مشاهده همه محموله‌ها
-          </Button>
-        </div>
 
-        {criticalShipments.length === 0 ? (
-          <EmptyState
-            icon={Ship}
-            title="هنوز محموله بحرانی ندارید"
-            description="بعد از ثبت اولین محموله، موارد نزدیک به تحویل یا پایان فری‌تایم اینجا دیده می‌شوند."
-            primaryAction={{ label: "ثبت محموله", to: "/shipments", icon: PlusCircle }}
-            secondaryAction={{ label: "ثبت مشتری", to: "/customers", icon: Users, variant: "outline" }}
-            compact
-          />
-        ) : (
-          <div className="grid auto-rows-fr grid-cols-1 gap-3 lg:grid-cols-3">
-            {criticalShipments.map((shipment) => {
-            const daysRemaining = Math.max(0, safeNumber(shipment.daysRemaining, 0));
-            const freeTimeDays = Math.max(1, safeNumber(shipment.freeTimeDays, 14));
-            const days = Math.floor(daysRemaining);
-            const hours = Math.floor((daysRemaining % 1) * 24);
-            const progress = Math.min(100, Math.max(8, 100 - (daysRemaining / freeTimeDays) * 100));
-            const risk = getRiskMeta(days);
-
-            return (
-              <button
-                key={shipment.id}
-                type="button"
-                onClick={() => navigate(`/shipments/${shipment.id}`)}
-                className="h-full rounded-xl text-right focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          <form className="space-y-2" onSubmit={handleDocumentShipmentSearch}>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative min-w-0 flex-1">
+                <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  data-testid="dashboard-document-shipment-search-input"
+                  value={documentShipmentSearch}
+                  onChange={(event) => {
+                    setDocumentShipmentSearch(event.target.value);
+                    if (documentShipmentSearchError) setDocumentShipmentSearchError("");
+                  }}
+                  placeholder="مثلاً LS-9801"
+                  className="h-10 rounded-lg bg-background pr-9 text-sm font-black"
+                  dir="ltr"
+                />
+              </div>
+              <Button
+                type="submit"
+                className="h-10 shrink-0 rounded-lg px-4 text-xs font-black"
+                data-testid="dashboard-document-shipment-search-submit"
               >
-                <Card className={cn(cardBase, "h-full overflow-hidden hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-sm")}>
-                  <CardContent className="flex h-full flex-col gap-3 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="font-mono text-xs font-black text-primary">{shipment.trackingNumber}</p>
-                        <p className="mt-1.5 truncate text-sm font-black text-foreground">{shipment.customerName}</p>
-                      </div>
-                      <div className="flex shrink-0 flex-col items-end gap-2">
-                        <StatusBadge status={shipment.status} />
-                        <Badge className={cn("h-5.5 border-none px-2 text-[10px] font-black", risk.className)}>{risk.label}</Badge>
-                      </div>
-                    </div>
-
-                    <div className="rounded-lg border border-border bg-background p-3">
-                      <div className="mb-2 flex items-center justify-between">
-                        <span className="text-[11px] font-bold text-muted-foreground">زمان باقی‌مانده</span>
-                        {days < 2 ? <AlertTriangle className="h-3.5 w-3.5 text-rose-500" /> : <Clock className="h-3.5 w-3.5 text-primary" />}
-                      </div>
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-3xl font-black leading-none text-foreground tabular-nums">{days}</span>
-                        <span className="text-xs font-bold text-muted-foreground">روز</span>
-                        <span className="mx-1 text-muted-foreground/40">/</span>
-                        <span className="text-xl font-black text-foreground tabular-nums">{hours}</span>
-                        <span className="text-xs font-bold text-muted-foreground">ساعت</span>
-                      </div>
-                    </div>
-
-                    <div className="mt-auto space-y-2">
-                      <div className="flex justify-between text-[11px] font-bold text-muted-foreground">
-                        <span>مصرف فری‌تایم</span>
-                        <span className={cn(progress > 80 ? "text-rose-500" : "text-primary")}>{Math.round(progress)}%</span>
-                      </div>
-                      <div className="h-2 overflow-hidden rounded-full bg-muted">
-                        <div className={cn("h-full rounded-full transition-all duration-1000", risk.bar)} style={{ width: `${progress}%` }} />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </button>
-            );
-            })}
-          </div>
-        )}
+                باز کردن مرکز اسناد
+              </Button>
+            </div>
+            {documentShipmentSearchError ? (
+              <p className="text-[11px] font-bold text-destructive" data-testid="dashboard-document-shipment-search-error">
+                {documentShipmentSearchError}
+              </p>
+            ) : null}
+          </form>
+        </div>
       </section>
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
@@ -518,7 +471,7 @@ export default function Dashboard() {
                       onClick={() => navigate(`/shipments/${shipment.id}`)}
                     >
                       <td className="px-4 py-3 font-mono text-[13px] font-black text-primary">{shipment.trackingNumber}</td>
-                      <td className="px-4 py-3 font-bold text-foreground">{shipment.customerName}</td>
+                      <td className="px-4 py-3 font-bold text-foreground">{shipmentCustomerCode(shipment, shipmentLookup)}</td>
                       <td className="px-4 py-3">
                         <StatusBadge status={shipment.status} />
                       </td>

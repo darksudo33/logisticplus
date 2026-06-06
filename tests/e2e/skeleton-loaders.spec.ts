@@ -26,6 +26,27 @@ test("protected app shows skeleton content while bootstrap hydrates", async ({ p
   await expect(page.locator("main")).toBeVisible();
 });
 
+test("shipment V2 create renders while legacy bootstrap hydrates", async ({ page }) => {
+  const response = await page.request.post("/api/auth/login", {
+    data: { email: OWNER_EMAIL, password: OWNER_PASSWORD },
+  });
+  expect(response.status(), await response.text()).toBeLessThan(400);
+  const payload = await response.json();
+
+  await page.addInitScript((user) => {
+    window.localStorage.setItem("logisticplus.currentUser", JSON.stringify(user));
+  }, payload.user);
+
+  await page.route("**/api/users/*/bootstrap", async (route) => {
+    await delay(3000);
+    await route.continue();
+  });
+
+  await page.goto("/shipments/new-v2");
+  await expect(page.getByTestId("shipment-v2-create-page")).toBeVisible();
+  await expect(page.getByTestId("background-sync-notice")).toBeVisible();
+});
+
 test("public async surfaces use skeleton placeholders", async ({ page }) => {
   await page.route("**/api/plans", async (route) => {
     await delay(700);

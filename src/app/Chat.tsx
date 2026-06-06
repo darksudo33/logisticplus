@@ -210,11 +210,21 @@ function subtitleForThread(thread: ChatThread) {
   return thread.lastMessage ? messagePreviewText(thread.lastMessage) : "هنوز پیامی ثبت نشده";
 }
 
-function messageTime(value?: string) {
+const MESSAGE_DATE_FORMATTER = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat("fa-IR", {
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+function messageTimestamp(value?: string) {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" });
+  return `${MESSAGE_DATE_FORMATTER.format(date)}، ${MESSAGE_TIME_FORMATTER.format(date)}`;
 }
 
 export default function Chat() {
@@ -249,7 +259,13 @@ export default function Chat() {
   const lastTypingSentAtRef = useRef(0);
   const typingStopTimerRef = useRef<number | null>(null);
   const historyLoadingRef = useRef(false);
-  const historyScrollRestoreRef = useRef<{ previousHeight: number; previousTop: number } | null>(null);
+  const historyScrollRestoreRef = useRef<{
+    previousHeight: number;
+    previousTop: number;
+    mode: "prepend" | "preserve";
+  } | null>(null);
+  const initialBottomScrollTimersRef = useRef<number[]>([]);
+  const latestMessageBatchRef = useRef<{ length: number; lastMessageId: string }>({ length: 0, lastMessageId: "" });
   const pendingBottomScrollRef = useRef<ScrollBehavior | null>(null);
   const initialBottomScrolledThreadRef = useRef("");
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
@@ -418,12 +434,20 @@ export default function Chat() {
     });
   };
 
+  const clearInitialBottomScrollTimers = () => {
+    for (const timer of initialBottomScrollTimersRef.current) {
+      window.clearTimeout(timer);
+    }
+    initialBottomScrollTimersRef.current = [];
+  };
+
   const loadOlderMessages = async () => {
     const oldestMessage = messages[0];
     if (!activeThreadId || !oldestMessage || !hasMoreMessages || historyLoadingRef.current) return;
+    clearInitialBottomScrollTimers();
     const list = messageListRef.current;
     historyScrollRestoreRef.current = list
-      ? { previousHeight: list.scrollHeight, previousTop: list.scrollTop }
+      ? { previousHeight: list.scrollHeight, previousTop: list.scrollTop, mode: "prepend" }
       : null;
     historyLoadingRef.current = true;
     try {
@@ -528,6 +552,7 @@ export default function Chat() {
     lastTypingSentAtRef.current = 0;
     historyLoadingRef.current = false;
     historyScrollRestoreRef.current = null;
+    clearInitialBottomScrollTimers();
     pendingBottomScrollRef.current = activeThreadId ? "auto" : null;
     initialBottomScrolledThreadRef.current = "";
     setHasMoreMessages(false);
@@ -538,44 +563,74 @@ export default function Chat() {
     setMessages([]);
     let cancelled = false;
     loadMessages(activeThreadId)
-      .then(() => {
-        if (cancelled || activeThreadIdRef.current !== activeThreadId) return;
-        window.setTimeout(() => scrollMessageListToBottom("auto"), 0);
-        window.setTimeout(() => scrollMessageListToBottom("auto"), 150);
-      })
       .catch((nextError) => {
         if (!cancelled) setError(nextError.message || "خطا در بارگذاری پیام‌ها");
       });
     sendSocketEvent({ type: "thread.join", payload: { threadId: activeThreadId } });
     return () => {
       cancelled = true;
+      clearInitialBottomScrollTimers();
       sendSocketEvent({ type: "thread.leave", payload: { threadId: activeThreadId } });
     };
   }, [activeThreadId]);
+
+  useLayoutEffect(() => {
+    latestMessageBatchRef.current = {
+      length: messages.length,
+      lastMessageId: messages[messages.length - 1]?.id || "",
+    };
+  }, [messages]);
 
   useLayoutEffect(() => {
     const list = messageListRef.current;
     if (!list || messages.length === 0) return;
     const restore = historyScrollRestoreRef.current;
     if (restore) {
-      list.scrollTop = list.scrollHeight - restore.previousHeight + restore.previousTop;
+      const applyRestore = () => {
+        const currentList = messageListRef.current;
+        if (!currentList) return;
+        currentList.scrollTop = restore.mode === "prepend"
+          ? currentList.scrollHeight - restore.previousHeight + restore.previousTop
+          : restore.previousTop;
+      };
+      applyRestore();
+      window.requestAnimationFrame(() => {
+        applyRestore();
+        window.requestAnimationFrame(applyRestore);
+      });
       historyScrollRestoreRef.current = null;
     }
   }, [messages]);
 
-  useEffect(() => {
-    if (!activeThread || messages.length === 0) return;
-    if (initialBottomScrolledThreadRef.current !== activeThread.id) {
+  useLayoutEffect(() => {
+    if (!activeThreadId || messages.length === 0) return;
+    if (initialBottomScrolledThreadRef.current !== activeThreadId) {
+      clearInitialBottomScrollTimers();
       scrollMessageListToBottom("auto");
+      const initialBatch = {
+        threadId: activeThreadId,
+        length: messages.length,
+        lastMessageId: messages[messages.length - 1]?.id || "",
+      };
+      const scrollIfStillInitialBatch = () => {
+        const currentBatch = latestMessageBatchRef.current;
+        if (activeThreadIdRef.current !== initialBatch.threadId) return;
+        if (historyLoadingRef.current) return;
+        if (currentBatch.length !== initialBatch.length || currentBatch.lastMessageId !== initialBatch.lastMessageId) return;
+        scrollMessageListToBottom("auto");
+      };
+      initialBottomScrollTimersRef.current = [50, 150, 300].map((delay) =>
+        window.setTimeout(scrollIfStillInitialBatch, delay)
+      );
       pendingBottomScrollRef.current = null;
-      initialBottomScrolledThreadRef.current = activeThread.id;
+      initialBottomScrolledThreadRef.current = activeThreadId;
       return;
     }
     const behavior = pendingBottomScrollRef.current;
     if (!behavior) return;
     scrollMessageListToBottom(behavior);
     pendingBottomScrollRef.current = null;
-  }, [activeThread?.id, messages]);
+  }, [activeThreadId, messages]);
 
   useEffect(() => {
     const lastMessage = messages[messages.length - 1];
@@ -603,9 +658,18 @@ export default function Chat() {
         const message = incoming.payload as ChatMessage;
         if (message.threadId === activeThreadIdRef.current) {
           const shouldScrollToBottom = message.senderId === currentUser?.id || isMessageListNearBottom();
+          const list = messageListRef.current;
+          const preserveReaderScroll = !shouldScrollToBottom && list
+            ? { previousHeight: list.scrollHeight, previousTop: list.scrollTop, mode: "preserve" as const }
+            : null;
           setMessages((items) => {
             if (items.some((item) => item.id === message.id)) return items;
-            if (shouldScrollToBottom) pendingBottomScrollRef.current = "smooth";
+            if (shouldScrollToBottom) {
+              pendingBottomScrollRef.current = "smooth";
+            } else {
+              pendingBottomScrollRef.current = null;
+              historyScrollRestoreRef.current = preserveReaderScroll;
+            }
             return [...items, message];
           });
         }
@@ -1338,7 +1402,7 @@ export default function Chat() {
                         {bodyText && <div>{bodyText}</div>}
                         {renderMessageAttachments(message, isMine)}
                       </div>
-                      <span className="mt-1 px-1 text-[10px] font-bold text-muted-foreground">{messageTime(message.createdAt)}</span>
+                      <span className="mt-1 px-1 text-[10px] font-bold text-muted-foreground">{messageTimestamp(message.createdAt)}</span>
                     </div>
                   );
                 })}

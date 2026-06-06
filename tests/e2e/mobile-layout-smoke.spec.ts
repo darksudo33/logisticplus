@@ -35,15 +35,12 @@ test.describe.serial("mobile layout smoke", () => {
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expectNoHorizontalOverflow(page, "shipments after mobile nav");
 
-    await page.getByTestId("open-shipment-dialog").click();
-    await expect(page.getByRole("dialog")).toBeVisible();
-    await expect(page.getByTestId("shipment-wizard-step")).toBeVisible();
+    await expect(page.getByTestId("open-shipment-dialog")).toHaveCount(0);
+    await page.getByTestId("open-shipment-v2-create").click();
+    await expect(page).toHaveURL(/\/shipments\/new-v2$/);
+    await expect(page.getByTestId("shipment-v2-create-page")).toBeVisible();
     await expect(page.getByTestId("shamsi-date-time-trigger")).toHaveCount(0);
-    await expectNoHorizontalOverflow(page, "shipment create dialog");
-    await page.getByTestId("shipment-wizard-next").click();
-    await expect(page.getByTestId("shipment-method-sea")).toBeVisible();
-    await expectNoHorizontalOverflow(page, "shipment method step");
-    await closeDialog(page);
+    await expectNoHorizontalOverflow(page, "shipment V2 create page");
 
     await page.goto("/tasks");
     await expect(page.getByTestId("open-task-dialog")).toBeVisible();
@@ -53,7 +50,7 @@ test.describe.serial("mobile layout smoke", () => {
     await closeDialog(page);
 
     await page.goto("/shipments/s1");
-    await expect(page.getByRole("heading").first()).toBeVisible();
-    await expectNoHorizontalOverflow(page, "shipment detail mobile dashboard");
+    await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
+    await expectNoHorizontalOverflow(page, "shipment V2 detail mobile dashboard");
   });
 });

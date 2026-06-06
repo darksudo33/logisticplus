@@ -24,6 +24,7 @@ import {
 import {
   canViewCustomerPrivateDetails,
   getCustomerRecord as getCustomerRecordFromRepository,
+  listCustomerPhoneNumbers,
   listCustomersDetailed as listCustomersDetailedFromRepository,
   toUiCustomer as toUiCustomerFromRepository,
 } from "./repositories/customers.js";
@@ -31,6 +32,11 @@ import {
   getShipmentRecord as getShipmentRecordFromRepository,
   listShipmentRecords as listShipmentRecordsFromRepository,
 } from "./repositories/shipments.js";
+import {
+  parseShipmentCode,
+  resolveManualShipmentCode,
+  SHIPMENT_CODE_ERRORS,
+} from "./shipment-codes.js";
 import {
   previewUserDeletion as previewUserDeletionFromRepository,
 } from "./repositories/users.js";
@@ -225,11 +231,16 @@ async function searchShipments({ user, normalizedQuery, fetchLimit }) {
   const values = [];
   const organizationParam = `$${values.push(user.organizationId)}`;
   const ownerParam = `$${values.push(user.id)}`;
+  const includePrivateCustomerDetails = canViewCustomerPrivateDetails(user);
+  const customerSearchExpression = includePrivateCustomerDetails
+    ? "CONCAT_WS(' ', s.customer_name, c.company_name, c.contact_name, c.customer_code)"
+    : "COALESCE(c.customer_code, s.customer_id, '')";
+  const customerDisplayExpression = "COALESCE(c.customer_code, s.customer_id)";
   const fields = {
     shipmentNumber: normalizedSearchSql("s.shipment_code"),
     trackingNumber: normalizedSearchSql("s.legacy_data->>'trackingNumber'"),
     referenceNumber: normalizedSearchSql("CONCAT_WS(' ', s.legacy_data->>'referenceNumber', s.legacy_data->>'containerNumber')"),
-    customerName: normalizedSearchSql("CONCAT_WS(' ', s.customer_name, c.company_name, c.contact_name)"),
+    customerName: normalizedSearchSql(customerSearchExpression),
     origin: normalizedSearchSql("s.origin"),
     destination: normalizedSearchSql("s.destination"),
     status: normalizedSearchSql("s.status"),
@@ -245,7 +256,7 @@ async function searchShipments({ user, normalizedQuery, fetchLimit }) {
        s.id,
        'shipment' AS result_type,
        COALESCE(NULLIF(s.shipment_code, ''), s.id) AS title,
-       CONCAT_WS(' · ', NULLIF(COALESCE(s.customer_name, c.company_name, c.contact_name), ''), NULLIF(CONCAT_WS(' → ', s.origin, s.destination), '')) AS subtitle,
+       CONCAT_WS(' · ', NULLIF(${customerDisplayExpression}, ''), NULLIF(CONCAT_WS(' → ', s.origin, s.destination), '')) AS subtitle,
        CONCAT(
          CASE WHEN s.exited_archived_at IS NOT NULL THEN 'خروج‌شده · ' ELSE '' END,
          'وضعیت فعلی: ',
@@ -259,7 +270,8 @@ async function searchShipments({ user, normalizedQuery, fetchLimit }) {
          'shipmentNumber', s.shipment_code,
          'trackingNumber', s.legacy_data->>'trackingNumber',
          'referenceNumber', CONCAT_WS(' ', s.legacy_data->>'referenceNumber', s.legacy_data->>'containerNumber'),
-         'customerName', CONCAT_WS(' ', s.customer_name, c.company_name, c.contact_name),
+         'customerName', ${customerDisplayExpression},
+         'customerCode', COALESCE(c.customer_code, s.customer_id),
          'origin', s.origin,
          'destination', s.destination,
          'status', s.status,
@@ -270,7 +282,7 @@ async function searchShipments({ user, normalizedQuery, fetchLimit }) {
        ) AS field_values,
        COUNT(*) OVER()::int AS total_count
      FROM shipments s
-     LEFT JOIN customers c ON c.id = s.customer_id
+     LEFT JOIN customers c ON c.id = s.customer_id AND c.organization_id = s.organization_id
      LEFT JOIN shipment_kootaj_details k
        ON k.shipment_id = s.id
       AND k.organization_id = s.organization_id
@@ -289,10 +301,11 @@ async function searchCustomers({ user, normalizedQuery, fetchLimit }) {
   const organizationParam = `$${values.push(user.organizationId)}`;
   const includePrivateDetails = canViewCustomerPrivateDetails(user);
   const fields = {
-    customerName: normalizedSearchSql("CONCAT_WS(' ', c.company_name, c.contact_name)"),
+    customerCode: normalizedSearchSql("COALESCE(c.customer_code, c.id)"),
   };
   if (includePrivateDetails) {
     Object.assign(fields, {
+      customerName: normalizedSearchSql("CONCAT_WS(' ', c.company_name, c.contact_name)"),
       phone: normalizedSearchSql("c.phone"),
       email: normalizedSearchSql("c.email"),
       address: normalizedSearchSql("c.address"),
@@ -302,27 +315,18 @@ async function searchCustomers({ user, normalizedQuery, fetchLimit }) {
   }
   const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
   const limitParam = `$${values.push(fetchLimit)}`;
-  const subtitleExpression = includePrivateDetails
-    ? "CONCAT_WS(' - ', NULLIF(c.contact_name, ''), NULLIF(c.phone, ''), NULLIF(c.email, ''))"
-    : "CONCAT_WS(' - ', NULLIF(c.contact_name, ''), NULLIF(c.company_name, ''))";
-  const descriptionExpression = includePrivateDetails ? "COALESCE(NULLIF(c.address, ''), 'پرونده مشتری')" : "'پرونده مشتری'";
-  const fieldValuesExpression = includePrivateDetails
-    ? `jsonb_build_object(
-         'customerName', CONCAT_WS(' ', c.company_name, c.contact_name),
-         'phone', c.phone,
-         'email', c.email,
-         'address', c.address,
-         'referrer', c.referrer,
-         'nationalId', CONCAT_WS(' ', c.legacy_data->>'nationalId', c.legacy_data->>'taxId', c.legacy_data->>'nationalCode')
-       )`
-    : `jsonb_build_object(
-         'customerName', CONCAT_WS(' ', c.company_name, c.contact_name)
+  const subtitleExpression = "''";
+  const descriptionExpression = "'پرونده مشتری'";
+  const fieldValuesExpression = `jsonb_build_object(
+         'customerCode', COALESCE(c.customer_code, c.id),
+         'customerName', COALESCE(c.customer_code, c.id)
        )`;
+  const titleExpression = "COALESCE(NULLIF(c.customer_code, ''), c.id)";
   return runOperationalSearchQuery(
     `SELECT
        c.id,
        'customer' AS result_type,
-       COALESCE(NULLIF(c.company_name, ''), NULLIF(c.contact_name, ''), c.id) AS title,
+       ${titleExpression} AS title,
        ${subtitleExpression} AS subtitle,
        ${descriptionExpression} AS description,
        CONCAT('/customers/', c.id) AS url,
@@ -349,7 +353,7 @@ async function searchDocuments({ user, normalizedQuery, fetchLimit }) {
     fileName: normalizedSearchSql("d.file_name"),
     documentType: normalizedSearchSql("d.legacy_data->>'type'"),
     relatedShipment: normalizedSearchSql("s.shipment_code"),
-    relatedCustomer: normalizedSearchSql("CONCAT_WS(' ', c.company_name, c.contact_name)"),
+    relatedCustomer: normalizedSearchSql("CONCAT_WS(' ', c.customer_code, c.company_name, c.contact_name)"),
   };
   const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
   const limitParam = `$${values.push(fetchLimit)}`;
@@ -358,7 +362,7 @@ async function searchDocuments({ user, normalizedQuery, fetchLimit }) {
        d.id,
        'document' AS result_type,
        COALESCE(NULLIF(d.title, ''), NULLIF(d.file_name, ''), d.id) AS title,
-       CONCAT_WS(' · ', NULLIF(d.file_name, ''), NULLIF(s.shipment_code, ''), NULLIF(c.company_name, '')) AS subtitle,
+       CONCAT_WS(' · ', NULLIF(d.file_name, ''), NULLIF(s.shipment_code, ''), NULLIF(c.customer_code, '')) AS subtitle,
        CONCAT('نوع سند: ', COALESCE(NULLIF(d.legacy_data->>'type', ''), 'OTHER')) AS description,
        '/documents' AS url,
        COALESCE(d.updated_at, d.created_at) AS updated_at,
@@ -368,7 +372,7 @@ async function searchDocuments({ user, normalizedQuery, fetchLimit }) {
          'fileName', d.file_name,
          'documentType', d.legacy_data->>'type',
          'relatedShipment', s.shipment_code,
-         'relatedCustomer', CONCAT_WS(' ', c.company_name, c.contact_name)
+         'relatedCustomer', COALESCE(c.customer_code, d.customer_id)
        ) AS field_values,
        COUNT(*) OVER()::int AS total_count
      FROM documents d
@@ -524,19 +528,20 @@ async function searchArchive({ user, normalizedQuery, fetchLimit }) {
   const fields = {
     title: normalizedSearchSql("ar.title"),
     summary: normalizedSearchSql("ar.summary"),
-    customerName: normalizedSearchSql("ar.customer_name"),
+    customerName: normalizedSearchSql("CONCAT_WS(' ', ar.customer_name, c.customer_code, s.customer_id)"),
     entityType: normalizedSearchSql("ar.entity_type"),
     entityId: normalizedSearchSql("ar.entity_id"),
   };
   const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
   const limitParam = `$${values.push(fetchLimit)}`;
   const includeQuotationArchiveParam = `$${values.push(QUOTATIONS_UI_SURFACE_ENABLED)}`;
+  const archiveCustomerDisplayExpression = "COALESCE(c.customer_code, s.customer_id, CASE WHEN ar.entity_type = 'customer' THEN ar.entity_id END, ar.customer_name)";
   return runOperationalSearchQuery(
     `SELECT
        ar.id,
        'archive' AS result_type,
        COALESCE(NULLIF(ar.title, ''), ar.entity_id, ar.id) AS title,
-       CONCAT_WS(' · ', NULLIF(ar.customer_name, ''), NULLIF(ar.entity_type, '')) AS subtitle,
+       CONCAT_WS(' · ', NULLIF(${archiveCustomerDisplayExpression}, ''), NULLIF(ar.entity_type, '')) AS subtitle,
        COALESCE(NULLIF(ar.summary, ''), 'رکورد بایگانی شده') AS description,
        '/archive' AS url,
        COALESCE(ar.archived_at, NOW()) AS updated_at,
@@ -544,12 +549,21 @@ async function searchArchive({ user, normalizedQuery, fetchLimit }) {
        jsonb_build_object(
          'title', ar.title,
          'summary', ar.summary,
-         'customerName', ar.customer_name,
+         'customerName', ${archiveCustomerDisplayExpression},
          'entityType', ar.entity_type,
          'entityId', ar.entity_id
        ) AS field_values,
        COUNT(*) OVER()::int AS total_count
      FROM archive_records ar
+     LEFT JOIN shipments s
+       ON s.id = ar.shipment_id
+      AND s.organization_id = ar.organization_id
+     LEFT JOIN customers c
+       ON c.organization_id = ar.organization_id
+      AND (
+        c.id = s.customer_id
+        OR (ar.entity_type = 'customer' AND c.id = ar.entity_id)
+      )
      WHERE ar.organization_id = ${organizationParam}
        AND ar.restored_at IS NULL
        AND (${includeQuotationArchiveParam}::boolean OR ar.entity_type <> 'quotation')
@@ -745,7 +759,7 @@ async function listOrganizationUsersForBootstrap(organizationId) {
   return result.rows.map(toUiUser);
 }
 
-async function listBootstrapShipments(ownerUserId, organizationId) {
+async function listBootstrapShipments(ownerUserId, organizationId, { includeCustomerPrivateDetails = true } = {}) {
   if (!organizationId) {
     const result = await pool.query(
       `SELECT *
@@ -755,20 +769,34 @@ async function listBootstrapShipments(ownerUserId, organizationId) {
        ORDER BY updated_at DESC, created_at DESC`,
       [ownerUserId]
     );
-    return result.rows.map(toUiShipment);
+    return result.rows.map((row) => toUiShipment(row, { includeCustomerPrivateDetails }));
   }
   const result = await pool.query(
-    `SELECT *
-     FROM shipments
-     WHERE exited_archived_at IS NULL
+    `SELECT
+       s.*,
+       c.customer_code,
+       COALESCE(c.company_name, c.contact_name, s.customer_name, s.legacy_data->>'customerName') AS customer_display_name,
+       p.id AS v2_profile_id,
+       p.flow_code AS v2_flow_code,
+       p.sections_json AS v2_sections_json,
+       p.updated_at AS v2_profile_updated_at
+     FROM shipments s
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
+      AND c.archived_at IS NULL
+     LEFT JOIN shipment_v2_profiles p
+       ON p.shipment_id = s.id
+      AND p.organization_id = s.organization_id
+     WHERE s.exited_archived_at IS NULL
        AND (
-         organization_id = $1
-         OR (owner_user_id = $2 AND organization_id IS NULL)
-       )
-     ORDER BY updated_at DESC, created_at DESC`,
+          s.organization_id = $1
+          OR (s.owner_user_id = $2 AND s.organization_id IS NULL)
+        )
+      ORDER BY COALESCE(p.updated_at, s.updated_at) DESC, s.created_at DESC`,
     [organizationId, ownerUserId]
   );
-  return result.rows.map(toUiShipment);
+  return result.rows.map((row) => toUiShipment(row, { includeCustomerPrivateDetails }));
 }
 
 export async function getRecordsForUser(ownerUserId, { organizationId, tenantContext } = {}) {
@@ -813,7 +841,9 @@ export async function getRecordsForUser(ownerUserId, { organizationId, tenantCon
       includeArchived: true,
       includePrivateDetails: canViewCustomerPrivateDetails(user),
     }),
-    listBootstrapShipments(ownerUserId, userOrganizationId),
+    listBootstrapShipments(ownerUserId, userOrganizationId, {
+      includeCustomerPrivateDetails: canViewCustomerPrivateDetails(user),
+    }),
     listTasks({ organizationId: userOrganizationId, includeAll: true }),
     listDocuments({ organizationId: userOrganizationId, includeArchived: true }),
     listComplianceMeetings({ organizationId: userOrganizationId, includeArchived: true }),
@@ -1426,7 +1456,7 @@ export function getFeatureConfig(feature) {
   return featureTables[feature] || null;
 }
 
-export async function listFeatureRecords(feature, { organizationId } = {}) {
+export async function listFeatureRecords(feature, { organizationId, includeCustomerPrivateDetails = true } = {}) {
   const config = getFeatureConfig(feature);
   if (!config) {
     const error = new Error(`Unknown feature: ${feature}`);
@@ -1436,7 +1466,7 @@ export async function listFeatureRecords(feature, { organizationId } = {}) {
   }
   if (feature === "shipments") {
     const rows = await listShipmentRecordsFromRepository(pool, { organizationId });
-    return rows.map(toUiShipment);
+    return rows.map((row) => toUiShipment(row, { includeCustomerPrivateDetails }));
   }
 
   const scopedOrganizationId = requireOrganizationScope(organizationId, `listFeatureRecords:${feature}`);
@@ -1454,24 +1484,59 @@ export async function getShipmentRecord(shipmentId, { organizationId } = {}) {
   return getShipmentRecordFromRepository(pool, shipmentId, { organizationId });
 }
 
-export async function getShipmentOperationalRecord(shipmentId, { organizationId } = {}) {
+export async function getShipmentOperationalRecord(shipmentId, { organizationId, includeCustomerPrivateDetails = true } = {}) {
   const row = await getShipmentRecordFromRepository(pool, shipmentId, { organizationId });
-  return toUiShipment(row);
+  return toUiShipment(row, { includeCustomerPrivateDetails });
 }
 
-function toUiShipment(row) {
+function jsonObjectValue(value) {
+  if (!value) return {};
+  if (typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function textValue(value) {
+  if (value === undefined || value === null) return "";
+  return String(value).trim();
+}
+
+function toUiShipment(row, { includeCustomerPrivateDetails = true } = {}) {
   if (!row) return null;
   const legacy = row.legacy_data || {};
+  const v2Sections = jsonObjectValue(row.v2_sections_json);
+  const v2Base = jsonObjectValue(v2Sections.base);
+  const hasV2Profile = Boolean(row.v2_profile_id || row.v2_flow_code);
+  const v2StatusText = textValue(v2Base.statusText);
+  const v2CurrentStage = textValue(v2Base.currentStage);
+  const v2Origin = textValue(v2Base.origin);
+  const v2DischargePort = textValue(v2Base.dischargePort);
+  const v2DeliveryPort = textValue(v2Base.deliveryPort);
   const freeTimeDays = Number(legacy.freeTimeDays || row.free_time_days || 0);
+  const customerCode = row.customer_code || legacy.customerCode || legacy.customer_code || row.customer_id || legacy.customerId || "";
+  const customerName = customerCode;
   return {
     id: row.id,
     trackingNumber: row.shipment_code || legacy.trackingNumber || row.id,
     containerNumber: legacy.containerNumber || "",
     customerId: row.customer_id || legacy.customerId || "",
-    customerName: row.customer_name || legacy.customerName || "",
-    origin: row.origin || legacy.origin || "",
-    destination: row.destination || legacy.destination || "",
+    customerCode,
+    customerName,
+    origin: v2Origin || row.origin || legacy.origin || "",
+    destination: v2DeliveryPort || row.destination || legacy.destination || "",
     status: row.status || legacy.status || "PENDING",
+    v2ProfileId: row.v2_profile_id || null,
+    v2FlowCode: row.v2_flow_code || null,
+    hasV2Profile,
+    displayStatusText: v2StatusText,
+    currentStage: v2CurrentStage,
+    dischargePort: v2DischargePort,
+    deliveryPort: v2DeliveryPort || row.destination || legacy.destination || "",
     shipmentDirection: row.shipment_direction || legacy.shipmentDirection || legacy.shipment_direction || "import",
     transportMode: row.transport_mode || legacy.transportMode || legacy.transport_mode || "",
     shipmentTypeCode: row.shipment_type_code || legacy.shipmentTypeCode || legacy.shipment_type_code || DEFAULT_SHIPMENT_TYPE_CODE,
@@ -1581,7 +1646,7 @@ async function validateShipmentMutationRelations(client, { organizationId, owner
   let customerRow = null;
   if (customerId) {
     const customer = await client.query(
-      "SELECT id, company_name, contact_name FROM customers WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL",
+      "SELECT id, customer_code, company_name, contact_name FROM customers WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL",
       [customerId, organizationId]
     );
     if (!customer.rows[0]) {
@@ -1609,7 +1674,7 @@ async function validateShipmentMutationRelations(client, { organizationId, owner
   return customerRow;
 }
 
-export async function createShipmentRecord({ ownerUserId, actorUserId, organizationId, tenantContext, shipment }) {
+export async function createShipmentRecord({ ownerUserId, actorUserId, organizationId, tenantContext, shipment, includeCustomerPrivateDetails = true }) {
   const scopedOrganizationId = tenantContext
     ? organizationIdFromTenantContext(tenantContext, "createShipmentRecord")
     : requireOrganizationScope(organizationId, "createShipmentRecord");
@@ -1627,22 +1692,30 @@ export async function createShipmentRecord({ ownerUserId, actorUserId, organizat
       customerId: shipment.customerId || null,
       assignedManagerId: shipment.assignedManagerId || null,
     });
+    const codeParts = await resolveManualShipmentCode(client, {
+      organizationId: scopedOrganizationId,
+      shipmentCode,
+    });
     const result = await client.query(
       `INSERT INTO shipments (
          id, organization_id, owner_user_id, shipment_code, customer_id, customer_name, status,
+         shamsi_year, shamsi_date, shamsi_sequence,
          shipment_direction, transport_mode, shipment_type_code,
          origin, destination, estimated_delivery_at, assigned_manager_id, legacy_data, created_by_id, updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19, NOW())
        RETURNING *`,
       [
         id,
         scopedOrganizationId,
         ownerUserId,
-        shipmentCode,
+        codeParts.shipmentCode,
         shipment.customerId || null,
         shipment.customerName || customer?.company_name || customer?.contact_name || null,
         shipment.status || "PENDING",
+        codeParts.shamsiYear,
+        codeParts.shamsiDate,
+        codeParts.shamsiSequence,
         typeColumns.shipmentDirection,
         typeColumns.transportMode,
         typeColumns.shipmentTypeCode,
@@ -1652,7 +1725,7 @@ export async function createShipmentRecord({ ownerUserId, actorUserId, organizat
         shipment.assignedManagerId || null,
         JSON.stringify({
           ...legacyPatch,
-          trackingNumber: shipmentCode,
+          trackingNumber: codeParts.shipmentCode,
           customerId: shipment.customerId || undefined,
           customerName: shipment.customerName || customer?.company_name || customer?.contact_name || undefined,
           shipmentTypeCode: typeColumns.shipmentTypeCode,
@@ -1663,13 +1736,20 @@ export async function createShipmentRecord({ ownerUserId, actorUserId, organizat
       ]
     );
     await client.query("COMMIT");
-    return toUiShipment(result.rows[0]);
+    return toUiShipment(
+      {
+        ...result.rows[0],
+        customer_code: customer?.customer_code || null,
+        customer_display_name: customer?.company_name || customer?.contact_name || result.rows[0].customer_name || "",
+      },
+      { includeCustomerPrivateDetails }
+    );
   } catch (error) {
     await client.query("ROLLBACK");
     if (error?.code === "23505") {
       error.statusCode = 409;
       error.code = "SHIPMENT_CODE_EXISTS";
-      error.message = "Shipment tracking number already exists.";
+      error.message = SHIPMENT_CODE_ERRORS.duplicate;
     }
     throw error;
   } finally {
@@ -1677,13 +1757,24 @@ export async function createShipmentRecord({ ownerUserId, actorUserId, organizat
   }
 }
 
-export async function updateShipmentOperationalFields(id, updates = {}, { organizationId, actorUserId } = {}) {
+export async function updateShipmentOperationalFields(id, updates = {}, { organizationId, actorUserId, includeCustomerPrivateDetails = true } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "updateShipmentOperationalFields");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const beforeResult = await client.query(
-      "SELECT * FROM shipments WHERE id = $1 AND organization_id = $2 FOR UPDATE",
+      `SELECT
+         s.*,
+         c.customer_code,
+         COALESCE(c.company_name, c.contact_name, s.customer_name, s.legacy_data->>'customerName') AS customer_display_name
+       FROM shipments s
+       LEFT JOIN customers c
+         ON c.id = s.customer_id
+        AND c.organization_id = s.organization_id
+        AND c.archived_at IS NULL
+       WHERE s.id = $1
+         AND s.organization_id = $2
+       FOR UPDATE OF s`,
       [id, scopedOrganizationId]
     );
     const before = beforeResult.rows[0];
@@ -1706,11 +1797,27 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
       updates.transportMode !== undefined ||
       updates.transport_mode !== undefined;
     const typeColumns = shipmentTypeColumnsFromMutation(updates, before);
+    let nextShipmentCode = before.shipment_code;
+    let nextShipmentCodeParts = null;
+    if (updates.trackingNumber !== undefined || updates.shipmentCode !== undefined) {
+      const requestedShipmentCode = String(updates.shipmentCode || updates.trackingNumber || "").trim();
+      if (!requestedShipmentCode) {
+        parseShipmentCode(requestedShipmentCode);
+      }
+      if (requestedShipmentCode && requestedShipmentCode !== before.shipment_code) {
+        nextShipmentCodeParts = await resolveManualShipmentCode(client, {
+          organizationId: scopedOrganizationId,
+          shipmentCode: requestedShipmentCode,
+          excludeShipmentId: id,
+        });
+        nextShipmentCode = nextShipmentCodeParts.shipmentCode;
+      }
+    }
     const nextLegacy = {
       ...(before.legacy_data || {}),
       ...legacyPatch,
       ...(updates.trackingNumber !== undefined || updates.shipmentCode !== undefined
-        ? { trackingNumber: updates.shipmentCode || updates.trackingNumber || before.shipment_code }
+        ? { trackingNumber: nextShipmentCode }
         : {}),
       ...(updates.customerId !== undefined ? { customerId: updates.customerId || "" } : {}),
       ...(updates.customerName !== undefined ? { customerName: updates.customerName || "" } : {}),
@@ -1731,7 +1838,12 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
     };
 
     if (updates.trackingNumber !== undefined || updates.shipmentCode !== undefined) {
-      addColumn("shipment_code", updates.shipmentCode || updates.trackingNumber);
+      addColumn("shipment_code", nextShipmentCode);
+      if (nextShipmentCodeParts) {
+        addColumn("shamsi_year", nextShipmentCodeParts.shamsiYear);
+        addColumn("shamsi_date", nextShipmentCodeParts.shamsiDate);
+        addColumn("shamsi_sequence", nextShipmentCodeParts.shamsiSequence);
+      }
     }
     if (updates.customerId !== undefined) addColumn("customer_id", updates.customerId || null);
     if (updates.customerName !== undefined || customer) {
@@ -1759,15 +1871,22 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
     );
     await client.query("COMMIT");
     return {
-      before: toUiShipment(before),
-      after: toUiShipment(result.rows[0]),
+      before: toUiShipment(before, { includeCustomerPrivateDetails }),
+      after: toUiShipment(
+        {
+          ...result.rows[0],
+          customer_code: customer?.customer_code || before.customer_code || null,
+          customer_display_name: customer?.company_name || customer?.contact_name || result.rows[0].customer_name || "",
+        },
+        { includeCustomerPrivateDetails }
+      ),
     };
   } catch (error) {
     await client.query("ROLLBACK");
     if (error?.code === "23505") {
       error.statusCode = 409;
       error.code = "SHIPMENT_CODE_EXISTS";
-      error.message = "Shipment tracking number already exists.";
+      error.message = SHIPMENT_CODE_ERRORS.duplicate;
     }
     throw error;
   } finally {
@@ -1784,9 +1903,10 @@ function normalizePostExitStatus(value, fallback = "needs_follow_up") {
 
 function toExitedShipment(row) {
   if (!row) return null;
+  const customerCode = row.customer_code || row.customer_id || "";
   return {
     ...toUiShipment(row),
-    customerDisplayName: row.customer_display_name || row.customer_name || "",
+    customerDisplayName: customerCode,
     cotageNumber: row.cotage_number || "",
     declarationReference: row.declaration_reference || "",
     exitDate: row.exit_date || "",
@@ -1835,7 +1955,8 @@ export async function listExitedShipmentRecords({
     `SELECT
        s.*,
        s.updated_at AS shipment_updated_at,
-       COALESCE(c.company_name, c.contact_name, s.customer_name, s.legacy_data->>'customerName') AS customer_display_name,
+       c.customer_code,
+       COALESCE(c.customer_code, s.customer_id) AS customer_display_name,
        k.cotage_number,
        k.declaration_reference,
        k.exit_date,
@@ -2032,6 +2153,7 @@ function toUiDocument(row) {
     customerId: row.customer_id || legacy.customerId || undefined,
     name: row.title || row.file_name || legacy.name || row.id,
     type: legacy.type || "OTHER",
+    note: legacy.note || legacy.notes || "",
     fileSize: row.file_size || legacy.fileSize || "",
     uploadedBy: row.uploaded_by_name || legacy.uploadedBy || "",
     createdAt: row.created_at || legacy.createdAt || new Date().toISOString(),
@@ -2125,8 +2247,8 @@ function toUiUser(row) {
   };
 }
 
-function toUiCustomer(row) {
-  return toUiCustomerFromRepository(row);
+function toUiCustomer(row, options = {}) {
+  return toUiCustomerFromRepository(row, options);
 }
 
 function toUiQuote(row, { includeCustomerPrivateDetails = true } = {}) {
@@ -2312,7 +2434,11 @@ async function syncQuoteUserRecord(client, ownerUserId, quoteRow) {
 
 async function syncCustomerUserRecord(client, ownerUserId, customerRow) {
   if (!ownerUserId || !customerRow) return;
-  const uiCustomer = toUiCustomer(customerRow);
+  const phoneNumbers = await listCustomerPhoneNumbers(client, {
+    organizationId: customerRow.organization_id,
+    customerId: customerRow.id,
+  });
+  const uiCustomer = toUiCustomer(customerRow, { phoneNumbers });
   await client.query(
     `INSERT INTO user_records (owner_user_id, organization_id, collection, item_id, data, updated_at)
      VALUES ($1, $2, 'customers', $3, $4::jsonb, NOW())
@@ -2452,6 +2578,7 @@ export async function createDocumentRecord({
   uploadedByName,
   shipmentId,
   customerId,
+  note,
   visibility = "internal",
 }) {
   const scopedOrganizationId = tenantContext
@@ -2516,7 +2643,7 @@ export async function createDocumentRecord({
         shipmentId || null,
         customerId || null,
         safeVisibility,
-        JSON.stringify({ name: title, type: type || "OTHER" }),
+        JSON.stringify({ name: title, type: type || "OTHER", note: note || "" }),
       ]
     );
 
@@ -4300,23 +4427,29 @@ export async function getDashboardData(user, permissions = []) {
       [orgParam]
     ),
     pool.query(
-      `SELECT id, shipment_code, customer_name, status, destination, estimated_delivery_at, legacy_data
-       FROM shipments
-       WHERE archived_at IS NULL
-         AND exited_archived_at IS NULL
-         AND ($1::text IS NULL OR organization_id = $1)
-       ORDER BY updated_at DESC, created_at DESC
+      `SELECT s.id, s.shipment_code, s.customer_id, c.customer_code, s.customer_name, s.status, s.destination, s.estimated_delivery_at, s.legacy_data
+       FROM shipments s
+       LEFT JOIN customers c
+         ON c.id = s.customer_id
+        AND c.organization_id = s.organization_id
+       WHERE s.archived_at IS NULL
+         AND s.exited_archived_at IS NULL
+         AND ($1::text IS NULL OR s.organization_id = $1)
+       ORDER BY s.updated_at DESC, s.created_at DESC
        LIMIT 8`,
       [orgParam]
     ),
     pool.query(
-      `SELECT id, shipment_code, customer_name, status, destination, estimated_delivery_at, legacy_data
-       FROM shipments
-       WHERE archived_at IS NULL
-         AND exited_archived_at IS NULL
-         AND status IN ('ARRIVED', 'CUSTOMS', 'IN_TRANSIT')
-         AND ($1::text IS NULL OR organization_id = $1)
-       ORDER BY updated_at DESC, created_at DESC
+      `SELECT s.id, s.shipment_code, s.customer_id, c.customer_code, s.customer_name, s.status, s.destination, s.estimated_delivery_at, s.legacy_data
+       FROM shipments s
+       LEFT JOIN customers c
+         ON c.id = s.customer_id
+        AND c.organization_id = s.organization_id
+       WHERE s.archived_at IS NULL
+         AND s.exited_archived_at IS NULL
+         AND s.status IN ('ARRIVED', 'CUSTOMS', 'IN_TRANSIT')
+         AND ($1::text IS NULL OR s.organization_id = $1)
+       ORDER BY s.updated_at DESC, s.created_at DESC
        LIMIT 6`,
       [orgParam]
     ),
@@ -4395,7 +4528,9 @@ export async function getDashboardData(user, permissions = []) {
   const toDashboardShipment = (row) => ({
     id: row.id,
     trackingNumber: row.shipment_code,
-    customerName: row.customer_name,
+    customerId: row.customer_id || "",
+    customerCode: row.customer_code || row.customer_id || "",
+    customerName: row.customer_code || row.customer_id || "",
     status: row.status,
     destination: row.destination,
     estimatedDelivery: row.estimated_delivery_at,
@@ -7089,6 +7224,116 @@ export async function getCustomerRecord(id, { organizationId, includePrivateDeta
   return getCustomerRecordFromRepository(pool, id, { organizationId, includePrivateDetails });
 }
 
+function cleanCustomerCode(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .toUpperCase();
+}
+
+function generatedCustomerCode() {
+  return `CUS-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+}
+
+async function ensureUniqueCustomerCode(client, organizationId, requestedCode, currentCustomerId = null) {
+  let code = cleanCustomerCode(requestedCode);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (!code) code = generatedCustomerCode();
+    const duplicate = await client.query(
+      `SELECT id
+       FROM customers
+       WHERE organization_id = $1
+         AND lower(customer_code) = lower($2)
+         AND archived_at IS NULL
+         AND ($3::text IS NULL OR id <> $3)
+       LIMIT 1`,
+      [organizationId, code, currentCustomerId]
+    );
+    if (!duplicate.rows[0]) return code;
+    if (requestedCode) {
+      const error = new Error("A customer with this code already exists.");
+      error.code = "DUPLICATE_CUSTOMER_CODE";
+      error.statusCode = 409;
+      throw error;
+    }
+    code = generatedCustomerCode();
+  }
+  const error = new Error("Could not generate a unique customer code.");
+  error.code = "CUSTOMER_CODE_GENERATION_FAILED";
+  error.statusCode = 500;
+  throw error;
+}
+
+function normalizeCustomerPhoneValue(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^00/, "+")
+    .replace(/[()\s\-._]/g, "");
+}
+
+function normalizedCustomerPhoneRows(inputPhoneNumbers, fallbackPhone = "") {
+  const rawRows = Array.isArray(inputPhoneNumbers) ? inputPhoneNumbers : [];
+  const rows = rawRows
+    .map((row, index) => ({
+      id: String(row?.id || "").trim(),
+      phoneNumber: normalizeCustomerPhoneValue(row?.phoneNumber),
+      phoneLabel: String(row?.phoneLabel || "").trim(),
+      note: String(row?.note || "").trim(),
+      isPrimary: Boolean(row?.isPrimary),
+      sortOrder: Number.isFinite(Number(row?.sortOrder)) ? Math.trunc(Number(row.sortOrder)) : index * 10,
+    }))
+    .filter((row) => row.phoneNumber);
+  if (!rows.length && fallbackPhone) {
+    rows.push({
+      id: "",
+      phoneNumber: normalizeCustomerPhoneValue(fallbackPhone),
+      phoneLabel: "اصلی",
+      note: "",
+      isPrimary: true,
+      sortOrder: 0,
+    });
+  }
+  if (rows.length && !rows.some((row) => row.isPrimary)) rows[0].isPrimary = true;
+  return rows.map((row, index) => ({
+    ...row,
+    isPrimary: row.isPrimary && index === rows.findIndex((item) => item.isPrimary),
+    sortOrder: Number.isFinite(row.sortOrder) ? row.sortOrder : index * 10,
+  }));
+}
+
+async function replaceCustomerPhoneNumbers(client, { organizationId, customerId, phoneNumbers, actorUserId }) {
+  await client.query(
+    `UPDATE customer_phone_numbers
+     SET archived_at = COALESCE(archived_at, NOW()),
+         updated_at = NOW(),
+         updated_by_id = $3
+     WHERE organization_id = $1
+       AND customer_id = $2
+       AND archived_at IS NULL`,
+    [organizationId, customerId, actorUserId || null]
+  );
+  for (const [index, phone] of phoneNumbers.entries()) {
+    await client.query(
+      `INSERT INTO customer_phone_numbers (
+         id, organization_id, customer_id, phone_number, phone_label, note,
+         is_primary, sort_order, created_by_id, updated_by_id, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, NOW())`,
+      [
+        crypto.randomUUID(),
+        organizationId,
+        customerId,
+        phone.phoneNumber,
+        phone.phoneLabel || null,
+        phone.note || null,
+        Boolean(phone.isPrimary),
+        Number.isFinite(Number(phone.sortOrder)) ? Number(phone.sortOrder) : index * 10,
+        actorUserId || null,
+      ]
+    );
+  }
+}
+
 export async function createCustomerRecord({ ownerUserId, actorUserId, customer }) {
   const client = await pool.connect();
   const id = customer.id || crypto.randomUUID();
@@ -7096,6 +7341,13 @@ export async function createCustomerRecord({ ownerUserId, actorUserId, customer 
     await client.query("BEGIN");
     const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
     const scopedOrganizationId = requireOrganizationScope(owner.rows[0]?.organization_id, "createCustomerRecord");
+    const customerCode = await ensureUniqueCustomerCode(
+      client,
+      scopedOrganizationId,
+      customer.customerCode || customer.code || ""
+    );
+    const phoneRows = normalizedCustomerPhoneRows(customer.phoneNumbers, customer.phone);
+    const primaryPhone = phoneRows.find((phone) => phone.isPrimary)?.phoneNumber || phoneRows[0]?.phoneNumber || null;
     if (customer.email) {
       const duplicate = await client.query(
         "SELECT id FROM customers WHERE lower(email) = lower($1) AND organization_id = $2 AND archived_at IS NULL LIMIT 1",
@@ -7110,29 +7362,40 @@ export async function createCustomerRecord({ ownerUserId, actorUserId, customer 
     }
     const result = await client.query(
       `INSERT INTO customers (
-         id, organization_id, owner_user_id, company_name, contact_name, email, phone, address,
+         id, organization_id, owner_user_id, customer_code, company_name, contact_name, email, phone, address,
          referrer, notes, status, legacy_data, created_by_id, updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active', $11::jsonb, $12, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12::jsonb, $13, NOW())
        RETURNING *`,
       [
         id,
         scopedOrganizationId,
         ownerUserId,
+        customerCode,
         customer.company || customer.companyName || customer.name,
         customer.name || customer.contactName || null,
         customer.email || null,
-        customer.phone || null,
+        primaryPhone,
         customer.address || null,
         customer.referrer || null,
         customer.notes || null,
-        JSON.stringify(customer),
+        JSON.stringify({ ...customer, customerCode, phoneNumbers: phoneRows }),
         actorUserId || ownerUserId,
       ]
     );
+    await replaceCustomerPhoneNumbers(client, {
+      organizationId: scopedOrganizationId,
+      customerId: result.rows[0].id,
+      phoneNumbers: phoneRows,
+      actorUserId: actorUserId || ownerUserId,
+    });
+    const savedPhoneNumbers = await listCustomerPhoneNumbers(client, {
+      organizationId: scopedOrganizationId,
+      customerId: result.rows[0].id,
+    });
     await syncCustomerUserRecord(client, ownerUserId, result.rows[0]);
     await client.query("COMMIT");
-    return toUiCustomer(result.rows[0]);
+    return toUiCustomer(result.rows[0], { phoneNumbers: savedPhoneNumbers });
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -7141,7 +7404,7 @@ export async function createCustomerRecord({ ownerUserId, actorUserId, customer 
   }
 }
 
-export async function updateCustomerRecord(id, updates, { organizationId } = {}) {
+export async function updateCustomerRecord(id, updates, { organizationId, actorUserId } = {}) {
   const client = await pool.connect();
   const scopedOrganizationId = requireOrganizationScope(organizationId, "updateCustomerRecord");
   try {
@@ -7167,37 +7430,71 @@ export async function updateCustomerRecord(id, updates, { organizationId } = {})
         throw error;
       }
     }
+    const shouldUpdateCode = updates.customerCode !== undefined || updates.code !== undefined;
+    const nextCustomerCode = shouldUpdateCode
+      ? await ensureUniqueCustomerCode(client, scopedOrganizationId, updates.customerCode || updates.code || "", id)
+      : null;
+    const shouldReplacePhones = updates.phoneNumbers !== undefined;
+    const phoneRows = shouldReplacePhones
+      ? normalizedCustomerPhoneRows(updates.phoneNumbers, updates.phone)
+      : null;
+    const nextPrimaryPhone = shouldReplacePhones
+      ? phoneRows.find((phone) => phone.isPrimary)?.phoneNumber || phoneRows[0]?.phoneNumber || null
+      : updates.phone || null;
+    const legacyUpdate = {
+      ...(updates || {}),
+      ...(nextCustomerCode ? { customerCode: nextCustomerCode } : {}),
+      ...(shouldReplacePhones ? { phoneNumbers: phoneRows } : {}),
+    };
     const result = await client.query(
       `UPDATE customers
        SET company_name = COALESCE($2, company_name),
            contact_name = COALESCE($3, contact_name),
            email = COALESCE($4, email),
-           phone = COALESCE($5, phone),
+           phone = CASE WHEN $12::boolean THEN $5 ELSE COALESCE($5, phone) END,
            address = COALESCE($6, address),
            referrer = COALESCE($7, referrer),
            notes = COALESCE($8, notes),
            status = COALESCE($9, status),
-           legacy_data = legacy_data || $10::jsonb,
+           customer_code = COALESCE($10, customer_code),
+           legacy_data = legacy_data || $11::jsonb,
            updated_at = NOW()
-       WHERE id = $1 AND organization_id = $11
+       WHERE id = $1 AND organization_id = $13
        RETURNING *`,
       [
         id,
         updates.company || updates.companyName || null,
         updates.name || updates.contactName || null,
         updates.email || null,
-        updates.phone || null,
+        nextPrimaryPhone,
         updates.address || null,
         updates.referrer || null,
         updates.notes || null,
         updates.status || null,
-        JSON.stringify(updates || {}),
+        nextCustomerCode,
+        JSON.stringify(legacyUpdate),
+        Boolean(shouldReplacePhones),
         scopedOrganizationId,
       ]
     );
+    if (shouldReplacePhones) {
+      await replaceCustomerPhoneNumbers(client, {
+        organizationId: scopedOrganizationId,
+        customerId: id,
+        phoneNumbers: phoneRows,
+        actorUserId: actorUserId || result.rows[0]?.owner_user_id,
+      });
+    }
+    const savedPhoneNumbers = await listCustomerPhoneNumbers(client, {
+      organizationId: scopedOrganizationId,
+      customerId: id,
+    });
     await syncCustomerUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
     await client.query("COMMIT");
-    return { before: toUiCustomer(current), after: toUiCustomer(result.rows[0]) };
+    return {
+      before: toUiCustomer(current),
+      after: toUiCustomer(result.rows[0], { phoneNumbers: savedPhoneNumbers }),
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -7627,7 +7924,7 @@ export async function listArchiveRecords({ search = "", organizationId } = {}) {
         type: entityType.toUpperCase(),
         title,
         name: title,
-        customerName: row.customer_name || row.company_name || row.legacy_data?.customerName || "",
+        customerName: row.customer_code || row.customer_id || row.legacy_data?.customerCode || (entityType === "customer" ? row.id : ""),
         shipmentId: row.shipment_id || row.id,
         archivedAt: row.archived_at,
         createdAt: row.created_at,
@@ -7683,7 +7980,7 @@ export async function archiveEntityRecord(entityType, entityId, actorUserId, { o
         entityId,
         archiveTitle(entityType, row),
         `${entityType} archived`,
-        row.customer_name || row.company_name || null,
+        row.customer_code || row.customer_id || (entityType === "customer" ? row.id : null),
         row.shipment_id || (entityType === "shipment" ? row.id : null),
         actorUserId || null,
         row.archived_at,
@@ -8196,12 +8493,15 @@ export async function listChatThreads(userId, { organizationId } = {}) {
     `SELECT t.*, m.unread_count, m.last_read_at,
             s.shipment_code,
             s.status AS shipment_status,
-            s.customer_name AS shipment_customer_name
+            COALESCE(c.customer_code, s.customer_id) AS shipment_customer_name
      FROM chat_threads t
      JOIN chat_thread_members m ON m.thread_id = t.id
      LEFT JOIN shipments s
        ON s.id = t.shipment_id
       AND s.organization_id = t.organization_id
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
      WHERE t.organization_id = $1
        AND t.archived_at IS NULL
        AND m.organization_id = $1
@@ -8239,12 +8539,15 @@ export async function getChatThreadForUser(threadId, userId, { organizationId } 
     `SELECT t.*, m.unread_count, m.last_read_at,
             s.shipment_code,
             s.status AS shipment_status,
-            s.customer_name AS shipment_customer_name
+            COALESCE(c.customer_code, s.customer_id) AS shipment_customer_name
      FROM chat_threads t
      JOIN chat_thread_members m ON m.thread_id = t.id
      LEFT JOIN shipments s
        ON s.id = t.shipment_id
       AND s.organization_id = t.organization_id
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
      WHERE t.id = $1
        AND t.organization_id = $2
        AND t.archived_at IS NULL
@@ -8987,7 +9290,7 @@ export async function listChatMediaAttachments({ organizationId, search = "", ty
        t.shipment_id,
        s.shipment_code,
        s.status AS shipment_status,
-       s.customer_name AS shipment_customer_name
+       COALESCE(c.customer_code, s.customer_id) AS shipment_customer_name
      FROM chat_message_attachments a
      JOIN chat_threads t
        ON t.id = a.thread_id
@@ -8998,6 +9301,9 @@ export async function listChatMediaAttachments({ organizationId, search = "", ty
      LEFT JOIN shipments s
        ON s.id = t.shipment_id
       AND s.organization_id = a.organization_id
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
      WHERE ${filters.join(" AND ")}
      ORDER BY a.created_at DESC
      LIMIT $2`,

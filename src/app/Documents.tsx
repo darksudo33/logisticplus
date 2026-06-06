@@ -38,6 +38,8 @@ import { useNavigate } from "react-router-dom";
 import { DocumentType } from "../types";
 import { EmptyState, resetFiltersAction } from "@/src/components/EmptyState";
 import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
+import { DOCUMENT_TYPE_ALL, DOCUMENT_TYPE_FILTERS, DOCUMENT_TYPE_OPTIONS, getDocumentTypeFilterValue, getDocumentTypeLabel } from "@/src/shared/document-types";
+import { downloadBinaryFile } from "@/src/lib/downloads";
 
 type ChatMediaAttachment = {
   id: string;
@@ -77,7 +79,7 @@ export default function Documents() {
 
   const [activeSection, setActiveSection] = useState<"documents" | "chatMedia">("documents");
   const [searchTerm, setSearchTerm] = useState("");
-  const [typeFilter, setTypeFilter] = useState<string>("ALL");
+  const [typeFilter, setTypeFilter] = useState<string>(DOCUMENT_TYPE_ALL);
   const [chatMediaTypeFilter, setChatMediaTypeFilter] = useState<"ALL" | "image" | "document">("ALL");
   const [chatMedia, setChatMedia] = useState<ChatMediaAttachment[]>([]);
   const [isChatMediaLoading, setIsChatMediaLoading] = useState(false);
@@ -89,8 +91,9 @@ export default function Documents() {
   const [chatAttachmentToDelete, setChatAttachmentToDelete] = useState<ChatMediaAttachment | null>(null);
   const [newDoc, setNewDoc] = useState({
     name: "",
-    type: "OTHER" as DocumentType,
+    type: "MISC" as DocumentType,
     shipmentId: "",
+    note: "",
     visibility: "internal" as "internal" | "customer_visible"
   });
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -135,7 +138,7 @@ export default function Documents() {
     return documents.filter(doc => {
       const isNotArchived = !doc.isArchived;
       const matchesSearch = doc.name.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesType = typeFilter === "ALL" || doc.type === typeFilter;
+      const matchesType = typeFilter === DOCUMENT_TYPE_ALL || getDocumentTypeFilterValue(doc.type) === typeFilter;
       return isNotArchived && matchesSearch && matchesType;
     });
   }, [documents, searchTerm, typeFilter]);
@@ -159,14 +162,14 @@ export default function Documents() {
 
   const resetDocumentFilters = () => {
     setSearchTerm("");
-    setTypeFilter("ALL");
+    setTypeFilter(DOCUMENT_TYPE_ALL);
     setChatMediaTypeFilter("ALL");
   };
   const activeDocs = documents.filter(doc => !doc.isArchived);
   const documentStats = [
     { label: "کل اسناد", value: activeDocs.length, icon: FileText, tone: "text-primary bg-primary/10" },
     { label: "متصل به محموله", value: activeDocs.filter(doc => doc.shipmentId).length, icon: Ship, tone: "text-blue-600 bg-blue-500/10" },
-    { label: "انواع سند", value: new Set(activeDocs.map(doc => doc.type)).size, icon: FileIcon, tone: "text-emerald-600 bg-emerald-500/10" },
+    { label: "انواع سند", value: new Set(activeDocs.map(doc => getDocumentTypeFilterValue(doc.type))).size, icon: FileIcon, tone: "text-emerald-600 bg-emerald-500/10" },
     { label: "آرشیو شده", value: documents.filter(doc => doc.isArchived).length, icon: Archive, tone: "text-amber-600 bg-amber-500/10" },
   ];
   const chatMediaStats = [
@@ -192,6 +195,7 @@ export default function Documents() {
       formData.append("title", newDoc.name);
       formData.append("type", newDoc.type);
       formData.append("visibility", newDoc.visibility);
+      if (newDoc.note.trim()) formData.append("note", newDoc.note.trim());
       if (newDoc.shipmentId) formData.append("shipmentId", newDoc.shipmentId);
 
       const response = await fetch("/api/documents/upload", {
@@ -205,7 +209,7 @@ export default function Documents() {
       await refreshDocuments();
       setIsAddDialogOpen(false);
       setSelectedFile(null);
-      setNewDoc({ name: "", type: "OTHER", shipmentId: "", visibility: "internal" });
+      setNewDoc({ name: "", type: "MISC", shipmentId: "", note: "", visibility: "internal" });
       if (fileInputRef.current) fileInputRef.current.value = "";
       toast.success("سند با موفقیت بارگذاری شد.");
     } catch (error: any) {
@@ -255,16 +259,12 @@ export default function Documents() {
     toast.success("دسترسی سند بروزرسانی شد.");
   };
 
-  const getDocTypeLabel = (type: string) => {
-    const labels: Record<string, string> = {
-      BILL_OF_LADING: "بارنامه",
-      INVOICE: "فاکتور",
-      PACKING_LIST: "لیست عدل‌بندی",
-      CUSTOMS_PERMIT: "پروانه گمرکی",
-      INSURANCE: "بیمه‌نامه",
-      OTHER: "سایر"
-    };
-    return labels[type] || type;
+  const handleDownloadDocument = async (doc: { id: string; name: string; url?: string }) => {
+    try {
+      await downloadBinaryFile(doc.url || `/api/documents/${encodeURIComponent(doc.id)}/download`, doc.name);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Document download failed.");
+    }
   };
 
   const getChatThreadTypeLabel = (type?: string) => {
@@ -339,12 +339,9 @@ export default function Documents() {
                     value={newDoc.type}
                     onChange={e => setNewDoc({...newDoc, type: e.target.value as any})}
                   >
-                    <option value="BILL_OF_LADING">بارنامه</option>
-                    <option value="INVOICE">فاکتور</option>
-                    <option value="PACKING_LIST">لیست عدل‌بندی</option>
-                    <option value="CUSTOMS_PERMIT">پروانه گمرکی</option>
-                    <option value="INSURANCE">بیمه‌نامه</option>
-                    <option value="OTHER">سایر</option>
+                    {DOCUMENT_TYPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
                   </select>
                 </div>
                 <div className="space-y-2">
@@ -369,6 +366,15 @@ export default function Documents() {
                   <option value="internal">فقط داخلی</option>
                   <option value="customer_visible">قابل مشاهده برای مشتری</option>
                 </select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground">یادداشت سند</Label>
+                <textarea
+                  className="min-h-20 w-full rounded-md border border-border bg-muted px-3 py-2 text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+                  placeholder="توضیح داخلی یا نکته مربوط به این سند..."
+                  value={newDoc.note}
+                  onChange={e => setNewDoc({ ...newDoc, note: e.target.value })}
+                />
               </div>
             </div>
             <DialogFooter>
@@ -436,24 +442,16 @@ export default function Documents() {
                 onChange={e => setSearchTerm(e.target.value)}
               />
             </div>
-            <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto pb-1 md:pb-0">
-               <Button 
-                variant="ghost" 
-                size="sm" 
-                className={cn("h-8 text-xs px-4 rounded-lg", typeFilter === "ALL" ? "bg-primary text-primary-foreground" : "text-muted-foreground")}
-                onClick={() => setTypeFilter("ALL")}
-               >
-                 همه
-               </Button>
-               {["BILL_OF_LADING", "INVOICE", "PACKING_LIST", "CUSTOMS_PERMIT", "INSURANCE", "OTHER"].map(type => (
+            <div className="flex w-full flex-wrap items-center gap-2 md:w-auto md:justify-end" data-testid="document-type-filters">
+               {DOCUMENT_TYPE_FILTERS.map(filter => (
                  <Button 
-                  key={type}
+                  key={filter.value}
                   variant="ghost" 
                   size="sm" 
-                  className={cn("h-8 text-xs px-4 rounded-lg whitespace-nowrap", typeFilter === type ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}
-                  onClick={() => setTypeFilter(type)}
+                  className={cn("h-8 text-xs px-3 rounded-lg whitespace-nowrap", typeFilter === filter.value ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}
+                  onClick={() => setTypeFilter(filter.value)}
                  >
-                   {getDocTypeLabel(type)}
+                   {filter.label}
                  </Button>
                ))}
             </div>
@@ -482,12 +480,17 @@ export default function Documents() {
                              <div className="w-9 h-9 rounded-xl bg-muted flex items-center justify-center text-primary">
                                 <FileIcon className="w-4 h-4" />
                              </div>
-                             <span className="text-xs font-bold text-foreground">{doc.name}</span>
+                             <div className="min-w-0">
+                               <span className="block truncate text-xs font-bold text-foreground">{doc.name}</span>
+                               {doc.note ? (
+                                <span className="mt-1 block max-w-64 truncate text-[10px] font-bold text-muted-foreground">{doc.note}</span>
+                               ) : null}
+                             </div>
                           </div>
                        </td>
                        <td className="px-6 py-4">
                           <Badge variant="outline" className="bg-muted/50 border-border text-[11px] px-2 py-0.5">
-                             {getDocTypeLabel(doc.type)}
+                             {getDocumentTypeLabel(doc.type)}
                           </Badge>
                        </td>
                        <td className="px-6 py-4">
@@ -510,20 +513,14 @@ export default function Documents() {
                        <td className="px-6 py-4">
                           <div className="flex items-center gap-1 opacity-100 transition-opacity">
                              <Button
-                              asChild
                               variant="ghost"
                               size="icon"
                               className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                              onClick={() => handleDownloadDocument(doc)}
+                              aria-label={`Download ${doc.name}`}
+                              title="Download document"
                              >
-                              <a
-                                href={doc.url || `/api/documents/${encodeURIComponent(doc.id)}/download`}
-                                target="_blank"
-                                rel="noreferrer"
-                                aria-label={`Download ${doc.name}`}
-                                title="Download document"
-                              >
-                                <Download className="w-4 h-4" />
-                              </a>
+                              <Download className="w-4 h-4" />
                              </Button>
                              <select
                               className="h-8 rounded-lg border border-border bg-background px-2 text-[11px] font-bold text-muted-foreground"

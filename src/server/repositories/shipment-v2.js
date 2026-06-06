@@ -1,6 +1,13 @@
 import crypto from "node:crypto";
 import { requireOrganizationScope } from "../tenant-scope.js";
 import { withTransaction } from "../transaction.js";
+import {
+  parseShipmentCode,
+  reserveNextShipmentCode,
+  resolveManualShipmentCode,
+  SHIPMENT_CODE_ERRORS,
+} from "../shipment-codes.js";
+import { assertBusinessEntityBelongsToTenant } from "./business-entities.js";
 
 export const SHIPMENT_V2_SECTION_KEYS = [
   "base",
@@ -39,7 +46,7 @@ function defaultSections(overrides = {}) {
     orderRegistration: {},
     goods: { goodsRows: [] },
     declarationKootaj: {},
-    permits: {},
+    permits: { permitRows: [] },
     payments: {},
     banking: {},
     notes: { internalNote: "" },
@@ -56,12 +63,19 @@ function defaultSections(overrides = {}) {
 function sectionsForCreate(body) {
   return defaultSections({
     base: cleanUndefined({
-      shipmentTitle: body.shipmentTitle || "",
+      trackingNumber: body.trackingNumber || "",
       origin: body.origin || "",
       dischargePort: body.dischargePort || "",
       deliveryPort: body.deliveryPort || "",
       consigneeName: body.consigneeName || "",
       lenjType: body.lenjType || null,
+      statusText: "",
+      currentStage: "",
+      orderRegistrationNumber: "",
+      commercialCardId: null,
+      commercialCardDisplayName: "",
+      malvaniProfileId: null,
+      malvaniDisplayName: "",
     }),
     goods: cleanUndefined({
       container20Count: body.container20Count ?? null,
@@ -76,12 +90,19 @@ function sectionsForExistingShipment(shipment) {
   const flowCode = deriveFlowCodeFromShipment(shipment);
   return defaultSections({
     base: cleanUndefined({
-      shipmentTitle: legacy.shipmentTitle || "",
+      trackingNumber: shipment.shipment_code || legacy.trackingNumber || "",
       origin: shipment.origin || legacy.origin || "",
       dischargePort: legacy.dischargePort || "",
       deliveryPort: legacy.deliveryPort || shipment.destination || "",
       consigneeName: legacy.consigneeName || "",
       lenjType: flowCode === "IMPORT_LANJ" ? legacy.lenjType || null : null,
+      statusText: legacy.statusText || "",
+      currentStage: legacy.currentStage || "",
+      orderRegistrationNumber: "",
+      commercialCardId: null,
+      commercialCardDisplayName: "",
+      malvaniProfileId: null,
+      malvaniDisplayName: "",
     }),
     goods: cleanUndefined({
       container20Count: legacy.container20Count ?? null,
@@ -92,7 +113,11 @@ function sectionsForExistingShipment(shipment) {
 }
 
 function normalizeSections(value) {
-  return defaultSections(jsonObject(value));
+  const sections = defaultSections(jsonObject(value));
+  if (sections.base && Object.prototype.hasOwnProperty.call(sections.base, "shipmentTitle")) {
+    delete sections.base.shipmentTitle;
+  }
+  return sections;
 }
 
 function normalizeSectionPayload(sectionKey, payload = {}) {
@@ -109,26 +134,100 @@ function normalizeSectionPayload(sectionKey, payload = {}) {
       internalNote: cleaned.internalNote || "",
     };
   }
+  if (sectionKey === "declarationKootaj") {
+    return {
+      cotageNumber: cleaned.cotageNumber || "",
+      customsRoute: cleaned.customsRoute || null,
+      cotageRegistrationDate: cleaned.cotageRegistrationDate || "",
+      totalValueAmount: cleaned.totalValueAmount ?? null,
+      totalValueCurrency: cleaned.totalValueCurrency || "IRR",
+      finalPaidAmount: cleaned.finalPaidAmount ?? null,
+      finalPaidCurrency: cleaned.finalPaidCurrency || "IRR",
+    };
+  }
+  if (sectionKey === "permits") {
+    return {
+      permitRows: Array.isArray(cleaned.permitRows)
+        ? cleaned.permitRows
+          .map((row) => ({
+            permitName: String(row?.permitName || "").trim(),
+            permitState: String(row?.permitState || "").trim(),
+          }))
+          .filter((row) => row.permitName)
+        : [],
+    };
+  }
+  if (sectionKey === "payments") {
+    const customsTaxStatus = cleaned.customsTaxStatus || null;
+    return {
+      customsPaymentPaid: Boolean(cleaned.customsPaymentPaid),
+      customsAmount: cleaned.customsAmount ?? null,
+      customsAmountCurrency: cleaned.customsAmountCurrency || "IRR",
+      customsDifferenceAmount: cleaned.customsDifferenceAmount ?? null,
+      customsDifferenceCurrency: cleaned.customsDifferenceCurrency || "IRR",
+      customsDifferencePaid: Boolean(cleaned.customsDifferencePaid),
+      customsTaxStatus,
+      customsTaxAmount: customsTaxStatus === "GOOD_STANDING" ? 0 : cleaned.customsTaxAmount ?? null,
+      customsTaxCurrency: cleaned.customsTaxCurrency || "IRR",
+      customsTaxPaid: customsTaxStatus === "GOOD_STANDING" ? false : Boolean(cleaned.customsTaxPaid),
+    };
+  }
+  if (sectionKey === "banking") {
+    return {
+      bankName: cleaned.bankName || "",
+      branchCode: cleaned.branchCode || "",
+      branchName: cleaned.branchName || "",
+      paymentInstrumentCode: cleaned.paymentInstrumentCode || "",
+      sataCode: cleaned.sataCode || "",
+    };
+  }
   if (sectionKey === "base") {
     return {
-      shipmentTitle: cleaned.shipmentTitle || "",
+      trackingNumber: cleaned.trackingNumber || "",
       origin: cleaned.origin || "",
       dischargePort: cleaned.dischargePort || "",
       deliveryPort: cleaned.deliveryPort || "",
       consigneeName: cleaned.consigneeName || "",
       lenjType: cleaned.lenjType || null,
+      statusText: cleaned.statusText || "",
+      currentStage: cleaned.currentStage || "",
+      orderRegistrationNumber: cleaned.orderRegistrationNumber || "",
+      commercialCardId: cleaned.commercialCardId || null,
+      commercialCardDisplayName: cleaned.commercialCardDisplayName || "",
+      malvaniProfileId: cleaned.malvaniProfileId || null,
+      malvaniDisplayName: cleaned.malvaniDisplayName || "",
     };
   }
   return {};
 }
 
-function toShipmentSummary(row) {
+async function validateBaseSectionReferences(queryable, { organizationId, payload = {} } = {}) {
+  if (payload.commercialCardId) {
+    await assertBusinessEntityBelongsToTenant(queryable, {
+      organizationId,
+      entityType: "commercial_card",
+      entityId: payload.commercialCardId,
+    });
+  }
+  if (payload.malvaniProfileId) {
+    await assertBusinessEntityBelongsToTenant(queryable, {
+      organizationId,
+      entityType: "malvani",
+      entityId: payload.malvaniProfileId,
+    });
+  }
+}
+
+function toShipmentSummary(row, { includeCustomerPrivateDetails = true } = {}) {
   if (!row) return null;
+  const legacy = row.legacy_data || {};
+  const customerCode = row.customer_code || legacy.customerCode || legacy.customer_code || row.customer_id || legacy.customerId || "";
   return {
     id: row.id,
     trackingNumber: row.shipment_code || row.id,
     customerId: row.customer_id || "",
-    customerName: row.customer_name || "",
+    customerCode,
+    customerName: customerCode,
     status: row.status || "PENDING",
     shipmentDirection: row.shipment_direction || "import",
     transportMode: row.transport_mode || "",
@@ -158,21 +257,36 @@ function toProfile(row) {
   };
 }
 
-function composeProfileResponse({ shipment, profile }) {
+function composeProfileResponse({ shipment, profile, includeCustomerPrivateDetails = true }) {
+  const shipmentSummary = toShipmentSummary(shipment, { includeCustomerPrivateDetails });
+  const profileSummary = toProfile(profile);
+  if (shipmentSummary && profileSummary?.sections?.base) {
+    profileSummary.sections.base = {
+      ...profileSummary.sections.base,
+      trackingNumber: shipmentSummary.trackingNumber,
+    };
+  }
   return {
-    shipment: toShipmentSummary(shipment),
-    profile: toProfile(profile),
+    shipment: shipmentSummary,
+    profile: profileSummary,
   };
 }
 
 async function getShipmentRow(queryable, { organizationId, shipmentId, lock = false }) {
   const result = await queryable.query(
-    `SELECT *
-     FROM shipments
-     WHERE id = $1
-       AND organization_id = $2
-       AND archived_at IS NULL
-     LIMIT 1${lock ? " FOR UPDATE" : ""}`,
+    `SELECT
+       s.*,
+       c.customer_code,
+       COALESCE(c.company_name, c.contact_name, s.customer_name, s.legacy_data->>'customerName') AS customer_display_name
+     FROM shipments s
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
+      AND c.archived_at IS NULL
+     WHERE s.id = $1
+       AND s.organization_id = $2
+       AND s.archived_at IS NULL
+     LIMIT 1${lock ? " FOR UPDATE OF s" : ""}`,
     [shipmentId, organizationId]
   );
   return result.rows[0] || null;
@@ -192,7 +306,7 @@ async function getProfileRow(queryable, { organizationId, shipmentId, lock = fal
 
 async function getCustomerRow(queryable, { organizationId, customerId }) {
   const result = await queryable.query(
-    `SELECT id, company_name, contact_name
+    `SELECT id, customer_code, company_name, contact_name
      FROM customers
      WHERE id = $1
        AND organization_id = $2
@@ -213,7 +327,7 @@ function setKnownError(error) {
   if (error?.code === "23505") {
     error.statusCode = 409;
     error.code = "SHIPMENT_CODE_EXISTS";
-    error.message = "Shipment tracking number already exists.";
+    error.message = SHIPMENT_CODE_ERRORS.duplicate;
   }
   return error;
 }
@@ -223,6 +337,8 @@ export async function createShipmentV2Record(pool, {
   ownerUserId,
   actorUserId,
   body,
+  canUseExistingCode = false,
+  includeCustomerPrivateDetails = true,
 } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "createShipmentV2Record");
   try {
@@ -240,7 +356,24 @@ export async function createShipmentV2Record(pool, {
 
       const shipmentId = crypto.randomUUID();
       const profileId = crypto.randomUUID();
-      const shipmentCode = String(body.trackingNumber || `LP-${Date.now()}`).trim();
+      let codeParts;
+      if (body.codeMode === "existing") {
+        if (!canUseExistingCode) {
+          const error = new Error("Existing shipment code entry is restricted.");
+          error.code = "FORBIDDEN";
+          error.statusCode = 403;
+          throw error;
+        }
+        codeParts = await resolveManualShipmentCode(client, {
+          organizationId: scopedOrganizationId,
+          shipmentCode: body.trackingNumber,
+        });
+      } else {
+        codeParts = await reserveNextShipmentCode(client, {
+          organizationId: scopedOrganizationId,
+        });
+      }
+      const shipmentCode = codeParts.shipmentCode;
       const shipmentTypeCode = FLOW_TO_SHIPMENT_TYPE[body.flowCode] || "IMPORT_SEA_CONTAINER";
       const customerName = customer.company_name || customer.contact_name || "";
       const legacyData = {
@@ -255,10 +388,11 @@ export async function createShipmentV2Record(pool, {
       const shipmentResult = await client.query(
         `INSERT INTO shipments (
            id, organization_id, owner_user_id, shipment_code, customer_id, customer_name, status,
+           shamsi_year, shamsi_date, shamsi_sequence,
            shipment_direction, transport_mode, shipment_type_code,
            origin, destination, legacy_data, created_by_id, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'import', 'sea', $7, $8, $9, $10::jsonb, $11, NOW())
+         VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, $8, $9, 'import', 'sea', $10, $11, $12, $13::jsonb, $14, NOW())
          RETURNING *`,
         [
           shipmentId,
@@ -267,6 +401,9 @@ export async function createShipmentV2Record(pool, {
           shipmentCode,
           body.customerId,
           customerName,
+          codeParts.shamsiYear,
+          codeParts.shamsiDate,
+          codeParts.shamsiSequence,
           shipmentTypeCode,
           body.origin || null,
           body.deliveryPort || null,
@@ -292,8 +429,13 @@ export async function createShipmentV2Record(pool, {
       );
 
       return composeProfileResponse({
-        shipment: shipmentResult.rows[0],
+        shipment: {
+          ...shipmentResult.rows[0],
+          customer_code: customer.customer_code,
+          customer_display_name: customerName,
+        },
         profile: profileResult.rows[0],
+        includeCustomerPrivateDetails,
       });
     });
   } catch (error) {
@@ -301,7 +443,7 @@ export async function createShipmentV2Record(pool, {
   }
 }
 
-export async function getShipmentV2Profile(pool, { organizationId, shipmentId } = {}) {
+export async function getShipmentV2Profile(pool, { organizationId, shipmentId, includeCustomerPrivateDetails = true } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "getShipmentV2Profile");
   const shipment = await getShipmentRow(pool, {
     organizationId: scopedOrganizationId,
@@ -312,13 +454,14 @@ export async function getShipmentV2Profile(pool, { organizationId, shipmentId } 
     organizationId: scopedOrganizationId,
     shipmentId,
   });
-  return composeProfileResponse({ shipment, profile });
+  return composeProfileResponse({ shipment, profile, includeCustomerPrivateDetails });
 }
 
 export async function initializeShipmentV2Profile(pool, {
   organizationId,
   shipmentId,
   actorUserId,
+  includeCustomerPrivateDetails = true,
 } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "initializeShipmentV2Profile");
   return withTransaction(pool, async (client) => {
@@ -334,7 +477,7 @@ export async function initializeShipmentV2Profile(pool, {
       shipmentId,
       lock: true,
     });
-    if (existing) return composeProfileResponse({ shipment, profile: existing });
+    if (existing) return composeProfileResponse({ shipment, profile: existing, includeCustomerPrivateDetails });
 
     const profileResult = await client.query(
       `INSERT INTO shipment_v2_profiles (
@@ -355,6 +498,7 @@ export async function initializeShipmentV2Profile(pool, {
     return composeProfileResponse({
       shipment,
       profile: profileResult.rows[0],
+      includeCustomerPrivateDetails,
     });
   });
 }
@@ -365,9 +509,12 @@ export async function updateShipmentV2Section(pool, {
   sectionKey,
   actorUserId,
   payload,
+  canEditShipmentCode = false,
+  includeCustomerPrivateDetails = true,
 } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "updateShipmentV2Section");
-  return withTransaction(pool, async (client) => {
+  try {
+    return await withTransaction(pool, async (client) => {
     const shipment = await getShipmentRow(client, {
       organizationId: scopedOrganizationId,
       shipmentId,
@@ -387,10 +534,40 @@ export async function updateShipmentV2Section(pool, {
       throw error;
     }
 
-    const before = composeProfileResponse({ shipment, profile });
+    const before = composeProfileResponse({ shipment, profile, includeCustomerPrivateDetails });
+    let normalizedPayload = payload;
+    let nextShipmentCodeParts = null;
+    if (sectionKey === "base") {
+      await validateBaseSectionReferences(client, {
+        organizationId: scopedOrganizationId,
+        payload,
+      });
+      if (Object.prototype.hasOwnProperty.call(payload, "trackingNumber")) {
+        const normalizedTrackingNumber = String(payload.trackingNumber || "").trim();
+        if (normalizedTrackingNumber && normalizedTrackingNumber !== shipment.shipment_code) {
+          if (!canEditShipmentCode) {
+            const error = new Error("Existing shipment code entry is restricted.");
+            error.code = "FORBIDDEN";
+            error.statusCode = 403;
+            throw error;
+          }
+          nextShipmentCodeParts = await resolveManualShipmentCode(client, {
+            organizationId: scopedOrganizationId,
+            shipmentCode: normalizedTrackingNumber,
+            excludeShipmentId: shipmentId,
+          });
+          normalizedPayload = {
+            ...payload,
+            trackingNumber: nextShipmentCodeParts.shipmentCode,
+          };
+        } else if (!normalizedTrackingNumber) {
+          parseShipmentCode(normalizedTrackingNumber);
+        }
+      }
+    }
     const nextSections = {
       ...normalizeSections(profile.sections_json),
-      [sectionKey]: normalizeSectionPayload(sectionKey, payload),
+      [sectionKey]: normalizeSectionPayload(sectionKey, normalizedPayload),
     };
 
     const profileResult = await client.query(
@@ -405,38 +582,53 @@ export async function updateShipmentV2Section(pool, {
     );
 
     let nextShipment = shipment;
+    const shipmentColumns = ["updated_at = NOW()"];
+    const shipmentValues = [shipmentId, scopedOrganizationId];
+    const addShipmentColumn = (column, value) => {
+      shipmentValues.push(value);
+      shipmentColumns.push(`${column} = $${shipmentValues.length}`);
+    };
     if (sectionKey === "base") {
-      const columns = [];
-      const values = [shipmentId, scopedOrganizationId];
-      const addColumn = (column, value) => {
-        values.push(value);
-        columns.push(`${column} = $${values.length}`);
-      };
-      if (Object.prototype.hasOwnProperty.call(payload, "origin")) addColumn("origin", payload.origin || null);
-      if (Object.prototype.hasOwnProperty.call(payload, "deliveryPort")) addColumn("destination", payload.deliveryPort || null);
-      if (columns.length) {
-        const shipmentResult = await client.query(
-          `UPDATE shipments
-           SET ${columns.join(", ")},
-               updated_at = NOW()
-           WHERE id = $1
-             AND organization_id = $2
-           RETURNING *`,
-          values
-        );
-        nextShipment = shipmentResult.rows[0] || shipment;
+      if (Object.prototype.hasOwnProperty.call(payload, "trackingNumber")) {
+        if (nextShipmentCodeParts) {
+          addShipmentColumn("shipment_code", nextShipmentCodeParts.shipmentCode);
+          addShipmentColumn("shamsi_year", nextShipmentCodeParts.shamsiYear);
+          addShipmentColumn("shamsi_date", nextShipmentCodeParts.shamsiDate);
+          addShipmentColumn("shamsi_sequence", nextShipmentCodeParts.shamsiSequence);
+        }
       }
+      if (Object.prototype.hasOwnProperty.call(payload, "origin")) addShipmentColumn("origin", payload.origin || null);
+      if (Object.prototype.hasOwnProperty.call(payload, "deliveryPort")) addShipmentColumn("destination", payload.deliveryPort || null);
     }
+    const shipmentResult = await client.query(
+      `UPDATE shipments
+       SET ${shipmentColumns.join(", ")}
+       WHERE id = $1
+         AND organization_id = $2
+       RETURNING *`,
+      shipmentValues
+    );
+    nextShipment = shipmentResult.rows[0]
+      ? {
+          ...shipmentResult.rows[0],
+          customer_code: shipment.customer_code,
+          customer_display_name: shipment.customer_display_name,
+        }
+      : shipment;
 
     return {
       before,
       after: composeProfileResponse({
         shipment: nextShipment,
         profile: profileResult.rows[0],
+        includeCustomerPrivateDetails,
       }),
       changedSection: sectionKey,
     };
-  });
+    });
+  } catch (error) {
+    throw setKnownError(error);
+  }
 }
 
 export function shipmentV2AuditSnapshot(response) {
