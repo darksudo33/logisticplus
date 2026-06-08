@@ -155,7 +155,10 @@ export async function listCustomersDetailed(pool, { includeArchived = false, sea
       AND s.archived_at IS NULL
      WHERE ${conditions.join(" AND ")}
      GROUP BY c.id
-     ORDER BY c.updated_at DESC`,
+     ORDER BY
+       substring(COALESCE(c.customer_code, c.id, '') from '([0-9]+)$')::bigint ASC NULLS LAST,
+       lower(COALESCE(c.customer_code, c.id, '')) ASC,
+       c.created_at ASC`,
     values
   );
   const phonesByCustomer = includePrivateDetails

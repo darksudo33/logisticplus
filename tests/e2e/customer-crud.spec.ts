@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { expect, test } from "@playwright/test";
 import pg from "pg";
-import { loginViaUi } from "./helpers";
+import { disposeContexts, loginApi, loginViaUi, readOk } from "./helpers";
 
 const { Client } = pg;
 
@@ -18,6 +18,12 @@ const testCustomer = {
   referrer: "معرف آزمونی",
   notes: "شماره تماس و آدرس باید بعد از ثبت قابل مشاهده باشد.",
 };
+
+const sortTestCustomers = [
+  { customerCode: "E2E-SORT-10", customerName: "Sort customer 10", companyName: "Sort company 10", email: "customer-sort-10@example.test" },
+  { customerCode: "E2E-SORT-2", customerName: "Sort customer 2", companyName: "Sort company 2", email: "customer-sort-2@example.test" },
+  { customerCode: "E2E-SORT-001", customerName: "Sort customer 1", companyName: "Sort company 1", email: "customer-sort-001@example.test" },
+];
 
 async function cleanupTestCustomer({
   email,
@@ -145,5 +151,53 @@ test.describe.serial("customer create and archive flow", () => {
     await page.goto("/archive");
     await expect(page.getByText(editedCompanyName).first()).toBeVisible();
     expect(consoleErrors).toEqual([]);
+  });
+});
+
+test.describe.serial("customer code sorting", () => {
+  test.beforeEach(async () => {
+    for (const customer of sortTestCustomers) {
+      await cleanupTestCustomer({
+        ...customer,
+        editedCompanyName: customer.companyName,
+      });
+    }
+  });
+
+  test.afterEach(async () => {
+    for (const customer of sortTestCustomers) {
+      await cleanupTestCustomer({
+        ...customer,
+        editedCompanyName: customer.companyName,
+      });
+    }
+  });
+
+  test("orders customer codes by their numeric value", async () => {
+    const owner = await loginApi();
+    try {
+      for (const customer of sortTestCustomers) {
+        await readOk(
+          await owner.post("/api/customers", {
+            data: {
+              customerCode: customer.customerCode,
+              name: customer.customerName,
+              company: customer.companyName,
+              email: customer.email,
+              phone: "09125550000",
+            },
+          })
+        );
+      }
+
+      const customers = await readOk<any[]>(await owner.get("/api/customers?includeArchived=true"));
+      const sortedCodes = customers
+        .map((customer) => customer.customerCode)
+        .filter((code) => sortTestCustomers.some((customer) => customer.customerCode === code));
+
+      expect(sortedCodes).toEqual(["E2E-SORT-001", "E2E-SORT-2", "E2E-SORT-10"]);
+    } finally {
+      await disposeContexts(owner);
+    }
   });
 });
