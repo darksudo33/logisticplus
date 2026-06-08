@@ -53,6 +53,7 @@ const ArchivePage = lazy(() => import("./app/Archive"));
 const QuotageManagement = QUOTATIONS_UI_ENABLED ? lazy(() => import("./app/QuotageManagement")) : null;
 const CustomerDetail = lazy(() => import("./app/CustomerDetail"));
 const SearchPage = lazy(() => import("./app/SearchPage"));
+const RatesAndTariffs = lazy(() => import("./app/RatesAndTariffs"));
 
 const protectedRoutePrefixes = [
   "/dashboard",
@@ -67,6 +68,7 @@ const protectedRoutePrefixes = [
   "/compliance-meetings",
   "/cheques",
   "/commercial-cards",
+  "/rates",
   "/search",
   "/quotage",
   "/quotations",
@@ -119,6 +121,7 @@ function AppRoutes() {
         <Route path="/compliance-meetings" element={<ProtectedAppLayout anyOf={["compliance.manage"]}><Compliance /></ProtectedAppLayout>} />
         <Route path="/cheques" element={<ProtectedAppLayout anyOf={["cheques.manage"]}><ChequeManagement /></ProtectedAppLayout>} />
         <Route path="/commercial-cards" element={<ProtectedAppLayout><CommercialCards /></ProtectedAppLayout>} />
+        <Route path="/rates" element={<ProtectedAppLayout><RatesAndTariffs /></ProtectedAppLayout>} />
         <Route path="/search" element={<ProtectedAppLayout><SearchPage /></ProtectedAppLayout>} />
         <Route path="/quotage" element={<Navigate to="/dashboard" replace />} />
         <Route

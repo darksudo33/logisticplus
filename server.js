@@ -231,6 +231,7 @@ import { registerShipmentV2Routes } from "./src/server/routes/shipment-v2-routes
 import { registerShipmentFormTemplateRoutes } from "./src/server/routes/shipment-form-template-routes.js";
 import { registerShipmentWorkflowTemplateRoutes } from "./src/server/routes/shipment-workflow-template-routes.js";
 import { registerUserRoutes } from "./src/server/routes/user-routes.js";
+import { registerRatesRoutes } from "./src/server/routes/rates-routes.js";
 import { startShipmentWorkflow as startShipmentWorkflowRecord } from "./src/server/repositories/shipment-progress.js";
 import { parseRequestValue } from "./src/server/validation.js";
 import {
@@ -247,6 +248,7 @@ import {
 } from "./src/server/rate-limit.js";
 import { runStartupChecks, shouldTrustProxy } from "./src/server/startup-checks.js";
 import { runSmsWorkerOnce, startSmsWorker } from "./src/server/sms-worker.js";
+import { startCurrencyRatesWorker } from "./src/server/rates-worker.js";
 import { sendSmsMessage } from "./src/server/sms-provider.js";
 
 const SESSION_COOKIE = "logisticplus_session";
@@ -2317,6 +2319,15 @@ async function startServer() {
     revokeUserPermission,
     updateAppUserRecord,
     updateUserPassword,
+  });
+
+  registerRatesRoutes(app, {
+    auditLog,
+    createApiError,
+    pool,
+    requestContext,
+    requireAuthenticatedUser,
+    requirePlatformAdmin,
   });
 
   app.get("/api/organization/members", async (req, res) => {
@@ -5580,6 +5591,7 @@ async function startServer() {
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     startSmsWorker();
+    startCurrencyRatesWorker(pool);
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }

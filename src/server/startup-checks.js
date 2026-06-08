@@ -56,7 +56,6 @@ export function validateProductionConfig() {
       errors.push("SMSIR_LINE_NUMBER is required for live SMS unless SMSIR_USE_DEFAULT_LINE=true.");
     }
   }
-
   try {
     const rateLimitStore = resolveRateLimitStore();
     if (rateLimitStore !== "postgres") {

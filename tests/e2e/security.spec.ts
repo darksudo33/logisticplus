@@ -147,9 +147,14 @@ test.describe.serial("security regression harness", () => {
     for (const family of NORMAL_APP_ROUTE_FAMILIES) {
       expect(RBAC_TENANT_POLICY.some((policy) => policy.family === family)).toBe(true);
     }
+    expect(RBAC_TENANT_POLICY.some((policy) => policy.family === "rates")).toBe(true);
     expect(
       RBAC_TENANT_POLICY.filter((policy) => policy.auth === "required" && NORMAL_APP_ROUTE_FAMILIES.includes(policy.family))
         .every((policy) => policy.tenantScope === "own-organization")
+    ).toBe(true);
+    expect(
+      RBAC_TENANT_POLICY.filter((policy) => policy.family === "rates" && policy.method === "GET")
+        .every((policy) => policy.tenantScope === "global-reference")
     ).toBe(true);
     expect(RBAC_TENANT_POLICY.find((policy) => policy.path === "/api/admin/overview")?.tenantScope).toBe("platform-global");
     expect(RBAC_TENANT_POLICY.filter((policy) => policy.auth === "public").every((policy) => policy.tenantScope === "public-safe")).toBe(true);

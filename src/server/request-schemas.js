@@ -16,6 +16,7 @@ import {
   SHIPMENT_TYPE_CODES,
   TRANSPORT_MODE_VALUES,
 } from "../shared/shipment-form-fields.js";
+import { RATE_CURRENCY_CODES, RATE_MARKET_TYPES } from "../shared/rates.js";
 
 const blankToUndefined = (value) =>
   typeof value === "string" && value.trim() === "" ? undefined : value;
@@ -116,6 +117,11 @@ const optionalNullableNonNegativeNumber = z.preprocess((value) => {
   const numberValue = Number(normalizedValue);
   return Number.isFinite(numberValue) ? numberValue : normalizedValue;
 }, z.number().min(0, "Number fields cannot be negative.").nullable().optional());
+const requiredPositiveNumber = z.preprocess((value) => {
+  const normalizedValue = normalizeLocalizedNumberInput(value);
+  const numberValue = Number(normalizedValue);
+  return Number.isFinite(numberValue) ? numberValue : normalizedValue;
+}, z.number().positive("Number must be greater than zero."));
 const optionalNullableNonNegativeInteger = z.preprocess((value) => {
   const normalizedValue = normalizeLocalizedNumberInput(value);
   if (normalizedValue === undefined || normalizedValue === null) return normalizedValue;
@@ -212,6 +218,75 @@ export const documentManagementCenterSearchQuerySchema = z.object({
   ),
   limit: queryLimit(12),
 });
+
+const rateCurrencyCode = z.enum(/** @type {[string, ...string[]]} */ (RATE_CURRENCY_CODES));
+const rateMarketType = z.enum(/** @type {[string, ...string[]]} */ (RATE_MARKET_TYPES));
+const optionalNonNegativeCurrencyNumber = z.preprocess((value) => {
+  const normalizedValue = normalizeLocalizedNumberInput(value);
+  if (normalizedValue === undefined || normalizedValue === null || normalizedValue === "") return undefined;
+  const numberValue = Number(normalizedValue);
+  return Number.isFinite(numberValue) ? numberValue : normalizedValue;
+}, z.number().min(0, "Number fields cannot be negative.").optional());
+
+export const currencyRateSnapshotListQuerySchema = z.object({
+  status: z.preprocess(firstQueryValue, z.enum(["published", "pending_review", "rejected"]).optional()),
+  currencyCode: z.preprocess(firstQueryValue, rateCurrencyCode.optional()),
+  marketType: z.preprocess(firstQueryValue, rateMarketType.optional()),
+  limit: queryLimit(50),
+}).strict();
+
+export const currencyRateManualBodySchema = z.object({
+  currencyCode: rateCurrencyCode,
+  marketType: rateMarketType,
+  price: requiredPositiveNumber,
+  buyRate: optionalNullableNonNegativeNumber,
+  sellRate: optionalNullableNonNegativeNumber,
+  unit: optionalTrimmedText(40),
+  note: optionalTrimmedText(1000),
+}).strict();
+
+export const currencyRateSettingsBodySchema = z.object({
+  isEnabled: z.boolean().optional(),
+  autoPublishSuspicious: z.boolean().optional(),
+  suspiciousChangePercent: optionalNonNegativeCurrencyNumber,
+  syncIntervalMinutes: z.preprocess((value) => {
+    const normalizedValue = normalizeLocalizedNumberInput(value);
+    if (normalizedValue === undefined || normalizedValue === null || normalizedValue === "") return undefined;
+    const numberValue = Number(normalizedValue);
+    return Number.isFinite(numberValue) ? numberValue : normalizedValue;
+  }, z.number().int().min(5).max(1440).optional()),
+}).strict().refine(
+  (value) => Object.values(value).some((item) => item !== undefined),
+  { message: "At least one rate setting is required." }
+);
+
+export const currencyRateReviewParamsSchema = z.object({
+  id: requiredId,
+});
+
+export const currencyRateReviewBodySchema = z.object({
+  decision: z.enum(["approve", "reject"]),
+  note: optionalTrimmedText(1000),
+}).strict();
+
+export const tariffCatalogSearchQuerySchema = z.object({
+  q: z.preprocess(firstQueryValue, optionalTrimmedText(160)),
+  limit: queryLimit(50),
+}).strict();
+
+export const tariffCatalogParamsSchema = z.object({
+  id: requiredId,
+});
+
+export const tariffCatalogImportBodySchema = z.object({
+  mode: z.enum(["replace", "append"]).default("replace"),
+  dryRun: z.preprocess((value) => {
+    if (value === true || value === "true" || value === "1") return true;
+    if (value === false || value === "false" || value === "0") return false;
+    return value === undefined ? true : value;
+  }, z.boolean().default(true)),
+  sourceDate: optionalTrimmedText(80),
+}).strict();
 
 export const shipmentParamsSchema = z.object({
   id: requiredId,

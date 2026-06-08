@@ -7,7 +7,7 @@ import React, { useState, useEffect } from "react";
 import { format } from "date-fns-jalali";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { LayoutDashboard, Ship, Users, CheckSquare, MessageSquare, ChevronRight, ChevronLeft, LogOut, Search, Bell, FileText, FileSearch, History, Settings as SettingsIcon, Menu, ShieldCheck, CreditCard, Archive, Calculator, X, Sun, Moon, IdCard, ClipboardList, GitBranch } from "lucide-react";
+import { LayoutDashboard, Ship, Users, CheckSquare, MessageSquare, ChevronRight, ChevronLeft, LogOut, Search, Bell, FileText, FileSearch, History, Settings as SettingsIcon, Menu, ShieldCheck, CreditCard, Archive, Calculator, X, Sun, Moon, IdCard, ClipboardList, GitBranch, Banknote } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EXITED_SHIPMENTS_NAV_ENABLED, QUOTATIONS_UI_ENABLED, SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED } from "@/src/config/features";
 import { useMockStore } from "../../store/useMockStore";
@@ -40,6 +40,13 @@ const sidebarItems = [
   { icon: Users, label: "مراجعات حضوری", path: "/compliance-meetings" },
   { icon: CheckSquare, label: "وظایف", path: "/tasks" },
   { icon: IdCard, label: "کارت‌های بازرگانی", path: "/commercial-cards" },
+  { icon: Users, label: "مشتریان", path: "/customers", ceoOnly: true },
+  { icon: ShieldCheck, label: "مدیریت کاربران", path: "/management", ceoOnly: true },
+  { icon: FileText, label: "اسناد", path: "/documents" },
+  { icon: CreditCard, label: "چک‌ها", path: "/cheques" },
+  { icon: Archive, label: "آرشیو", path: "/archive" },
+  { icon: History, label: "تغییرات", path: "/changelog" },
+  { icon: Banknote, label: "نرخ‌ها و تعرفه‌ها", path: "/rates" },
   ...(SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED
     ? [
       { icon: SettingsIcon, label: "فرم‌های نوع محموله", path: "/admin/shipment-form-templates", permission: "shipment_forms.manage" },
@@ -47,12 +54,6 @@ const sidebarItems = [
     ]
     : []),
   ...(QUOTATIONS_UI_ENABLED ? [{ icon: Calculator, label: "مدیریت کوتاژ", path: "/quotations" }] : []),
-  { icon: Users, label: "مشتریان", path: "/customers", ceoOnly: true },
-  { icon: ShieldCheck, label: "مدیریت کاربران", path: "/management", ceoOnly: true },
-  { icon: FileText, label: "اسناد", path: "/documents" },
-  { icon: CreditCard, label: "چک‌ها", path: "/cheques" },
-  { icon: Archive, label: "آرشیو", path: "/archive" },
-  { icon: History, label: "تغییرات", path: "/changelog" },
 ];
 
 function canShowSidebarItem(item: (typeof sidebarItems)[number], currentUser: any) {

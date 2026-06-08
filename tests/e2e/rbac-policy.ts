@@ -4,7 +4,7 @@ export type RoutePolicy = {
   path: string;
   auth: "public" | "required";
   permission: string | null;
-  tenantScope: "public-safe" | "own-organization" | "platform-global";
+  tenantScope: "public-safe" | "own-organization" | "platform-global" | "global-reference";
 };
 
 export const RBAC_TENANT_POLICY: RoutePolicy[] = [
@@ -62,6 +62,15 @@ export const RBAC_TENANT_POLICY: RoutePolicy[] = [
   { family: "cheques", method: "GET", path: "/api/cheques/:id", auth: "required", permission: "cheques.manage", tenantScope: "own-organization" },
   { family: "compliance", method: "GET", path: "/api/compliance-meetings/:id", auth: "required", permission: "compliance.manage|assigned", tenantScope: "own-organization" },
   { family: "quotations", method: "GET", path: "/api/quotations/:id", auth: "required", permission: "quotations.manage", tenantScope: "own-organization" },
+  { family: "rates", method: "GET", path: "/api/rates/currency", auth: "required", permission: null, tenantScope: "global-reference" },
+  { family: "rates", method: "GET", path: "/api/rates/currency/snapshots", auth: "required", permission: null, tenantScope: "global-reference" },
+  { family: "rates", method: "GET", path: "/api/rates/tariffs", auth: "required", permission: null, tenantScope: "global-reference" },
+  { family: "rates", method: "GET", path: "/api/rates/tariffs/:id", auth: "required", permission: null, tenantScope: "global-reference" },
+  { family: "rates", method: "PATCH", path: "/api/rates/currency/settings", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
+  { family: "rates", method: "POST", path: "/api/rates/currency/sync", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
+  { family: "rates", method: "POST", path: "/api/rates/currency/manual", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
+  { family: "rates", method: "POST", path: "/api/rates/currency/snapshots/:id/review", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
+  { family: "rates", method: "POST", path: "/api/rates/tariffs/import", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
   { family: "archive", method: "POST", path: "/api/archive/:entityType/:entityId", auth: "required", permission: "archive.view", tenantScope: "own-organization" },
   { family: "audit", method: "GET", path: "/api/audit-logs", auth: "required", permission: "changes.view", tenantScope: "own-organization" },
   { family: "changes", method: "GET", path: "/api/changes/:id", auth: "required", permission: "changes.view", tenantScope: "own-organization" },
