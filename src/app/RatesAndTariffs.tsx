@@ -102,10 +102,11 @@ function formatFileSize(bytes?: number | null) {
 }
 
 function FlagIcon({ code }: { code: string }) {
+  const className = "h-5 w-7 shrink-0 rounded-[2px] border border-border";
   switch (code) {
     case "USD":
       return (
-        <svg viewBox="0 0 28 20" className="h-5 w-7 shrink-0 rounded-[2px] border border-border" aria-hidden="true">
+        <svg viewBox="0 0 28 20" className={className} aria-hidden="true" data-testid={`currency-flag-${code}`}>
           <rect width="28" height="20" fill="#fff" />
           {Array.from({ length: 7 }).map((_, index) => (
             <rect key={index} y={index * 3} width="28" height="1.5" fill="#b91c1c" />
@@ -115,7 +116,7 @@ function FlagIcon({ code }: { code: string }) {
       );
     case "EUR":
       return (
-        <svg viewBox="0 0 28 20" className="h-5 w-7 shrink-0 rounded-[2px] border border-border" aria-hidden="true">
+        <svg viewBox="0 0 28 20" className={className} aria-hidden="true" data-testid={`currency-flag-${code}`}>
           <rect width="28" height="20" fill="#1d4ed8" />
           {Array.from({ length: 12 }).map((_, index) => {
             const angle = (index / 12) * Math.PI * 2 - Math.PI / 2;
@@ -127,7 +128,7 @@ function FlagIcon({ code }: { code: string }) {
       );
     case "AED":
       return (
-        <svg viewBox="0 0 28 20" className="h-5 w-7 shrink-0 rounded-[2px] border border-border" aria-hidden="true">
+        <svg viewBox="0 0 28 20" className={className} aria-hidden="true" data-testid={`currency-flag-${code}`}>
           <rect width="28" height="20" fill="#fff" />
           <rect width="7" height="20" fill="#dc2626" />
           <rect x="7" width="21" height="6.67" fill="#16a34a" />
@@ -137,14 +138,14 @@ function FlagIcon({ code }: { code: string }) {
       );
     case "CNY":
       return (
-        <svg viewBox="0 0 28 20" className="h-5 w-7 shrink-0 rounded-[2px] border border-border" aria-hidden="true">
+        <svg viewBox="0 0 28 20" className={className} aria-hidden="true" data-testid={`currency-flag-${code}`}>
           <rect width="28" height="20" fill="#dc2626" />
           <path d="M7 4.5l.9 1.9 2.1.3-1.5 1.4.4 2.1L7 9.2 5.1 10.2l.4-2.1L4 6.7l2.1-.3z" fill="#facc15" />
         </svg>
       );
     case "INR":
       return (
-        <svg viewBox="0 0 28 20" className="h-5 w-7 shrink-0 rounded-[2px] border border-border" aria-hidden="true">
+        <svg viewBox="0 0 28 20" className={className} aria-hidden="true" data-testid={`currency-flag-${code}`}>
           <rect width="28" height="6.67" fill="#f59e0b" />
           <rect y="6.67" width="28" height="6.66" fill="#fff" />
           <rect y="13.33" width="28" height="6.67" fill="#16a34a" />
@@ -153,7 +154,7 @@ function FlagIcon({ code }: { code: string }) {
       );
     case "TRY":
       return (
-        <svg viewBox="0 0 28 20" className="h-5 w-7 shrink-0 rounded-[2px] border border-border" aria-hidden="true">
+        <svg viewBox="0 0 28 20" className={className} aria-hidden="true" data-testid={`currency-flag-${code}`}>
           <rect width="28" height="20" fill="#dc2626" />
           <circle cx="12" cy="10" r="4.1" fill="#fff" />
           <circle cx="13.4" cy="10" r="3.2" fill="#dc2626" />
@@ -162,7 +163,7 @@ function FlagIcon({ code }: { code: string }) {
       );
     case "OMR":
       return (
-        <svg viewBox="0 0 28 20" className="h-5 w-7 shrink-0 rounded-[2px] border border-border" aria-hidden="true">
+        <svg viewBox="0 0 28 20" className={className} aria-hidden="true" data-testid={`currency-flag-${code}`}>
           <rect width="28" height="20" fill="#fff" />
           <rect width="7" height="20" fill="#dc2626" />
           <rect x="7" width="21" height="6.67" fill="#dc2626" />
@@ -172,14 +173,14 @@ function FlagIcon({ code }: { code: string }) {
       );
     case "QAR":
       return (
-        <svg viewBox="0 0 28 20" className="h-5 w-7 shrink-0 rounded-[2px] border border-border" aria-hidden="true">
+        <svg viewBox="0 0 28 20" className={className} aria-hidden="true" data-testid={`currency-flag-${code}`}>
           <rect width="28" height="20" fill="#8b1d3a" />
           <polygon points="0,0 7,0 11,2 7,4 11,6 7,8 11,10 7,12 11,14 7,16 11,18 7,20 0,20" fill="#fff" />
         </svg>
       );
     default:
       return (
-        <svg viewBox="0 0 28 20" className="h-5 w-7 shrink-0 rounded-[2px] border border-border" aria-hidden="true">
+        <svg viewBox="0 0 28 20" className={className} aria-hidden="true" data-testid={`currency-flag-${code}`}>
           <rect width="28" height="20" fill="#cbd5e1" />
         </svg>
       );
@@ -219,11 +220,22 @@ function RateChip({ rate, marketType, proUnavailable = false }: { rate?: Currenc
   }
 
   return (
-    <div className="flex min-w-28 flex-col gap-1">
+    <div className="flex min-w-24 justify-center">
       <span className="text-sm font-black tabular-nums text-foreground" dir="ltr">{formatNumber(rate.price)}</span>
-      <span className="text-[10px] font-bold text-muted-foreground">{rate.provider === "manual" ? "دستی" : "BRSAPI"}</span>
     </div>
   );
+}
+
+function rateSourceLabel(rate?: CurrencyRate) {
+  if (!rate) return null;
+  return rate.provider === "manual" ? "دستی" : "BRSAPI";
+}
+
+function currencySourceSummary(rates: Array<CurrencyRate | undefined>) {
+  const sources = [...new Set(rates.map(rateSourceLabel).filter(Boolean))] as string[];
+  if (!sources.length) return { label: "آخرین نرخ معتبر", detail: "" };
+  if (sources.length === 1) return { label: sources[0], detail: "" };
+  return { label: "ترکیبی", detail: sources.join(" / ") };
 }
 
 function ChangeCell({ rate }: { rate?: CurrencyRate }) {
@@ -278,11 +290,12 @@ function CurrencyRatesGrid({ rates, proUnavailable = false }: { rates: CurrencyR
               <TableRow className="bg-muted/40 hover:bg-muted/40">
                 <TableHead className="px-4 text-right text-xs font-black">ارز</TableHead>
                 {MARKET_TYPES.map((marketType) => (
-                  <TableHead key={marketType} className="text-right text-xs font-black">{marketLabels[marketType]}</TableHead>
+                  <TableHead key={marketType} className="text-center text-xs font-black">{marketLabels[marketType]}</TableHead>
                 ))}
-                <TableHead className="text-right text-xs font-black">تغییر</TableHead>
-                <TableHead className="text-right text-xs font-black">آخرین بروزرسانی</TableHead>
-                <TableHead className="text-right text-xs font-black">وضعیت</TableHead>
+                <TableHead className="text-center text-xs font-black">تغییر</TableHead>
+                <TableHead className="text-center text-xs font-black">آخرین بروزرسانی</TableHead>
+                <TableHead className="text-center text-xs font-black">منبع</TableHead>
+                <TableHead className="text-center text-xs font-black">وضعیت</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -291,19 +304,30 @@ function CurrencyRatesGrid({ rates, proUnavailable = false }: { rates: CurrencyR
                 const freeRate = rateMap.get(rateKey(currencyCode, "FREE_MARKET"));
                 const latestUpdate = currencyLatestUpdate(rowRates);
                 const hasAnyRate = rowRates.some(Boolean);
+                const source = currencySourceSummary(rowRates);
                 return (
                   <TableRow key={currencyCode} data-testid={`currency-row-${currencyCode}`} className="hover:bg-primary/5">
-                    <TableCell className="px-4 py-3">
+                    <TableCell className="px-4 py-2.5">
                       <CurrencyIdentity code={currencyCode} />
                     </TableCell>
                     {MARKET_TYPES.map((marketType) => (
-                      <TableCell key={marketType} className="py-3">
+                      <TableCell key={marketType} className="py-2.5 text-center align-middle">
                         <RateChip rate={rateMap.get(rateKey(currencyCode, marketType))} marketType={marketType} proUnavailable={proUnavailable} />
                       </TableCell>
                     ))}
-                    <TableCell className="py-3"><ChangeCell rate={freeRate} /></TableCell>
-                    <TableCell className="py-3 text-xs font-bold text-muted-foreground">{formatDateTime(latestUpdate)}</TableCell>
-                    <TableCell className="py-3">
+                    <TableCell className="py-2.5 text-center align-middle"><ChangeCell rate={freeRate} /></TableCell>
+                    <TableCell className="py-2.5 text-center text-xs font-bold text-muted-foreground align-middle">{formatDateTime(latestUpdate)}</TableCell>
+                    <TableCell className="py-2.5 text-center align-middle">
+                      <span
+                        data-testid={`rate-source-${currencyCode}`}
+                        className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/30 px-2 py-1 text-[11px] font-black text-muted-foreground"
+                        title={source.detail || source.label}
+                      >
+                        {source.label}
+                        {source.detail ? <Info className="h-3 w-3" /> : null}
+                      </span>
+                    </TableCell>
+                    <TableCell className="py-2.5 text-center align-middle">
                       <Badge className={cn("rounded-md text-[11px] font-black", hasAnyRate ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-700" : "border-slate-500/20 bg-slate-500/10 text-slate-600")}>
                         {hasAnyRate ? "نرخ موجود" : "در انتظار نرخ"}
                       </Badge>
@@ -320,6 +344,7 @@ function CurrencyRatesGrid({ rates, proUnavailable = false }: { rates: CurrencyR
         {CURRENCY_CODES.map((currencyCode) => {
           const freeRate = rateMap.get(rateKey(currencyCode, "FREE_MARKET"));
           const rowRates = MARKET_TYPES.map((marketType) => rateMap.get(rateKey(currencyCode, marketType)));
+          const source = currencySourceSummary(rowRates);
           return (
             <Card key={currencyCode} data-testid={`currency-card-${currencyCode}`} className="rounded-lg">
               <CardContent className="space-y-3 p-3">
@@ -327,7 +352,7 @@ function CurrencyRatesGrid({ rates, proUnavailable = false }: { rates: CurrencyR
                   <CurrencyIdentity code={currencyCode} />
                   <ChangeCell rate={freeRate} />
                 </div>
-                <div className="rounded-lg border border-border bg-muted/25 p-3">
+                <div className="rounded-lg border border-border bg-muted/25 p-2.5 text-center">
                   <p className="text-[11px] font-black text-muted-foreground">بازار آزاد</p>
                   <div className="mt-1">
                     <RateChip rate={freeRate} marketType="FREE_MARKET" proUnavailable={proUnavailable} />
@@ -335,14 +360,15 @@ function CurrencyRatesGrid({ rates, proUnavailable = false }: { rates: CurrencyR
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   {MARKET_TYPES.filter((marketType) => marketType !== "FREE_MARKET").map((marketType) => (
-                    <div key={marketType} className="min-w-0 rounded-md border border-border bg-background p-2">
+                    <div key={marketType} className="min-w-0 rounded-md border border-border bg-background p-2 text-center">
                       <p className="mb-1 truncate text-[10px] font-black text-muted-foreground">{marketLabels[marketType]}</p>
                       <RateChip rate={rateMap.get(rateKey(currencyCode, marketType))} marketType={marketType} proUnavailable={proUnavailable} />
                     </div>
                   ))}
                 </div>
-                <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-muted-foreground">
+                <div className="grid gap-1 text-[11px] font-bold text-muted-foreground">
                   <span className="inline-flex items-center gap-1"><Clock3 className="h-3.5 w-3.5" /> {formatDateTime(currencyLatestUpdate(rowRates))}</span>
+                  <span data-testid={`mobile-rate-source-${currencyCode}`}>منبع: {source.label}</span>
                   <span>{rowRates.some(Boolean) ? "نرخ موجود" : "در انتظار نرخ"}</span>
                 </div>
               </CardContent>
@@ -585,15 +611,15 @@ export default function RatesAndTariffs() {
           {statusBadge(settings)}
           {isPlatformAdmin && (
             <>
-              <Button variant="outline" className="h-10 rounded-lg text-xs font-black" onClick={() => setSettingsOpen(true)}>
+              <Button variant="outline" data-testid="rates-settings-button" className="h-10 rounded-lg text-xs font-black" onClick={() => setSettingsOpen(true)}>
                 <Settings className="h-4 w-4" />
                 تنظیمات
               </Button>
-              <Button variant="outline" className="h-10 rounded-lg text-xs font-black" onClick={() => setManualOpen(true)}>
+              <Button variant="outline" data-testid="rates-manual-button" className="h-10 rounded-lg text-xs font-black" onClick={() => setManualOpen(true)}>
                 <Save className="h-4 w-4" />
                 نرخ دستی
               </Button>
-              <Button className="h-10 rounded-lg text-xs font-black" onClick={handleSync} disabled={syncing}>
+              <Button data-testid="rates-sync-button" className="h-10 rounded-lg text-xs font-black" onClick={handleSync} disabled={syncing}>
                 {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 همگام‌سازی Pro
               </Button>
@@ -609,28 +635,25 @@ export default function RatesAndTariffs() {
         </TabsList>
 
         <TabsContent value="rates" className="space-y-4">
-          <Card>
-            <CardContent className="p-4">
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-lg border border-border bg-background px-3 py-2">
-                  <p className="text-[11px] font-black text-muted-foreground">آخرین همگام‌سازی</p>
-                  <p className="mt-2 text-sm font-black">{formatDateTime(settings.lastSyncAt)}</p>
-                </div>
-                <div className="rounded-lg border border-border bg-background px-3 py-2">
-                  <p className="text-[11px] font-black text-muted-foreground">حد هشدار تغییر</p>
-                  <p className="mt-2 text-sm font-black">{toPersianDigits(settings.suspiciousChangePercent)}٪</p>
-                </div>
-                <div className="rounded-lg border border-border bg-background px-3 py-2">
-                  <p className="text-[11px] font-black text-muted-foreground">بررسی مشکوک</p>
-                  <p className="mt-2 text-sm font-black">{settings.autoPublishSuspicious ? "انتشار خودکار" : "نیازمند تایید"}</p>
-                </div>
-                <div className="rounded-lg border border-border bg-background px-3 py-2">
-                  <p className="text-[11px] font-black text-muted-foreground">وضعیت منبع</p>
-                  <p className="mt-2 truncate text-sm font-black">{settings.lastSyncStatus === "failed" ? "دارای هشدار" : (settings.isEnabled ? "BRSAPI Pro" : "غیرفعال")}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-border bg-card px-3 py-2 text-xs font-bold text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5">
+              <Clock3 className="h-3.5 w-3.5" />
+              آخرین همگام‌سازی:
+              <strong className="text-foreground">{formatDateTime(settings.lastSyncAt)}</strong>
+            </span>
+            <span>
+              وضعیت منبع:
+              <strong className="mr-1 text-foreground">{settings.lastSyncStatus === "failed" ? "دارای هشدار" : (settings.isEnabled ? "BRSAPI Pro" : "غیرفعال")}</strong>
+            </span>
+            <span>
+              بررسی مشکوک:
+              <strong className="mr-1 text-foreground">{settings.autoPublishSuspicious ? "انتشار خودکار" : "نیازمند تایید"}</strong>
+            </span>
+            <span>
+              حد هشدار تغییر:
+              <strong className="mr-1 text-foreground">{toPersianDigits(settings.suspiciousChangePercent)}٪</strong>
+            </span>
+          </div>
 
           {adminWarning && (
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm font-bold leading-6 text-amber-900">
@@ -639,7 +662,7 @@ export default function RatesAndTariffs() {
                 <div className="min-w-0">
                   <p>{adminWarning}</p>
                   {adminDiagnostics && (
-                    <div className="mt-2 grid gap-2 text-[11px] font-bold text-amber-900/80 sm:grid-cols-2">
+                    <div data-testid="rates-admin-diagnostics" className="mt-2 grid gap-2 text-[11px] font-bold text-amber-900/80 sm:grid-cols-2">
                       <div className="rounded-md bg-white/45 px-2 py-1.5">
                         <div className="text-[10px] uppercase tracking-[0.08em]">Endpoint</div>
                         <div className="mt-1 break-all font-mono" dir="ltr">{adminDiagnostics.endpoint}</div>

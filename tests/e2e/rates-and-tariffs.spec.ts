@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { loginApi, loginViaUi, readOk, expectForbidden, uniqueEmail } from "./helpers";
+import { disposeContexts, loginApi, loginViaUi, readOk, expectForbidden, uniqueEmail } from "./helpers";
 import { fetchBrsApiProCurrencyPayload, normalizeBrsApiProCurrencyPayload } from "@/src/server/rates/brsapi.js";
 
 test.describe.serial("rates and tariffs", () => {
@@ -32,24 +32,36 @@ test.describe.serial("rates and tariffs", () => {
 
   test("maps BRSAPI config and HTTP 402 failures to clean Persian errors", async () => {
     const originalKey = process.env.BRSAPI_KEY;
+    const originalBaseUrl = process.env.BRSAPI_BASE_URL;
     const originalFetch = globalThis.fetch;
     try {
       delete process.env.BRSAPI_KEY;
+      delete process.env.BRSAPI_BASE_URL;
       await expect(fetchBrsApiProCurrencyPayload()).rejects.toMatchObject({
         code: "BRSAPI_KEY_MISSING",
         message: "کلید BRSAPI در تنظیمات سرور ثبت نشده است",
       });
 
       process.env.BRSAPI_KEY = "test-secret-key";
-      globalThis.fetch = (async () => new Response("payment required", { status: 402 })) as typeof fetch;
+      let requestedUrl = "";
+      globalThis.fetch = (async (input) => {
+        requestedUrl = String(input);
+        return new Response("payment required", { status: 402 });
+      }) as typeof fetch;
       await expect(fetchBrsApiProCurrencyPayload()).rejects.toMatchObject({
         code: "BRSAPI_PLAN_REQUIRED",
         httpStatus: 402,
         message: "دسترسی پلن BRSAPI برای این داده کافی نیست یا اعتبار کلید تمام شده است",
       });
+      const endpoint = new URL(requestedUrl);
+      expect(endpoint.origin + endpoint.pathname).toBe("https://api.brsapi.ir/Market/Gold_Currency_Pro.php");
+      expect(endpoint.searchParams.get("key")).toBe("test-secret-key");
+      expect(endpoint.searchParams.get("section")).toBe("currency");
     } finally {
       if (originalKey === undefined) delete process.env.BRSAPI_KEY;
       else process.env.BRSAPI_KEY = originalKey;
+      if (originalBaseUrl === undefined) delete process.env.BRSAPI_BASE_URL;
+      else process.env.BRSAPI_BASE_URL = originalBaseUrl;
       globalThis.fetch = originalFetch;
     }
   });
@@ -175,6 +187,23 @@ test.describe.serial("rates and tariffs", () => {
   });
 
   test("renders the rates page on desktop and mobile without horizontal overflow", async ({ page }) => {
+    const owner = await loginApi();
+    const tenantEmail = uniqueEmail("rates-ui-tenant");
+    await readOk<any>(
+      await owner.post("/api/admin/organizations/manual-signup", {
+        data: {
+          companyName: `Rates UI Tenant ${Date.now()}`,
+          ownerName: "Rates UI Tenant Owner",
+          ownerEmail: tenantEmail,
+          password: "PlaywrightPass123!",
+          planId: "starter",
+          billingCycle: "monthly",
+          contactPhone: "09120000000",
+        },
+      })
+    );
+    await disposeContexts(owner);
+
     await page.setViewportSize({ width: 1440, height: 900 });
     await loginViaUi(page);
     await page.goto("/rates");
@@ -182,18 +211,47 @@ test.describe.serial("rates and tariffs", () => {
     await expect(page.getByRole("heading", { name: "نرخ‌ها و تعرفه‌ها" })).toBeVisible();
     await expect(page.locator('nav a[href="/rates"]').first()).toBeVisible();
     for (const code of ["USD", "EUR", "AED", "CNY", "INR", "TRY", "OMR", "QAR"]) {
-      await expect(page.getByTestId(`currency-row-${code}`)).toBeVisible();
+      const row = page.getByTestId(`currency-row-${code}`);
+      await expect(row).toBeVisible();
+      await expect(row.getByTestId(`currency-flag-${code}`)).toBeVisible();
+      const source = row.getByTestId(`rate-source-${code}`);
+      await expect(source).toBeVisible();
+      const rowText = (await row.textContent()) || "";
+      const sourceText = ((await source.textContent()) || "").trim();
+      expect(rowText.split(sourceText).length - 1).toBe(1);
     }
-    await expect(page.getByTestId("currency-row-USD")).toContainText("🇺🇸");
-    await expect(page.getByTestId("currency-row-EUR")).toContainText("🇪🇺");
-    await expect(page.getByTestId("rate-unavailable-chip").first()).toBeVisible();
+    await expect(page.getByTestId("currency-row-USD")).toContainText("USD");
+    await expect(page.getByTestId("currency-row-EUR")).toContainText("EUR");
+    await expect(page.getByRole("columnheader", { name: "منبع" })).toBeVisible();
+    await expect(page.getByTestId("rates-settings-button")).toBeVisible();
+    await expect(page.getByTestId("rates-manual-button")).toBeVisible();
+    await expect(page.getByTestId("rates-sync-button")).toBeVisible();
+    const firstRateCellAlign = await page.getByTestId("currency-row-USD").locator("td").nth(1).evaluate((node) => getComputedStyle(node).textAlign);
+    expect(firstRateCellAlign).toBe("center");
+    const unavailableChip = page.getByTestId("rate-unavailable-chip").first();
+    await expect(unavailableChip).toBeVisible();
+    const unavailableBox = await unavailableChip.boundingBox();
+    expect(unavailableBox?.height || 0).toBeLessThan(40);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)).toBe(false);
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.reload();
     await expect(page.getByTestId("rates-page")).toBeVisible();
     await expect(page.getByTestId("currency-card-USD")).toBeVisible();
-    await expect(page.getByTestId("currency-card-USD")).toContainText("🇺🇸");
+    await expect(page.getByTestId("currency-card-USD").getByTestId("currency-flag-USD")).toBeVisible();
+    await expect(page.getByTestId("currency-card-USD")).toContainText("USD");
+    await expect(page.getByTestId("mobile-rate-source-USD")).toBeVisible();
+    const mobileUsdText = (await page.getByTestId("currency-card-USD").textContent()) || "";
+    expect(mobileUsdText.split("منبع:").length - 1).toBe(1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)).toBe(false);
+
+    await page.request.post("/api/auth/logout");
+    await loginViaUi(page, tenantEmail, "PlaywrightPass123!");
+    await page.goto("/rates");
+    await expect(page.getByTestId("rates-page")).toBeVisible();
+    await expect(page.getByTestId("rates-settings-button")).toHaveCount(0);
+    await expect(page.getByTestId("rates-manual-button")).toHaveCount(0);
+    await expect(page.getByTestId("rates-sync-button")).toHaveCount(0);
+    await expect(page.getByTestId("rates-admin-diagnostics")).toHaveCount(0);
   });
 });
