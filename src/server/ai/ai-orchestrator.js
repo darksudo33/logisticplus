@@ -54,6 +54,7 @@ import {
   getCommercialCardContext,
   resolveCustomerRef,
   resolveShipmentRef,
+  searchBusinessContext,
   searchCustomerByCode,
   searchBusinessEntityContacts,
   searchCommercialCards,
@@ -67,10 +68,12 @@ import {
   searchTariffCatalog,
 } from "./ai-tools.js";
 import {
+  BUSINESS_REQUESTED_FIELDS,
   RELATION_INTENTS,
   classifyResolutionState,
   detectRelationIntent,
   isSupportedRelationIntent,
+  planBusinessSearch,
   verifyRelationAnswerability,
 } from "./ai-context-planner.js";
 
@@ -1518,7 +1521,7 @@ async function focusedCustomerAnswer(pool, context, { customer, shipments, messa
   return null;
 }
 
-const AGENTIC_CONTEXT_MAX_STEPS = 3;
+const AGENTIC_CONTEXT_MAX_STEPS = 4;
 
 function relationText(plan, fa, en) {
   return plan?.language === "fa" ? fa : en;
@@ -1537,11 +1540,19 @@ function commercialCardLabel(card = {}) {
     cleanText(card.id);
 }
 
+function maskedCommercialCardNumber(value = "") {
+  const text = cleanText(value);
+  if (!text) return "";
+  const digits = text.replace(/\D/g, "");
+  if (digits.length < 6) return text;
+  return `${text.slice(0, Math.max(0, text.length - 4)).replace(/[^\s-]/g, "•")}${text.slice(-4)}`;
+}
+
 function commercialCardLine(card = {}) {
   const label = commercialCardLabel(card);
   const parts = [
     labelOrMissing(label),
-    cleanText(card.cardNumber),
+    maskedCommercialCardNumber(card.cardNumber),
     cleanText(card.expirationDate) ? `انقضا: ${card.expirationDate}` : "",
     cleanText(card.status),
   ].filter(Boolean);
@@ -1598,6 +1609,213 @@ function relationResult({
       confidence: plan?.confidence || 0,
     },
   };
+}
+
+function identityResult(plan) {
+  return relationResult({
+    plan: { ...plan, intent: "identity" },
+    answer: relationText(
+      plan,
+      "من همیار لاجستیک هستم؛ دستیار داخلی LogisticPlus برای پاسخ‌های read-only درباره محموله‌ها، مشتری‌ها، کارت‌های بازرگانی، اسناد، وظایف و وضعیت عملیات همین سازمان. فقط از داده‌هایی که شما مجاز به دیدنشان هستید استفاده می‌کنم.",
+      "I am LogisticPlus assistant, a read-only internal helper for shipments, customers, commercial cards, documents, tasks, and operational status in this organization."
+    ),
+    toolsCalled: [],
+    success: true,
+    reason: "identity",
+  });
+}
+
+function businessCandidateSource(candidate = {}) {
+  if (candidate.type === "shipment") {
+    return source("shipment", {
+      id: candidate.id,
+      label: candidate.safeSummary?.shipmentCode ? `محموله ${candidate.safeSummary.shipmentCode}` : candidate.label,
+      url: `/shipments/${candidate.id}`,
+    });
+  }
+  if (candidate.type === "customer") {
+    return source("customer", {
+      id: candidate.id,
+      label: candidate.safeSummary?.customerName || candidate.safeSummary?.customerCode || candidate.label,
+      url: `/customers/${candidate.id}`,
+    });
+  }
+  return source("commercial_card", {
+    id: candidate.id,
+    label: candidate.safeSummary?.displayName || candidate.label,
+    url: "/daily-status",
+  });
+}
+
+function businessOptionLine(candidate = {}) {
+  if (candidate.type === "shipment") {
+    return `- محموله ${labelOrMissing(candidate.safeSummary?.shipmentCode)} / مشتری: ${labelOrMissing(candidate.safeSummary?.customerName)} / وضعیت: ${labelOrMissing(candidate.safeSummary?.status)}`;
+  }
+  if (candidate.type === "customer") {
+    return `- مشتری ${labelOrMissing(candidate.safeSummary?.customerName)} / کد: ${labelOrMissing(candidate.safeSummary?.customerCode)} / وضعیت: ${labelOrMissing(candidate.safeSummary?.status)}`;
+  }
+  return `- کارت بازرگانی ${labelOrMissing(candidate.safeSummary?.displayName)} / شماره: ${labelOrMissing(candidate.safeSummary?.cardNumber)} / وضعیت: ${labelOrMissing(candidate.safeSummary?.status)}`;
+}
+
+function strongBusinessCandidate(candidates = []) {
+  if (!candidates.length) return null;
+  const [first, second] = candidates;
+  if (first.score >= 0.78 && (!second || first.score - second.score >= 0.12)) return first;
+  if (candidates.length === 1 && first.score >= 0.62) return first;
+  return null;
+}
+
+function businessAmbiguousResult(plan, candidates, toolsCalled) {
+  return relationResult({
+    plan,
+    answer: joinLines([
+      relationText(
+        plan,
+        `چند مورد برای «${plan.queryTerms.join(" ")}» پیدا شد. منظورتان کدام است؟`,
+        `I found multiple matches for "${plan.queryTerms.join(" ")}". Which one do you mean?`
+      ),
+      ...candidates.slice(0, 5).map(businessOptionLine),
+    ]),
+    toolsCalled,
+    sources: candidates.slice(0, 5).map(businessCandidateSource),
+    recordIds: candidates.slice(0, 5).map((item) => item.id).filter(Boolean),
+    success: false,
+    reason: "ambiguous_business_search",
+    tone: "clarification",
+  });
+}
+
+function businessNotFoundResult(plan, searched, toolsCalled) {
+  const terms = searched?.queryTerms?.length ? searched.queryTerms : plan.queryTerms;
+  const types = (searched?.candidateTypes?.length ? searched.candidateTypes : plan.candidateTypes)
+    .map((type) => type === "shipment" ? "محموله‌ها" : type === "customer" ? "مشتری‌ها" : "کارت‌های بازرگانی")
+    .join("، ");
+  return relationResult({
+    plan,
+    answer: relationText(
+      plan,
+      `من در ${types || "اطلاعات تجاری"} این سازمان برای «${terms.join(" ")}» جستجو کردم، اما مورد مطمئنی پیدا نشد. اگر کد محموله، نام دقیق مشتری، یا بخشی از شرح کالا را دارید بفرستید.`,
+      `I searched this organization's ${types || "business records"} for "${terms.join(" ")}", but did not find a confident match. Please send a shipment code, exact customer name, or part of the goods description.`
+    ),
+    toolsCalled,
+    success: false,
+    reason: "business_search_not_found",
+    tone: "clarification",
+  });
+}
+
+function missingBusinessContextResult(plan, candidate, toolsCalled, reason = "missing_context") {
+  return relationResult({
+    plan,
+    answer: relationText(
+      plan,
+      `برای مورد پیدا شده «${candidate.label}» زمینه کافی برای پاسخ دقیق پیدا نکردم. لطفاً یک شناسه یا عبارت دقیق‌تر بفرستید.`,
+      `I found "${candidate.label}", but did not retrieve enough context to answer safely. Please send a more specific reference.`
+    ),
+    toolsCalled,
+    sources: [businessCandidateSource(candidate)],
+    recordIds: [candidate.id].filter(Boolean),
+    success: false,
+    reason,
+    tone: "clarification",
+  });
+}
+
+function customerDisplayFromDetail(customer = {}) {
+  return cleanText(customer.companyName) || cleanText(customer.contactName) || cleanText(customer.name) || cleanText(customer.customerCode);
+}
+
+function businessShipmentAnswer(plan, detail) {
+  const shipment = detail.shipment;
+  const customer = detail.customer || {};
+  const field = plan.requestedField;
+  if (field === BUSINESS_REQUESTED_FIELDS.CUSTOMER || field === BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE) {
+    const name = cleanText(customer.name) || cleanText(customer.customerCode);
+    if (!name) return null;
+    if (field === BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE) {
+      return relationText(
+        plan,
+        `مشتری محموله ${shipment.shipmentCode} «${name}» است. شماره تماس مشتری در زمینه محموله دریافت‌شده موجود نبود؛ از صفحه مشتری قابل بررسی است.`,
+        `Shipment ${shipment.shipmentCode} belongs to ${name}. The customer phone was not available in the retrieved shipment context.`
+      );
+    }
+    return relationText(
+      plan,
+      `مشتری محموله ${shipment.shipmentCode}، «${name}»${customer.customerCode ? ` (${customer.customerCode})` : ""} است.`,
+      `Shipment ${shipment.shipmentCode} belongs to ${name}${customer.customerCode ? ` (${customer.customerCode})` : ""}.`
+    );
+  }
+  if (field === BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER) {
+    return relationText(
+      plan,
+      `شماره محموله مورد پیدا شده: ${labelOrMissing(shipment.shipmentCode)}.`,
+      `The matched shipment number is ${labelOrMissing(shipment.shipmentCode)}.`
+    );
+  }
+  if (field === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD || field === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD_NUMBER) {
+    const card = detail.commercialCard || detail.commercialCards?.[0];
+    if (!card) return null;
+    return relationText(
+      plan,
+      `کارت بازرگانی مرتبط با محموله ${shipment.shipmentCode}: ${commercialCardLine(card)}.`,
+      `The commercial card linked to shipment ${shipment.shipmentCode}: ${commercialCardLine(card)}.`
+    );
+  }
+  return shipmentSummaryFromContext(plan, detail);
+}
+
+function businessCustomerAnswer(plan, detail) {
+  const customer = detail.customer || {};
+  const name = customerDisplayFromDetail(customer);
+  const field = plan.requestedField;
+  if (field === BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE || field === BUSINESS_REQUESTED_FIELDS.CUSTOMER_NUMBER) {
+    const lines = [
+      `مشتری: ${labelOrMissing(name)}`,
+      customer.customerCode ? `کد مشتری: ${customer.customerCode}` : "",
+      customer.phone ? `شماره تماس: ${customer.phone}` : "",
+    ].filter(Boolean);
+    return relationText(
+      plan,
+      lines.length ? lines.join("\n") : "برای این مشتری شماره قابل نمایش در زمینه دریافت‌شده پیدا نکردم.",
+      lines.length ? lines.join("\n") : "I did not find a visible number in the retrieved customer context."
+    );
+  }
+  if (field === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD || field === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD_NUMBER) {
+    return groundedCustomerAnswer({ ...plan, intent: RELATION_INTENTS.CUSTOMER_COMMERCIAL_CARD_LOOKUP }, detail);
+  }
+  if (field === BUSINESS_REQUESTED_FIELDS.STATUS || field === BUSINESS_REQUESTED_FIELDS.LOCATION) {
+    return groundedCustomerAnswer({ ...plan, intent: RELATION_INTENTS.CUSTOMER_SHIPMENTS_LOOKUP }, detail);
+  }
+  return joinLines([
+    relationText(plan, `مورد پیدا شده: مشتری ${labelOrMissing(name)}.`, `Matched customer: ${labelOrMissing(name)}.`),
+    customer.customerCode ? `کد مشتری: ${customer.customerCode}` : "",
+    customer.status ? `وضعیت: ${customer.status}` : "",
+  ]);
+}
+
+function businessCommercialCardAnswer(plan, contextResult, candidate) {
+  const card = contextResult?.cards?.[0] || {};
+  const label = commercialCardLabel(card) || candidate.safeSummary?.displayName || candidate.label;
+  return relationText(
+    plan,
+    `کارت بازرگانی پیدا شده: ${labelOrMissing(label)}${card.cardNumber ? ` / شماره: ${commercialCardLine(card)}` : candidate.safeSummary?.cardNumber ? ` / شماره: ${candidate.safeSummary.cardNumber}` : ""}.`,
+    `Matched commercial card: ${labelOrMissing(label)}${card.cardNumber ? ` / ${commercialCardLine(card)}` : candidate.safeSummary?.cardNumber ? ` / number: ${candidate.safeSummary.cardNumber}` : ""}.`
+  );
+}
+
+function activeEntityFromBusinessCandidate(candidate = {}, detail = {}) {
+  if (candidate.type === "shipment" && detail.shipment?.id) {
+    return { type: "shipment", id: detail.shipment.id, code: detail.shipment.shipmentCode, label: `محموله ${detail.shipment.shipmentCode}` };
+  }
+  if (candidate.type === "customer" && detail.customer?.id) {
+    return {
+      type: "customer",
+      id: detail.customer.id,
+      code: detail.customer.customerCode,
+      label: customerDisplayFromDetail(detail.customer),
+    };
+  }
+  return null;
 }
 
 function relationMissingRefResult(plan) {
@@ -1772,7 +1990,7 @@ async function resolveSingleShipmentForPlan(pool, context, plan, toolsCalled) {
     limit: 5,
   });
   const state = classifyResolutionState(matches);
-  if (state === "not_found") return { state, result: relationNotFoundResult(plan, "shipment", toolsCalled) };
+  if (state === "not_found") return { state, matches };
   if (state === "ambiguous") return { state, result: relationAmbiguousResult(plan, matches, "shipment", toolsCalled) };
   return { state, shipment: matches[0] };
 }
@@ -1785,20 +2003,145 @@ async function resolveSingleCustomerForPlan(pool, context, plan, toolsCalled) {
     limit: 5,
   });
   const state = classifyResolutionState(matches);
-  if (state === "not_found") return { state, result: relationNotFoundResult(plan, "customer", toolsCalled) };
+  if (state === "not_found") return { state, matches };
   if (state === "ambiguous") return { state, result: relationAmbiguousResult(plan, matches, "customer", toolsCalled) };
   return { state, customer: matches[0] };
 }
 
+async function answerBusinessCandidate(pool, context, plan, candidate, toolsCalled) {
+  if (candidate.type === "shipment") {
+    toolsCalled.push("getShipmentDetailContext");
+    const detail = await getShipmentDetailContext(pool, context, { shipmentId: candidate.id });
+    if (!detail) return missingBusinessContextResult(plan, candidate, toolsCalled);
+
+    let deterministicAnswer = businessShipmentAnswer(plan, detail);
+    if (plan.requestedField === BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE && detail.customer?.id) {
+      toolsCalled.push("getCustomerContactInfo");
+      const contact = await getCustomerContactInfo(pool, context, { customerId: detail.customer.id });
+      if (contact?.primaryPhone) {
+        deterministicAnswer = relationText(
+          plan,
+          joinLines([
+            `مشتری محموله ${detail.shipment.shipmentCode}: ${labelOrMissing(contact.companyName || contact.contactName || detail.customer.name)}`,
+            `شماره تماس: ${contact.primaryPhone}`,
+          ]),
+          joinLines([
+            `Customer for shipment ${detail.shipment.shipmentCode}: ${labelOrMissing(contact.companyName || contact.contactName || detail.customer.name)}`,
+            `Phone: ${contact.primaryPhone}`,
+          ])
+        );
+      }
+    }
+    if (!deterministicAnswer) return missingBusinessContextResult(plan, candidate, toolsCalled, "requested_field_missing");
+    const answer = await maybePolishAnswer({ deterministicAnswer, queryType: "business_search", tone: "direct" });
+    const activeEntity = activeEntityFromBusinessCandidate(candidate, detail);
+    return relationResult({
+      plan,
+      answer,
+      toolsCalled,
+      sources: [
+        businessCandidateSource(candidate),
+        detail.customer?.id ? source("customer", { id: detail.customer.id, label: detail.customer.name || detail.customer.customerCode, url: detail.customer.actionUrl }) : null,
+        ...(detail.commercialCards || []).slice(0, 2).map(commercialCardSource),
+      ].filter(Boolean),
+      recordIds: [detail.shipment.id, detail.customer?.id, detail.commercialCard?.id].filter(Boolean),
+      activeEntity,
+      success: true,
+      reason: "answered_from_business_search",
+    });
+  }
+
+  if (candidate.type === "customer") {
+    toolsCalled.push("getCustomerDetailContext");
+    const detail = await getCustomerDetailContext(pool, context, { customerId: candidate.id });
+    if (!detail) return missingBusinessContextResult(plan, candidate, toolsCalled);
+    const deterministicAnswer = businessCustomerAnswer(plan, detail);
+    if (!deterministicAnswer) return missingBusinessContextResult(plan, candidate, toolsCalled, "requested_field_missing");
+    const answer = await maybePolishAnswer({ deterministicAnswer, queryType: "business_search", tone: "direct" });
+    const activeEntity = activeEntityFromBusinessCandidate(candidate, detail);
+    return relationResult({
+      plan,
+      answer,
+      toolsCalled,
+      sources: [
+        businessCandidateSource(candidate),
+        ...detail.shipments.slice(0, 3).map((shipment) => source("shipment", { id: shipment.id, label: `محموله ${shipment.shipmentCode}`, url: shipment.actionUrl })),
+        ...detail.commercialCards.slice(0, 2).map(commercialCardSource),
+      ],
+      recordIds: [detail.customer.id, ...detail.shipments.slice(0, 3).map((item) => item.id)].filter(Boolean),
+      activeEntity,
+      success: true,
+      reason: "answered_from_business_search",
+    });
+  }
+
+  toolsCalled.push("getCommercialCardContext");
+  const cardContext = await getCommercialCardContext(pool, context, {
+    cardRef: candidate.id || candidate.safeSummary?.displayName || candidate.safeSummary?.cardNumber,
+    limit: 3,
+  });
+  const deterministicAnswer = businessCommercialCardAnswer(plan, cardContext, candidate);
+  const answer = await maybePolishAnswer({ deterministicAnswer, queryType: "business_search", tone: "direct" });
+  return relationResult({
+    plan,
+    answer,
+    toolsCalled,
+    sources: [businessCandidateSource(candidate), ...(cardContext.cards || []).slice(0, 2).map(commercialCardSource)],
+    recordIds: [candidate.id, ...(cardContext.cards || []).slice(0, 2).map((item) => item.id)].filter(Boolean),
+    success: true,
+    reason: "answered_from_business_search",
+  });
+}
+
+async function runBusinessSearchPlan(pool, context, plan, toolsCalled = []) {
+  if (!plan.searchBusinessContext) return null;
+
+  toolsCalled.push("searchBusinessContext");
+  let searchResult = await searchBusinessContext(pool, context, {
+    queryTerms: plan.queryTerms,
+    candidateTypes: plan.candidateTypes,
+    requestedField: plan.requestedField,
+    limit: 8,
+  });
+  let candidates = searchResult.candidates || [];
+
+  if (!candidates.length && plan.alternateQueryTerms.length && toolsCalled.length < AGENTIC_CONTEXT_MAX_STEPS) {
+    toolsCalled.push("searchBusinessContext:alternate");
+    searchResult = await searchBusinessContext(pool, context, {
+      queryTerms: plan.alternateQueryTerms,
+      candidateTypes: plan.candidateTypes,
+      requestedField: plan.requestedField,
+      limit: 8,
+    });
+    candidates = searchResult.candidates || [];
+  }
+
+  if (!candidates.length) return businessNotFoundResult(plan, searchResult.searched, toolsCalled);
+
+  const strongCandidate = strongBusinessCandidate(candidates);
+  if (strongCandidate && toolsCalled.length < AGENTIC_CONTEXT_MAX_STEPS) {
+    return answerBusinessCandidate(pool, context, plan, strongCandidate, toolsCalled);
+  }
+
+  return businessAmbiguousResult(plan, candidates, toolsCalled);
+}
+
 async function runBoundedContextAgent(pool, context, message) {
   const plan = detectRelationIntent(message);
-  if (!isSupportedRelationIntent(plan.intent)) return null;
-  if (plan.confidence < 0.7 || !relationRef(plan)) return relationMissingRefResult(plan);
+  const businessPlan = planBusinessSearch(message);
+  if (businessPlan.intent === "identity") return identityResult(businessPlan);
+  if (!isSupportedRelationIntent(plan.intent)) return runBusinessSearchPlan(pool, context, businessPlan, []);
+  if (plan.confidence < 0.7 || !relationRef(plan)) {
+    return await runBusinessSearchPlan(pool, context, businessPlan, []) || relationMissingRefResult(plan);
+  }
 
   const toolsCalled = [];
   if (plan.intent.startsWith("shipment.")) {
     const resolved = await resolveSingleShipmentForPlan(pool, context, plan, toolsCalled);
     if (resolved.result) return resolved.result;
+    if (!resolved.shipment) {
+      return await runBusinessSearchPlan(pool, context, businessPlan, toolsCalled) || relationNotFoundResult(plan, "shipment", toolsCalled);
+    }
     if (toolsCalled.length >= AGENTIC_CONTEXT_MAX_STEPS) return relationMissingRefResult(plan);
 
     toolsCalled.push("getShipmentDetailContext");
@@ -1836,6 +2179,9 @@ async function runBoundedContextAgent(pool, context, message) {
 
   const resolved = await resolveSingleCustomerForPlan(pool, context, plan, toolsCalled);
   if (resolved.result) return resolved.result;
+  if (!resolved.customer) {
+    return await runBusinessSearchPlan(pool, context, businessPlan, toolsCalled) || relationNotFoundResult(plan, "customer", toolsCalled);
+  }
   if (toolsCalled.length >= AGENTIC_CONTEXT_MAX_STEPS) return relationMissingRefResult(plan);
 
   toolsCalled.push("getCustomerDetailContext");

@@ -34,6 +34,48 @@ function compactCode(value = "") {
   return normalizeAiLookupCode(value).replace(/[\s\-_/]+/g, "").toLowerCase();
 }
 
+function normalizeAiSearchText(value = "") {
+  return normalizeAiLookupCode(value)
+    .replace(/[يى]/g, "ی")
+    .replace(/[ك]/g, "ک")
+    .replace(/\u200c/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function safeLikePattern(value = "") {
+  const normalized = normalizeAiLookupCode(value)
+    .replace(/\u200c/g, " ")
+    .replace(/[%_\\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  return normalized ? `%${normalized}%` : "";
+}
+
+function businessSearchTerms(queryTerms = []) {
+  const sourceTerms = Array.isArray(queryTerms) ? queryTerms : [queryTerms];
+  const seen = new Set();
+  const terms = [];
+  for (const item of sourceTerms) {
+    const term = normalizeAiSearchText(item).replace(/[%_\\]/g, " ").replace(/\s+/g, " ").trim();
+    if (!term || term.length < 2 || seen.has(term)) continue;
+    seen.add(term);
+    terms.push(term);
+    if (terms.length >= 8) break;
+  }
+  return terms;
+}
+
+function maskBusinessNumber(value = "") {
+  const text = cleanText(value);
+  if (!text) return "";
+  const digits = text.replace(/\D/g, "");
+  if (digits.length < 6) return text;
+  return `${text.slice(0, Math.max(0, text.length - 4)).replace(/[^\s-]/g, "•")}${text.slice(-4)}`;
+}
+
 function cleanText(value, fallback = "") {
   if (value === undefined || value === null) return fallback;
   const text = String(value).trim();
@@ -705,6 +747,7 @@ export async function getCustomerDetailContext(pool, context, { customerId } = {
       customerCode: customer.customerCode,
       companyName: customer.companyName,
       contactName: customer.contactName,
+      phone: customer.phone,
       status: customer.status,
       actionUrl: customer.actionUrl,
     },
@@ -895,6 +938,139 @@ function archiveDto(row = {}) {
     archivedAt: isoTimestamp(row.archived_at),
     restoredAt: isoTimestamp(row.restored_at),
     actionUrl: "/archive",
+  };
+}
+
+function fieldText(value) {
+  if (Array.isArray(value)) return value.map(fieldText).filter(Boolean).join(" ");
+  return normalizeAiSearchText(value);
+}
+
+function businessMatchedFields(fields = {}, terms = []) {
+  const matched = [];
+  for (const [field, value] of Object.entries(fields)) {
+    const text = fieldText(value);
+    if (!text) continue;
+    if (terms.some((term) => text.includes(term))) matched.push(field);
+  }
+  return matched;
+}
+
+function businessMatchedTermCount(fields = {}, terms = []) {
+  const haystack = fieldText(Object.values(fields));
+  return terms.filter((term) => haystack.includes(term)).length;
+}
+
+function businessExactMatchCount(fields = {}, terms = []) {
+  return Object.values(fields)
+    .map(fieldText)
+    .filter(Boolean)
+    .filter((value) => terms.some((term) => value === term || compactCode(value) === compactCode(term)))
+    .length;
+}
+
+function businessCandidateScore({ fields = {}, terms = [], typePriority = 0 }) {
+  const matchedFields = businessMatchedFields(fields, terms);
+  const termHits = businessMatchedTermCount(fields, terms);
+  const exactHits = businessExactMatchCount(fields, terms);
+  const score = 0.28 + typePriority + matchedFields.length * 0.08 + termHits * 0.1 + exactHits * 0.22;
+  return Math.min(0.99, Number(score.toFixed(2)));
+}
+
+function shipmentBusinessCandidate(row = {}, terms = [], typePriority = 0) {
+  const goodsDescription = cleanText(row.profile_goods_text) || cleanText(row.legacy_goods_text);
+  const currentStatus = cleanText(row.status_text) || cleanText(row.current_stage) || cleanText(row.status);
+  const customerName = customerDisplayName(row);
+  const fields = {
+    shipment_code: row.shipment_code,
+    reference_number: row.reference_number,
+    tracking_number: row.tracking_number,
+    customer_name: customerName,
+    customer_code: row.customer_code,
+    goods_description: goodsDescription,
+    origin: row.origin,
+    destination: row.destination,
+    status: currentStatus,
+    consignee_name: row.consignee_name,
+    shipper_name: row.shipper_name,
+    container_number: row.container_number,
+    commercial_card: row.commercial_card_display_name,
+    order_registration_number: row.order_registration_number,
+  };
+  return {
+    type: "shipment",
+    id: cleanText(row.id),
+    label: [
+      `محموله ${cleanText(row.shipment_code) || cleanText(row.id)}`,
+      customerName ? `مشتری ${customerName}` : "",
+      goodsDescription ? `کالا ${goodsDescription.slice(0, 80)}` : "",
+    ].filter(Boolean).join(" / "),
+    matchedFields: businessMatchedFields(fields, terms),
+    score: businessCandidateScore({ fields, terms, typePriority }),
+    safeSummary: {
+      shipmentCode: cleanText(row.shipment_code) || cleanText(row.id),
+      customerName,
+      customerCode: cleanText(row.customer_code),
+      status: currentStatus,
+      goodsDescription: goodsDescription.slice(0, 180),
+      origin: cleanText(row.origin),
+      destination: cleanText(row.destination),
+    },
+  };
+}
+
+function customerBusinessCandidate(row = {}, terms = [], typePriority = 0, requestedField = "summary") {
+  const name = cleanText(row.company_name) || cleanText(row.contact_name) || cleanText(row.customer_code) || cleanText(row.id);
+  const fields = {
+    customer_code: row.customer_code,
+    company_name: row.company_name,
+    contact_name: row.contact_name,
+    phone: row.phone,
+    referrer: row.referrer,
+    status: row.status,
+  };
+  return {
+    type: "customer",
+    id: cleanText(row.id),
+    label: [`مشتری ${name}`, cleanText(row.customer_code)].filter(Boolean).join(" / "),
+    matchedFields: businessMatchedFields(fields, terms),
+    score: businessCandidateScore({ fields, terms, typePriority }),
+    safeSummary: {
+      customerCode: cleanText(row.customer_code),
+      customerName: name,
+      status: cleanText(row.status),
+      ...(requestedField === "customer_phone" ? { phone: cleanText(row.phone) } : {}),
+    },
+  };
+}
+
+function commercialCardBusinessCandidate(row = {}, terms = [], typePriority = 0) {
+  const card = commercialCardDto(row);
+  const label = cleanText(card.displayName) || cleanText(card.holderName) || cleanText(card.companyName) || cleanText(card.responsibleName) || "کارت بازرگانی";
+  const fields = {
+    item_id: card.id,
+    display_name: card.displayName,
+    holder_name: card.holderName,
+    company_name: card.companyName,
+    responsible_name: card.responsibleName,
+    card_number: card.cardNumber,
+    national_id: card.nationalId,
+    status: card.status,
+  };
+  return {
+    type: "commercial_card",
+    id: cleanText(card.id) || cleanText(row.item_id),
+    label: `کارت بازرگانی ${label}`,
+    matchedFields: businessMatchedFields(fields, terms),
+    score: businessCandidateScore({ fields, terms, typePriority }),
+    safeSummary: {
+      displayName: label,
+      holderName: cleanText(card.holderName),
+      companyName: cleanText(card.companyName),
+      responsibleName: cleanText(card.responsibleName),
+      cardNumber: maskBusinessNumber(card.cardNumber),
+      status: cleanText(card.status),
+    },
   };
 }
 
@@ -1298,6 +1474,214 @@ export async function searchCommercialCards(pool, context, { query = "", limit =
     [context.organizationId, `%${q}%`, Math.min(Math.max(Number(limit) || 5, 1), 10)]
   );
   return result.rows.map(commercialCardDto);
+}
+
+async function searchBusinessShipments(pool, context, { terms, patterns, compactTerms, limit, typePriority }) {
+  const result = await pool.query(
+    `SELECT
+       s.id,
+       s.shipment_code,
+       s.customer_id,
+       s.customer_name,
+       s.status,
+       s.origin,
+       s.destination,
+       s.updated_at,
+       s.legacy_data->>'trackingNumber' AS tracking_number,
+       s.legacy_data->>'referenceNumber' AS reference_number,
+       c.customer_code,
+       c.company_name AS customer_company_name,
+       c.contact_name AS customer_contact_name,
+       p.sections_json #>> '{base,currentStage}' AS current_stage,
+       p.sections_json #>> '{base,statusText}' AS status_text,
+       p.sections_json #>> '{base,consigneeName}' AS consignee_name,
+       p.sections_json #>> '{base,shipperName}' AS shipper_name,
+       p.sections_json #>> '{base,commercialCardDisplayName}' AS commercial_card_display_name,
+       p.sections_json #>> '{base,orderRegistrationNumber}' AS order_registration_number,
+       k.container_summary,
+       k.cotage_number,
+       k.bill_of_lading_number,
+       k.goods_summary,
+       (
+         SELECT string_agg(CONCAT_WS(' ', goods.item->>'description', goods.item->>'tariffCode', goods.item->>'tariffName'), ' ')
+         FROM jsonb_array_elements(COALESCE(p.sections_json #> '{goods,goodsRows}', '[]'::jsonb)) AS goods(item)
+       ) AS profile_goods_text,
+       (
+         SELECT string_agg(CONCAT_WS(' ', goods.item->>'description', goods.item->>'tariffCode', goods.item->>'tariffName'), ' ')
+         FROM jsonb_array_elements(COALESCE(s.legacy_data #> '{goodsRows}', '[]'::jsonb)) AS goods(item)
+       ) AS legacy_goods_text
+     FROM shipments s
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
+      AND c.archived_at IS NULL
+     LEFT JOIN shipment_v2_profiles p
+       ON p.shipment_id = s.id
+      AND p.organization_id = s.organization_id
+     LEFT JOIN shipment_kootaj_details k
+       ON k.shipment_id = s.id
+      AND k.organization_id = s.organization_id
+     WHERE s.organization_id = $1
+       AND s.archived_at IS NULL
+       AND s.exited_archived_at IS NULL
+       AND (
+         lower(COALESCE(s.id, '')) = ANY($2::text[])
+         OR lower(COALESCE(s.shipment_code, '')) = ANY($2::text[])
+         OR lower(COALESCE(s.legacy_data->>'trackingNumber', '')) = ANY($2::text[])
+         OR lower(COALESCE(s.legacy_data->>'referenceNumber', '')) = ANY($2::text[])
+         OR regexp_replace(lower(COALESCE(s.shipment_code, '')), '[^a-z0-9]', '', 'g') = ANY($4::text[])
+         OR COALESCE(s.shipment_code, '') ILIKE ANY($3::text[])
+         OR COALESCE(s.customer_name, '') ILIKE ANY($3::text[])
+         OR COALESCE(s.origin, '') ILIKE ANY($3::text[])
+         OR COALESCE(s.destination, '') ILIKE ANY($3::text[])
+         OR COALESCE(s.status, '') ILIKE ANY($3::text[])
+         OR COALESCE(c.customer_code, '') ILIKE ANY($3::text[])
+         OR COALESCE(c.company_name, '') ILIKE ANY($3::text[])
+         OR COALESCE(c.contact_name, '') ILIKE ANY($3::text[])
+         OR COALESCE(p.sections_json #>> '{base,currentStage}', '') ILIKE ANY($3::text[])
+         OR COALESCE(p.sections_json #>> '{base,statusText}', '') ILIKE ANY($3::text[])
+         OR COALESCE(p.sections_json #>> '{base,consigneeName}', '') ILIKE ANY($3::text[])
+         OR COALESCE(p.sections_json #>> '{base,shipperName}', '') ILIKE ANY($3::text[])
+         OR COALESCE(p.sections_json #>> '{base,commercialCardDisplayName}', '') ILIKE ANY($3::text[])
+         OR COALESCE(p.sections_json #>> '{base,orderRegistrationNumber}', '') ILIKE ANY($3::text[])
+         OR COALESCE(k.container_summary, '') ILIKE ANY($3::text[])
+         OR COALESCE(k.cotage_number, '') ILIKE ANY($3::text[])
+         OR COALESCE(k.bill_of_lading_number, '') ILIKE ANY($3::text[])
+         OR COALESCE(k.goods_summary, '') ILIKE ANY($3::text[])
+         OR EXISTS (
+           SELECT 1
+           FROM jsonb_array_elements(COALESCE(p.sections_json #> '{goods,goodsRows}', '[]'::jsonb)) AS goods(item)
+           WHERE COALESCE(goods.item->>'description', '') ILIKE ANY($3::text[])
+              OR COALESCE(goods.item->>'tariffCode', '') ILIKE ANY($3::text[])
+              OR COALESCE(goods.item->>'tariffName', '') ILIKE ANY($3::text[])
+         )
+         OR EXISTS (
+           SELECT 1
+           FROM jsonb_array_elements(COALESCE(s.legacy_data #> '{goodsRows}', '[]'::jsonb)) AS goods(item)
+           WHERE COALESCE(goods.item->>'description', '') ILIKE ANY($3::text[])
+              OR COALESCE(goods.item->>'tariffCode', '') ILIKE ANY($3::text[])
+              OR COALESCE(goods.item->>'tariffName', '') ILIKE ANY($3::text[])
+         )
+       )
+     ORDER BY s.updated_at DESC, s.created_at DESC
+     LIMIT $5`,
+    [context.organizationId, terms, patterns, compactTerms, limit]
+  );
+  return result.rows.map((row) => shipmentBusinessCandidate(row, terms, typePriority));
+}
+
+async function searchBusinessCustomers(pool, context, { terms, patterns, compactTerms, limit, typePriority, requestedField }) {
+  const result = await pool.query(
+    `SELECT id, customer_code, company_name, contact_name, phone, referrer, status, updated_at
+     FROM customers
+     WHERE organization_id = $1
+       AND archived_at IS NULL
+       AND (
+         lower(COALESCE(id, '')) = ANY($2::text[])
+         OR lower(COALESCE(customer_code, '')) = ANY($2::text[])
+         OR regexp_replace(lower(COALESCE(customer_code, '')), '[^a-z0-9]', '', 'g') = ANY($4::text[])
+         OR COALESCE(customer_code, '') ILIKE ANY($3::text[])
+         OR COALESCE(company_name, '') ILIKE ANY($3::text[])
+         OR COALESCE(contact_name, '') ILIKE ANY($3::text[])
+         OR COALESCE(phone, '') ILIKE ANY($3::text[])
+         OR COALESCE(referrer, '') ILIKE ANY($3::text[])
+       )
+     ORDER BY updated_at DESC
+     LIMIT $5`,
+    [context.organizationId, terms, patterns, compactTerms, limit]
+  );
+  return result.rows.map((row) => customerBusinessCandidate(row, terms, typePriority, requestedField));
+}
+
+async function searchBusinessCommercialCards(pool, context, { terms, patterns, limit, typePriority }) {
+  const result = await pool.query(
+    `SELECT DISTINCT ON (organization_id, item_id)
+       item_id,
+       data,
+       updated_at
+     FROM user_records
+     WHERE organization_id = $1
+       AND collection = 'commercialCards'
+       AND COALESCE(data->>'isArchived', 'false') <> 'true'
+       AND COALESCE(data->>'archivedAt', '') = ''
+       AND (
+         lower(COALESCE(item_id, '')) = ANY($2::text[])
+         OR lower(COALESCE(data->>'id', '')) = ANY($2::text[])
+         OR COALESCE(item_id, '') ILIKE ANY($3::text[])
+         OR COALESCE(data->>'id', '') ILIKE ANY($3::text[])
+         OR COALESCE(data->>'holderName', '') ILIKE ANY($3::text[])
+         OR COALESCE(data->>'companyName', '') ILIKE ANY($3::text[])
+         OR COALESCE(data->>'responsibleName', '') ILIKE ANY($3::text[])
+         OR COALESCE(data->>'cardNumber', '') ILIKE ANY($3::text[])
+         OR COALESCE(data->>'nationalId', '') ILIKE ANY($3::text[])
+         OR COALESCE(data->>'status', '') ILIKE ANY($3::text[])
+       )
+     ORDER BY organization_id, item_id, updated_at DESC
+     LIMIT $4`,
+    [context.organizationId, terms, patterns, limit]
+  );
+  return result.rows.map((row) => commercialCardBusinessCandidate(row, terms, typePriority));
+}
+
+export async function searchBusinessContext(
+  pool,
+  context,
+  { queryTerms = [], candidateTypes = [], requestedField = "summary", limit = 8 } = {}
+) {
+  requireCeoToolContext(context);
+  const terms = businessSearchTerms(queryTerms);
+  if (!terms.length) {
+    return {
+      candidates: [],
+      searched: { queryTerms: [], candidateTypes: [], requestedField },
+    };
+  }
+
+  const patternTerms = [...new Set(terms.flatMap((term) => [
+    term,
+    term.replace(/ی/g, "ي").replace(/ک/g, "ك"),
+  ]))];
+  const patterns = patternTerms.map(safeLikePattern).filter(Boolean);
+  if (!patterns.length) {
+    return {
+      candidates: [],
+      searched: { queryTerms: terms, candidateTypes: [], requestedField },
+    };
+  }
+
+  const allowedTypes = new Set(["shipment", "customer", "commercial_card"]);
+  const requestedTypes = Array.isArray(candidateTypes) && candidateTypes.length
+    ? candidateTypes.filter((type) => allowedTypes.has(type))
+    : ["shipment", "customer", "commercial_card"];
+  const boundedLimit = Math.min(Math.max(Number(limit) || 8, 1), 12);
+  const perTypeLimit = Math.min(Math.max(boundedLimit, 5), 12);
+  const compactTerms = terms.map(compactCode).filter(Boolean);
+  const typePriority = (type) => {
+    const index = requestedTypes.indexOf(type);
+    return index < 0 ? 0 : Math.max(0, 0.09 - index * 0.03);
+  };
+
+  const [shipments, customers, commercialCards] = await Promise.all([
+    requestedTypes.includes("shipment")
+      ? searchBusinessShipments(pool, context, { terms, patterns, compactTerms, limit: perTypeLimit, typePriority: typePriority("shipment") })
+      : Promise.resolve([]),
+    requestedTypes.includes("customer")
+      ? searchBusinessCustomers(pool, context, { terms, patterns, compactTerms, limit: perTypeLimit, typePriority: typePriority("customer"), requestedField })
+      : Promise.resolve([]),
+    requestedTypes.includes("commercial_card")
+      ? searchBusinessCommercialCards(pool, context, { terms, patterns, limit: perTypeLimit, typePriority: typePriority("commercial_card") })
+      : Promise.resolve([]),
+  ]);
+
+  const candidates = [...shipments, ...customers, ...commercialCards]
+    .filter((candidate) => candidate.id && candidate.matchedFields.length)
+    .sort((left, right) => right.score - left.score || right.matchedFields.length - left.matchedFields.length)
+    .slice(0, boundedLimit);
+
+  return {
+    candidates,
+    searched: { queryTerms: terms, candidateTypes: requestedTypes, requestedField },
+  };
 }
 
 function uniqueCommercialCards(cards = []) {
