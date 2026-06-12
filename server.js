@@ -64,8 +64,6 @@ import {
   getShipmentCustomerAccess,
   getShipmentRecord,
   getTaskRecord,
-  getChequeRecord,
-  getComplianceMeetingRecord,
   getAdminOverview,
   getAppErrorLog,
   getSmsAnalytics,
@@ -75,10 +73,7 @@ import {
   getOrganizationDetail,
   getOrganizationBilling,
   getOrganizationSubscription,
-  getQuotationRecord,
   getUserById,
-  listExitedShipmentRecords,
-  getShipmentOperationalRecord,
   getUserByEmail,
   getUserByPhone,
   getUserPermissions,
@@ -95,17 +90,13 @@ import {
   listChatThreadMemberIds,
   listChatThreads,
   listContactRequests,
-  listCustomerRelated,
   listCustomersDetailed,
   listDocuments,
   listFeatureRecords,
-  listCheques,
-  listComplianceMeetings,
   listDueSoonCheques,
   listAppErrorLogs,
   listBillingInvoices,
   listBillingPayments,
-  listQuotations,
   listRoles,
   listOrganizationMembers,
   listSignupRequests,
@@ -233,6 +224,25 @@ import { registerShipmentFormTemplateRoutes } from "./src/server/routes/shipment
 import { registerShipmentWorkflowTemplateRoutes } from "./src/server/routes/shipment-workflow-template-routes.js";
 import { registerUserRoutes } from "./src/server/routes/user-routes.js";
 import { registerRatesRoutes } from "./src/server/routes/rates-routes.js";
+import { registerChequeReadRoutes } from "./src/server/routes/cheque-read-routes.js";
+import { registerQuotationReadRoutes } from "./src/server/routes/quotation-read-routes.js";
+import {
+  getChequeRecord as getChequeRecordFromRepository,
+  listCheques as listChequesFromRepository,
+} from "./src/server/repositories/cheques.js";
+import {
+  getComplianceMeetingRecord as getComplianceMeetingRecordFromRepository,
+  listComplianceMeetings as listComplianceMeetingsFromRepository,
+} from "./src/server/repositories/compliance-meetings.js";
+import { listCustomerRelated as listCustomerRelatedFromRepository } from "./src/server/repositories/customers.js";
+import {
+  getShipmentOperationalRecord as getShipmentOperationalRecordFromRepository,
+  listExitedShipmentRecords as listExitedShipmentRecordsFromRepository,
+} from "./src/server/repositories/shipments.js";
+import {
+  getQuotationRecord as getQuotationRecordFromRepository,
+  listQuotations as listQuotationsFromRepository,
+} from "./src/server/repositories/quotations.js";
 import { startShipmentWorkflow as startShipmentWorkflowRecord } from "./src/server/repositories/shipment-progress.js";
 import { parseRequestValue } from "./src/server/validation.js";
 import {
@@ -252,6 +262,36 @@ import { runSmsWorkerOnce, startSmsWorker } from "./src/server/sms-worker.js";
 import { startCurrencyRatesWorker } from "./src/server/rates-worker.js";
 import { sendSmsMessage } from "./src/server/sms-provider.js";
 import { AI_MESSAGES, runAiChat } from "./src/server/ai/ai-orchestrator.js";
+
+const listExitedShipmentRecords = ({ organizationId, filters = {} } = {}) =>
+  listExitedShipmentRecordsFromRepository(pool, { organizationId, filters });
+const getShipmentOperationalRecord = (shipmentId, { organizationId, includeCustomerPrivateDetails = true } = {}) =>
+  getShipmentOperationalRecordFromRepository(pool, shipmentId, { organizationId, includeCustomerPrivateDetails });
+const listCustomerRelated = (id, type, { organizationId, includePrivateDetails = true } = {}) =>
+  listCustomerRelatedFromRepository(pool, id, type, { organizationId, includePrivateDetails });
+const listQuotations = ({
+  ownerUserId,
+  customerId,
+  organizationId,
+  includeArchived = false,
+  includeCustomerPrivateDetails = true,
+} = {}) =>
+  listQuotationsFromRepository(pool, {
+    ownerUserId,
+    customerId,
+    organizationId,
+    includeArchived,
+    includeCustomerPrivateDetails,
+  });
+const getQuotationRecord = (id, { organizationId, includeCustomerPrivateDetails = true } = {}) =>
+  getQuotationRecordFromRepository(pool, id, { organizationId, includeCustomerPrivateDetails });
+const listCheques = ({ ownerUserId, organizationId, includeArchived = false } = {}) =>
+  listChequesFromRepository(pool, { ownerUserId, organizationId, includeArchived });
+const getChequeRecord = (id, { organizationId } = {}) => getChequeRecordFromRepository(pool, id, { organizationId });
+const listComplianceMeetings = ({ ownerUserId, assignedToId, organizationId, includeArchived = false } = {}) =>
+  listComplianceMeetingsFromRepository(pool, { ownerUserId, assignedToId, organizationId, includeArchived });
+const getComplianceMeetingRecord = (id, { organizationId } = {}) =>
+  getComplianceMeetingRecordFromRepository(pool, id, { organizationId });
 
 const SESSION_COOKIE = "logisticplus_session";
 const PASSWORD_LOGIN_LIMIT = { limit: 5, windowMs: 15 * 60 * 1000 };
@@ -3024,23 +3064,12 @@ async function startServer() {
     }
   });
 
-  app.get("/api/quotations", async (req, res) => {
-    try {
-      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "quotations list API");
-      if (!tenantRequest) return;
-      const { user, organizationId } = tenantRequest;
-      await requirePermission(user, "quotations.manage");
-      const data = await listQuotations({
-        organizationId,
-        includeArchived: req.query.includeArchived === "true",
-        includeCustomerPrivateDetails: user.role === "CEO",
-      });
-      res.json({ ok: true, data });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("List quotations failed:", error);
-      createApiError(res, 500, "QUOTATIONS_LIST_FAILED", "Could not load quotations.");
-    }
+  registerQuotationReadRoutes(app, {
+    createApiError,
+    getQuotationRecord,
+    listQuotations,
+    requireAuthenticatedTenantUser,
+    requirePermission,
   });
 
   app.post("/api/quotations", async (req, res) => {
@@ -3064,24 +3093,6 @@ async function startServer() {
       if (error.code === "23505") return createApiError(res, 409, "DUPLICATE_QUOTATION", "Quotation number already exists.");
       console.error("Create quotation failed:", error);
       createApiError(res, 500, "QUOTATION_CREATE_FAILED", "Could not create quotation.");
-    }
-  });
-
-  app.get("/api/quotations/:id", async (req, res) => {
-    try {
-      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "quotation get API");
-      if (!tenantRequest) return;
-      const { user, organizationId } = tenantRequest;
-      await requirePermission(user, "quotations.manage");
-      const data = await getQuotationRecord(req.params.id, {
-        organizationId,
-        includeCustomerPrivateDetails: user.role === "CEO",
-      });
-      if (!data) return createApiError(res, 404, "NOT_FOUND", "Quotation was not found.");
-      res.json({ ok: true, data });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "QUOTATION_GET_FAILED", "Could not load quotation.");
     }
   });
 
@@ -4319,42 +4330,13 @@ async function startServer() {
     }
   });
 
-  app.get("/api/cheques/due-soon", async (req, res) => {
-    try {
-      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "due cheques API");
-      if (!tenantRequest) return;
-      const { user, organizationId } = tenantRequest;
-      await requirePermission(user, "cheques.manage");
-      const data = await listDueSoonCheques({
-        organizationId,
-        ownerUserId: user.id,
-        days: req.query.days || 7,
-      });
-      res.json({ ok: true, data });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("List due soon cheques failed:", error);
-      createApiError(res, 500, "LIST_DUE_CHEQUES_FAILED", "Could not load due cheques.");
-    }
-  });
-
-  app.get("/api/cheques", async (req, res) => {
-    try {
-      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheques list API");
-      if (!tenantRequest) return;
-      const { user, organizationId } = tenantRequest;
-      await requirePermission(user, "cheques.manage");
-      const data = await listCheques({
-        organizationId,
-        ownerUserId: user.id,
-        includeArchived: req.query.includeArchived === "true",
-      });
-      res.json({ ok: true, data });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("List cheques failed:", error);
-      createApiError(res, 500, "LIST_CHEQUES_FAILED", "Could not load cheques.");
-    }
+  registerChequeReadRoutes(app, {
+    createApiError,
+    getChequeRecord,
+    listCheques,
+    listDueSoonCheques,
+    requireAuthenticatedTenantUser,
+    requirePermission,
   });
 
   app.post("/api/cheques", async (req, res) => {
@@ -4381,22 +4363,6 @@ async function startServer() {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       console.error("Create cheque failed:", error);
       createApiError(res, 500, "CREATE_CHEQUE_FAILED", "Could not create cheque.");
-    }
-  });
-
-  app.get("/api/cheques/:id", async (req, res) => {
-    try {
-      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheque get API");
-      if (!tenantRequest) return;
-      const { user, organizationId } = tenantRequest;
-      await requirePermission(user, "cheques.manage");
-      const data = await getChequeRecord(req.params.id, { organizationId });
-      if (!data) return createApiError(res, 404, "NOT_FOUND", "Cheque was not found.");
-      res.json({ ok: true, data });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("Get cheque failed:", error);
-      createApiError(res, 500, "GET_CHEQUE_FAILED", "Could not load cheque.");
     }
   });
 
