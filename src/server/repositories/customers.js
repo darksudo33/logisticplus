@@ -1,4 +1,7 @@
-import { organizationScopeClause } from "../tenant-scope.js";
+import { organizationScopeClause, requireOrganizationScope } from "../tenant-scope.js";
+import { listCheques } from "./cheques.js";
+import { listDocuments } from "./documents.js";
+import { listQuotations } from "./quotations.js";
 
 export function canViewCustomerPrivateDetails(user) {
   return String(user?.role || user || "").toUpperCase() === "CEO";
@@ -189,4 +192,56 @@ export async function getCustomerRecord(pool, id, { organizationId, includePriva
     ? await listCustomerPhoneNumbers(pool, { organizationId, customerId: row.id })
     : [];
   return toUiCustomer(row, { includePrivateDetails, phoneNumbers });
+}
+
+function toCustomerRelatedShipment(row) {
+  const legacy = row.legacy_data || {};
+  return {
+    id: row.id,
+    trackingNumber: row.shipment_code,
+    containerNumber: legacy.containerNumber || "",
+    customerId: row.customer_id,
+    customerName: row.customer_name,
+    status: row.status,
+    origin: row.origin,
+    destination: row.destination,
+    estimatedDelivery: row.estimated_delivery_at,
+    isArchived: Boolean(row.archived_at),
+    createdAt: row.created_at,
+  };
+}
+
+export async function listCustomerRelated(pool, id, type, { organizationId, includePrivateDetails = true } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listCustomerRelated");
+  if (!(await getCustomerRecord(pool, id, { organizationId }))) return null;
+  if (type === "shipments") {
+    const result = await pool.query(
+      `SELECT * FROM shipments
+       WHERE customer_id = $1 AND organization_id = $2
+         AND exited_archived_at IS NULL
+       ORDER BY updated_at DESC`,
+      [id, scopedOrganizationId]
+    );
+    return result.rows.map(toCustomerRelatedShipment);
+  }
+  if (type === "documents") {
+    return listDocuments(pool, { customerId: id, organizationId, includeArchived: true });
+  }
+  if (type === "quotations") {
+    return listQuotations(pool, {
+      customerId: id,
+      organizationId,
+      includeArchived: true,
+      includeCustomerPrivateDetails: includePrivateDetails,
+    });
+  }
+  if (type === "cheques") {
+    return listCheques(pool, {
+      customerId: id,
+      organizationId,
+      includeArchived: true,
+      includeCreatedAtTieBreaker: false,
+    });
+  }
+  return [];
 }
