@@ -224,6 +224,7 @@ import { registerShipmentFormTemplateRoutes } from "./src/server/routes/shipment
 import { registerShipmentWorkflowTemplateRoutes } from "./src/server/routes/shipment-workflow-template-routes.js";
 import { registerUserRoutes } from "./src/server/routes/user-routes.js";
 import { registerRatesRoutes } from "./src/server/routes/rates-routes.js";
+import { registerChequeReadRoutes } from "./src/server/routes/cheque-read-routes.js";
 import { registerQuotationReadRoutes } from "./src/server/routes/quotation-read-routes.js";
 import {
   getChequeRecord as getChequeRecordFromRepository,
@@ -4329,42 +4330,13 @@ async function startServer() {
     }
   });
 
-  app.get("/api/cheques/due-soon", async (req, res) => {
-    try {
-      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "due cheques API");
-      if (!tenantRequest) return;
-      const { user, organizationId } = tenantRequest;
-      await requirePermission(user, "cheques.manage");
-      const data = await listDueSoonCheques({
-        organizationId,
-        ownerUserId: user.id,
-        days: req.query.days || 7,
-      });
-      res.json({ ok: true, data });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("List due soon cheques failed:", error);
-      createApiError(res, 500, "LIST_DUE_CHEQUES_FAILED", "Could not load due cheques.");
-    }
-  });
-
-  app.get("/api/cheques", async (req, res) => {
-    try {
-      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheques list API");
-      if (!tenantRequest) return;
-      const { user, organizationId } = tenantRequest;
-      await requirePermission(user, "cheques.manage");
-      const data = await listCheques({
-        organizationId,
-        ownerUserId: user.id,
-        includeArchived: req.query.includeArchived === "true",
-      });
-      res.json({ ok: true, data });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("List cheques failed:", error);
-      createApiError(res, 500, "LIST_CHEQUES_FAILED", "Could not load cheques.");
-    }
+  registerChequeReadRoutes(app, {
+    createApiError,
+    getChequeRecord,
+    listCheques,
+    listDueSoonCheques,
+    requireAuthenticatedTenantUser,
+    requirePermission,
   });
 
   app.post("/api/cheques", async (req, res) => {
@@ -4391,22 +4363,6 @@ async function startServer() {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       console.error("Create cheque failed:", error);
       createApiError(res, 500, "CREATE_CHEQUE_FAILED", "Could not create cheque.");
-    }
-  });
-
-  app.get("/api/cheques/:id", async (req, res) => {
-    try {
-      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheque get API");
-      if (!tenantRequest) return;
-      const { user, organizationId } = tenantRequest;
-      await requirePermission(user, "cheques.manage");
-      const data = await getChequeRecord(req.params.id, { organizationId });
-      if (!data) return createApiError(res, 404, "NOT_FOUND", "Cheque was not found.");
-      res.json({ ok: true, data });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("Get cheque failed:", error);
-      createApiError(res, 500, "GET_CHEQUE_FAILED", "Could not load cheque.");
     }
   });
 
