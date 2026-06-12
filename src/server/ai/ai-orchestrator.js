@@ -45,13 +45,17 @@ import {
   getShipmentRoute,
   getShipmentsMissingDailyUpdate,
   getShipmentWorkflowStatus,
+  getTaskBasicInfo,
   getTasksByCustomer,
   getTasksByShipment,
   getTasksDueToday,
   getUnreadShipmentChats,
+  getWorkflowBlockerBasicInfo,
   normalizeAiLookupCode,
   getBusinessEntityContacts,
   getCommercialCardContext,
+  getChequeBasicInfo,
+  getDocumentBasicInfo,
   resolveCustomerRef,
   resolveShipmentRef,
   searchBusinessContext,
@@ -1664,20 +1668,48 @@ function businessCandidateSource(candidate = {}) {
     return source("shipment", {
       id: candidate.id,
       label: candidate.safeSummary?.shipmentCode ? `محموله ${candidate.safeSummary.shipmentCode}` : candidate.label,
-      url: `/shipments/${candidate.id}`,
+      url: candidate.actionUrl || `/shipments/${candidate.id}`,
     });
   }
   if (candidate.type === "customer") {
     return source("customer", {
       id: candidate.id,
       label: candidate.safeSummary?.customerName || candidate.safeSummary?.customerCode || candidate.label,
-      url: `/customers/${candidate.id}`,
+      url: candidate.actionUrl || `/customers/${candidate.id}`,
     });
   }
-  return source("commercial_card", {
+  if (candidate.type === "commercial_card") {
+    return source("commercial_card", {
+      id: candidate.id,
+      label: candidate.safeSummary?.displayName || candidate.label,
+      url: candidate.actionUrl || "/daily-status",
+    });
+  }
+  if (candidate.type === "document") {
+    return source("document", {
+      id: candidate.id,
+      label: candidate.safeSummary?.title || candidate.safeSummary?.fileName || candidate.label,
+      url: candidate.actionUrl || "/documents",
+    });
+  }
+  if (candidate.type === "workflow_item") {
+    return source("workflow_item", {
+      id: candidate.id,
+      label: candidate.safeSummary?.title || candidate.safeSummary?.blockerCode || candidate.label,
+      url: candidate.actionUrl || candidate.safeSummary?.actionUrl || "/tasks",
+    });
+  }
+  if (candidate.type === "cheque") {
+    return source("cheque", {
+      id: candidate.id,
+      label: candidate.safeSummary?.chequeNumber ? `چک ${candidate.safeSummary.chequeNumber}` : candidate.label,
+      url: candidate.actionUrl || "/cheques",
+    });
+  }
+  return source("business_record", {
     id: candidate.id,
-    label: candidate.safeSummary?.displayName || candidate.label,
-    url: "/daily-status",
+    label: candidate.label || "رکورد تجاری",
+    url: candidate.actionUrl,
   });
 }
 
@@ -1708,7 +1740,8 @@ function businessOptionBlock(candidate = {}, index = 0, language = "fa") {
         : `Status: ${labelOrMissing(candidate.safeSummary?.status)}`,
     ]);
   }
-  return joinLines([
+  if (candidate.type === "commercial_card") {
+    return joinLines([
     `${optionNumber}) ${language === "fa" ? "کارت بازرگانی" : "Commercial card"} ${labelOrMissing(candidate.safeSummary?.displayName)}`,
     language === "fa"
       ? `شماره کارت: ${labelOrMissing(candidate.safeSummary?.cardNumber)}`
@@ -1716,6 +1749,43 @@ function businessOptionBlock(candidate = {}, index = 0, language = "fa") {
     language === "fa"
       ? `وضعیت: ${labelOrMissing(candidate.safeSummary?.status)}`
       : `Status: ${labelOrMissing(candidate.safeSummary?.status)}`,
+    ]);
+  }
+  if (candidate.type === "document") {
+    return joinLines([
+      `${optionNumber}) ${language === "fa" ? "سند" : "Document"} ${labelOrMissing(candidate.safeSummary?.title || candidate.label)}`,
+      candidate.safeSummary?.shipmentCode
+        ? (language === "fa" ? `کد محموله: ${candidate.safeSummary.shipmentCode}` : `Shipment code: ${candidate.safeSummary.shipmentCode}`)
+        : "",
+      candidate.safeSummary?.customerCode
+        ? (language === "fa" ? `کد مشتری: ${candidate.safeSummary.customerCode}` : `Customer code: ${candidate.safeSummary.customerCode}`)
+        : "",
+    ]);
+  }
+  if (candidate.type === "workflow_item") {
+    return joinLines([
+      `${optionNumber}) ${language === "fa" ? "کار/مرحله" : "Workflow item"} ${labelOrMissing(candidate.safeSummary?.title || candidate.safeSummary?.blockerCode || candidate.label)}`,
+      candidate.safeSummary?.shipmentCode
+        ? (language === "fa" ? `کد محموله: ${candidate.safeSummary.shipmentCode}` : `Shipment code: ${candidate.safeSummary.shipmentCode}`)
+        : "",
+      language === "fa"
+        ? `وضعیت: ${labelOrMissing(candidate.safeSummary?.status)}`
+        : `Status: ${labelOrMissing(candidate.safeSummary?.status)}`,
+    ]);
+  }
+  if (candidate.type === "cheque") {
+    return joinLines([
+      `${optionNumber}) ${language === "fa" ? "چک" : "Cheque"} ${labelOrMissing(candidate.safeSummary?.chequeNumber || candidate.label)}`,
+      language === "fa"
+        ? `بانک: ${labelOrMissing(candidate.safeSummary?.bankName)}`
+        : `Bank: ${labelOrMissing(candidate.safeSummary?.bankName)}`,
+      language === "fa"
+        ? `وضعیت: ${labelOrMissing(candidate.safeSummary?.status)}`
+        : `Status: ${labelOrMissing(candidate.safeSummary?.status)}`,
+    ]);
+  }
+  return joinLines([
+    `${optionNumber}) ${labelOrMissing(candidate.label)}`,
   ]);
 }
 
@@ -1758,7 +1828,15 @@ function businessAmbiguousResult(plan, candidates, toolsCalled) {
 function businessNotFoundResult(plan, searched, toolsCalled) {
   const terms = searched?.queryTerms?.length ? searched.queryTerms : plan.queryTerms;
   const types = (searched?.candidateTypes?.length ? searched.candidateTypes : plan.candidateTypes)
-    .map((type) => type === "shipment" ? "محموله‌ها" : type === "customer" ? "مشتری‌ها" : "کارت‌های بازرگانی")
+    .map((type) => {
+      if (type === "shipment") return "محموله‌ها";
+      if (type === "customer") return "مشتری‌ها";
+      if (type === "commercial_card") return "کارت‌های بازرگانی";
+      if (type === "document") return "اسناد";
+      if (type === "workflow_item") return "کارها و مراحل";
+      if (type === "cheque") return "چک‌ها";
+      return "اطلاعات تجاری";
+    })
     .join("، ");
   return relationResult({
     plan,
@@ -1937,6 +2015,197 @@ function businessCommercialCardAnswer(plan, contextResult, candidate) {
   );
 }
 
+function customerContactAnswerForBusinessRecord(plan, contact, contextLabel = "") {
+  const name = customerDisplayFromDetail(contact || {});
+  if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.PHONE)) {
+    const phoneLines = formatCustomerPhones(contact);
+    return relationText(
+      plan,
+      phoneLines.length
+        ? joinLines([
+          contextLabel ? `مورد مرتبط: ${contextLabel}` : "",
+          `مشتری: ${labelOrMissing(name)}${contact?.customerCode ? ` (کد ${contact.customerCode})` : ""}`,
+          ...phoneLines.map((phone) => `شماره تماس: ${phone}`),
+        ])
+        : `برای مشتری ${labelOrMissing(name)} شماره تماس قابل نمایش پیدا نکردم.`,
+      phoneLines.length
+        ? joinLines([
+          contextLabel ? `Related record: ${contextLabel}` : "",
+          `Customer: ${labelOrMissing(name)}${contact?.customerCode ? ` (${contact.customerCode})` : ""}`,
+          ...phoneLines.map((phone) => `Phone: ${phone}`),
+        ])
+        : `I did not find a visible phone number for ${labelOrMissing(name)}.`
+    );
+  }
+  if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.ADDRESS)) {
+    return relationText(
+      plan,
+      joinLines([
+        contextLabel ? `مورد مرتبط: ${contextLabel}` : "",
+        `آدرس مشتری ${labelOrMissing(name)}${contact?.customerCode ? ` (کد ${contact.customerCode})` : ""}: ${labelOrMissing(contact?.address)}`,
+      ]),
+      joinLines([
+        contextLabel ? `Related record: ${contextLabel}` : "",
+        `Address for ${labelOrMissing(name)}${contact?.customerCode ? ` (${contact.customerCode})` : ""}: ${labelOrMissing(contact?.address)}`,
+      ])
+    );
+  }
+  return null;
+}
+
+function missingCustomerConnectionAnswer(plan, label) {
+  if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.PHONE)) {
+    return relationText(
+      plan,
+      `برای «${labelOrMissing(label)}» مشتری مرتبطی پیدا نکردم که شماره تماسش را بخوانم.`,
+      `I did not find a linked customer for "${labelOrMissing(label)}" to read contact data.`
+    );
+  }
+  if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.ADDRESS)) {
+    return relationText(
+      plan,
+      `برای «${labelOrMissing(label)}» مشتری مرتبطی پیدا نکردم که آدرسش را بخوانم.`,
+      `I did not find a linked customer for "${labelOrMissing(label)}" to read the address.`
+    );
+  }
+  return null;
+}
+
+function businessDocumentAnswer(plan, document, candidate) {
+  const label = document?.title || document?.fileName || candidate?.label;
+  if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.STATUS)) {
+    return relationText(
+      plan,
+      `وضعیت سند ${labelOrMissing(label)}: ${labelOrMissing(document?.visibility)}.`,
+      `Document ${labelOrMissing(label)} status: ${labelOrMissing(document?.visibility)}.`
+    );
+  }
+  if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.ACCOUNTING)) {
+    return relationText(
+      plan,
+      `اطلاعات حسابداری/مالی برای سند ${labelOrMissing(label)} در زمینه دریافت‌شده متصل نیست.`,
+      `Accounting or finance information for document ${labelOrMissing(label)} is not connected in the retrieved context.`
+    );
+  }
+  if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.PHONE, BUSINESS_REQUESTED_FIELDS.ADDRESS)) {
+    return missingCustomerConnectionAnswer(plan, label);
+  }
+  return relationText(
+    plan,
+    joinLines([
+      `سند پیدا شده: ${labelOrMissing(label)}.`,
+      `نوع: ${labelOrMissing(document?.type)}`,
+      `نمایش به مشتری: ${document?.customerVisible ? "بله" : "خیر"}`,
+      document?.shipmentId ? `شناسه محموله: ${document.shipmentId}` : "",
+    ]),
+    joinLines([
+      `Matched document: ${labelOrMissing(label)}.`,
+      `Type: ${labelOrMissing(document?.type)}`,
+      `Customer-visible: ${document?.customerVisible ? "yes" : "no"}`,
+      document?.shipmentId ? `Shipment id: ${document.shipmentId}` : "",
+    ])
+  );
+}
+
+function parseWorkflowCandidateId(value = "") {
+  const text = cleanText(value);
+  const match = text.match(/^(task|blocker):(.+)$/);
+  if (!match) return { kind: "", id: text };
+  return { kind: match[1], id: match[2] };
+}
+
+function businessWorkflowItemAnswer(plan, item, candidate) {
+  const label = item?.title || item?.blockerCode || candidate?.label;
+  if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.STATUS)) {
+    return relationText(
+      plan,
+      `وضعیت کار/مرحله ${labelOrMissing(label)}: ${labelOrMissing(item?.status)}.`,
+      `Workflow item ${labelOrMissing(label)} status: ${labelOrMissing(item?.status)}.`
+    );
+  }
+  if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.ACCOUNTING)) {
+    return relationText(
+      plan,
+      `اطلاعات حسابداری/مالی برای کار/مرحله ${labelOrMissing(label)} در زمینه دریافت‌شده متصل نیست.`,
+      `Accounting or finance information for workflow item ${labelOrMissing(label)} is not connected in the retrieved context.`
+    );
+  }
+  if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.PHONE, BUSINESS_REQUESTED_FIELDS.ADDRESS)) {
+    return missingCustomerConnectionAnswer(plan, label);
+  }
+  return relationText(
+    plan,
+    joinLines([
+      `کار/مرحله پیدا شده: ${labelOrMissing(label)}.`,
+      `وضعیت: ${labelOrMissing(item?.status)}`,
+      item?.priority ? `اولویت: ${item.priority}` : "",
+      item?.assignedToName ? `مسئول: ${item.assignedToName}` : "",
+      item?.dueAt ? `موعد: ${item.dueAt}` : "",
+      item?.shipmentCode ? `محموله: ${item.shipmentCode}` : item?.shipmentId ? `شناسه محموله: ${item.shipmentId}` : "",
+    ]),
+    joinLines([
+      `Matched workflow item: ${labelOrMissing(label)}.`,
+      `Status: ${labelOrMissing(item?.status)}`,
+      item?.priority ? `Priority: ${item.priority}` : "",
+      item?.assignedToName ? `Assignee: ${item.assignedToName}` : "",
+      item?.dueAt ? `Due: ${item.dueAt}` : "",
+      item?.shipmentCode ? `Shipment: ${item.shipmentCode}` : item?.shipmentId ? `Shipment id: ${item.shipmentId}` : "",
+    ])
+  );
+}
+
+function businessChequeAnswer(plan, cheque, candidate) {
+  const label = cheque?.chequeNumber || candidate?.safeSummary?.chequeNumber || candidate?.label;
+  if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.STATUS)) {
+    return relationText(
+      plan,
+      `وضعیت چک ${labelOrMissing(label)}: ${labelOrMissing(cheque?.status)}.`,
+      `Cheque ${labelOrMissing(label)} status: ${labelOrMissing(cheque?.status)}.`
+    );
+  }
+  if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.ACCOUNTING)) {
+    return relationText(
+      plan,
+      joinLines([
+        `اطلاعات مالی چک ${labelOrMissing(label)}:`,
+        `مبلغ: ${labelOrMissing(cheque?.amount)} ${labelOrMissing(cheque?.currency)}`,
+        `بانک: ${labelOrMissing(cheque?.bankName)}`,
+        `سررسید: ${labelOrMissing(cheque?.dueDate)}`,
+        `وضعیت: ${labelOrMissing(cheque?.status)}`,
+      ]),
+      joinLines([
+        `Cheque ${labelOrMissing(label)} finance data:`,
+        `Amount: ${labelOrMissing(cheque?.amount)} ${labelOrMissing(cheque?.currency)}`,
+        `Bank: ${labelOrMissing(cheque?.bankName)}`,
+        `Due date: ${labelOrMissing(cheque?.dueDate)}`,
+        `Status: ${labelOrMissing(cheque?.status)}`,
+      ])
+    );
+  }
+  if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.PHONE, BUSINESS_REQUESTED_FIELDS.ADDRESS)) {
+    return missingCustomerConnectionAnswer(plan, label);
+  }
+  return relationText(
+    plan,
+    joinLines([
+      `چک پیدا شده: ${labelOrMissing(label)}.`,
+      `مبلغ: ${labelOrMissing(cheque?.amount)} ${labelOrMissing(cheque?.currency)}`,
+      `بانک: ${labelOrMissing(cheque?.bankName)}`,
+      `گیرنده: ${labelOrMissing(cheque?.receiver)}`,
+      `سررسید: ${labelOrMissing(cheque?.dueDate)}`,
+      `وضعیت: ${labelOrMissing(cheque?.status)}`,
+    ]),
+    joinLines([
+      `Matched cheque: ${labelOrMissing(label)}.`,
+      `Amount: ${labelOrMissing(cheque?.amount)} ${labelOrMissing(cheque?.currency)}`,
+      `Bank: ${labelOrMissing(cheque?.bankName)}`,
+      `Receiver: ${labelOrMissing(cheque?.receiver)}`,
+      `Due date: ${labelOrMissing(cheque?.dueDate)}`,
+      `Status: ${labelOrMissing(cheque?.status)}`,
+    ])
+  );
+}
+
 function activeEntityFromBusinessCandidate(candidate = {}, detail = {}) {
   if (candidate.type === "shipment" && detail.shipment?.id) {
     return { type: "shipment", id: detail.shipment.id, code: detail.shipment.shipmentCode, label: `محموله ${detail.shipment.shipmentCode}` };
@@ -1948,6 +2217,15 @@ function activeEntityFromBusinessCandidate(candidate = {}, detail = {}) {
       code: detail.customer.customerCode,
       label: customerDisplayFromDetail(detail.customer),
     };
+  }
+  if (candidate.type === "document" && detail.document?.id) {
+    return { type: "document", id: detail.document.id, label: detail.document.title || detail.document.fileName };
+  }
+  if (candidate.type === "workflow_item" && detail.workflowItem?.id) {
+    return { type: "workflow_item", id: detail.workflowItem.id, label: detail.workflowItem.title || detail.workflowItem.blockerCode };
+  }
+  if (candidate.type === "cheque" && detail.cheque?.id) {
+    return { type: "cheque", id: detail.cheque.id, code: detail.cheque.chequeNumber, label: `چک ${detail.cheque.chequeNumber || detail.cheque.id}` };
   }
   return null;
 }
@@ -2219,24 +2497,130 @@ async function answerBusinessCandidate(pool, context, plan, candidate, toolsCall
     });
   }
 
-  toolsCalled.push("getCommercialCardContext");
-  const cardContext = await getCommercialCardContext(pool, context, {
-    cardRef: candidate.id || candidate.safeSummary?.displayName || candidate.safeSummary?.cardNumber,
-    limit: 3,
-  });
-  const deterministicAnswer = businessCommercialCardAnswer(plan, cardContext, candidate);
-  const answer = shouldKeepBusinessAnswerDeterministic(plan)
-    ? deterministicAnswer
-    : await maybePolishAnswer({ deterministicAnswer, queryType: "business_search", tone: "direct" });
-  return relationResult({
-    plan,
-    answer,
-    toolsCalled,
-    sources: [businessCandidateSource(candidate), ...(cardContext.cards || []).slice(0, 2).map(commercialCardSource)],
-    recordIds: [candidate.id, ...(cardContext.cards || []).slice(0, 2).map((item) => item.id)].filter(Boolean),
-    success: true,
-    reason: "answered_from_business_search",
-  });
+  if (candidate.type === "document") {
+    toolsCalled.push("getDocumentBasicInfo");
+    const document = await getDocumentBasicInfo(pool, context, { documentId: candidate.id });
+    if (!document) return missingBusinessContextResult(plan, candidate, toolsCalled);
+
+    let deterministicAnswer = businessDocumentAnswer(plan, document, candidate);
+    const needsCustomerContact = planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.PHONE, BUSINESS_REQUESTED_FIELDS.ADDRESS);
+    if (needsCustomerContact && document.customerId) {
+      toolsCalled.push("getCustomerContactInfo");
+      const contact = await getCustomerContactInfo(pool, context, { customerId: document.customerId });
+      deterministicAnswer = customerContactAnswerForBusinessRecord(plan, contact, document.title || document.fileName);
+    }
+    if (!deterministicAnswer) return missingBusinessContextResult(plan, candidate, toolsCalled, "requested_field_missing");
+    const answer = shouldKeepBusinessAnswerDeterministic(plan)
+      ? deterministicAnswer
+      : await maybePolishAnswer({ deterministicAnswer, queryType: "business_search", tone: "direct" });
+    const activeEntity = activeEntityFromBusinessCandidate(candidate, { document });
+    return relationResult({
+      plan,
+      answer,
+      toolsCalled,
+      sources: [
+        businessCandidateSource(candidate),
+        document.shipmentId ? source("shipment", { id: document.shipmentId, label: `محموله ${document.shipmentId}`, url: `/shipments/${document.shipmentId}` }) : null,
+        document.customerId ? source("customer", { id: document.customerId, label: "مشتری مرتبط", url: `/customers/${document.customerId}` }) : null,
+      ].filter(Boolean),
+      recordIds: [document.id, document.shipmentId, document.customerId].filter(Boolean),
+      activeEntity,
+      success: true,
+      reason: "answered_from_business_search",
+    });
+  }
+
+  if (candidate.type === "workflow_item") {
+    const parsed = parseWorkflowCandidateId(candidate.id);
+    const isBlocker = parsed.kind === "blocker";
+    toolsCalled.push(isBlocker ? "getWorkflowBlockerBasicInfo" : "getTaskBasicInfo");
+    const workflowItem = isBlocker
+      ? await getWorkflowBlockerBasicInfo(pool, context, { blockerId: parsed.id })
+      : await getTaskBasicInfo(pool, context, { taskId: parsed.id });
+    if (!workflowItem) return missingBusinessContextResult(plan, candidate, toolsCalled);
+
+    let deterministicAnswer = businessWorkflowItemAnswer(plan, workflowItem, candidate);
+    const needsCustomerContact = planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.PHONE, BUSINESS_REQUESTED_FIELDS.ADDRESS);
+    if (needsCustomerContact && workflowItem.customerId) {
+      toolsCalled.push("getCustomerContactInfo");
+      const contact = await getCustomerContactInfo(pool, context, { customerId: workflowItem.customerId });
+      deterministicAnswer = customerContactAnswerForBusinessRecord(plan, contact, workflowItem.title || workflowItem.blockerCode);
+    }
+    if (!deterministicAnswer) return missingBusinessContextResult(plan, candidate, toolsCalled, "requested_field_missing");
+    const answer = shouldKeepBusinessAnswerDeterministic(plan)
+      ? deterministicAnswer
+      : await maybePolishAnswer({ deterministicAnswer, queryType: "business_search", tone: "direct" });
+    const activeEntity = activeEntityFromBusinessCandidate(candidate, { workflowItem });
+    return relationResult({
+      plan,
+      answer,
+      toolsCalled,
+      sources: [
+        businessCandidateSource(candidate),
+        workflowItem.shipmentId ? source("shipment", { id: workflowItem.shipmentId, label: workflowItem.shipmentCode ? `محموله ${workflowItem.shipmentCode}` : `محموله ${workflowItem.shipmentId}`, url: `/shipments/${workflowItem.shipmentId}` }) : null,
+        workflowItem.customerId ? source("customer", { id: workflowItem.customerId, label: workflowItem.customerName || workflowItem.customerCode || "مشتری مرتبط", url: `/customers/${workflowItem.customerId}` }) : null,
+      ].filter(Boolean),
+      recordIds: [workflowItem.id, workflowItem.shipmentId, workflowItem.customerId].filter(Boolean),
+      activeEntity,
+      success: true,
+      reason: "answered_from_business_search",
+    });
+  }
+
+  if (candidate.type === "cheque") {
+    toolsCalled.push("getChequeBasicInfo");
+    const cheque = await getChequeBasicInfo(pool, context, { chequeId: candidate.id });
+    if (!cheque) return missingBusinessContextResult(plan, candidate, toolsCalled);
+
+    let deterministicAnswer = businessChequeAnswer(plan, cheque, candidate);
+    const needsCustomerContact = planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.PHONE, BUSINESS_REQUESTED_FIELDS.ADDRESS);
+    if (needsCustomerContact && cheque.customerId) {
+      toolsCalled.push("getCustomerContactInfo");
+      const contact = await getCustomerContactInfo(pool, context, { customerId: cheque.customerId });
+      deterministicAnswer = customerContactAnswerForBusinessRecord(plan, contact, cheque.chequeNumber);
+    }
+    if (!deterministicAnswer) return missingBusinessContextResult(plan, candidate, toolsCalled, "requested_field_missing");
+    const answer = shouldKeepBusinessAnswerDeterministic(plan)
+      ? deterministicAnswer
+      : await maybePolishAnswer({ deterministicAnswer, queryType: "business_search", tone: "direct" });
+    const activeEntity = activeEntityFromBusinessCandidate(candidate, { cheque });
+    return relationResult({
+      plan,
+      answer,
+      toolsCalled,
+      sources: [
+        businessCandidateSource(candidate),
+        cheque.customerId ? source("customer", { id: cheque.customerId, label: "مشتری مرتبط", url: `/customers/${cheque.customerId}` }) : null,
+      ].filter(Boolean),
+      recordIds: [cheque.id, cheque.customerId].filter(Boolean),
+      activeEntity,
+      success: true,
+      reason: "answered_from_business_search",
+    });
+  }
+
+  if (candidate.type === "commercial_card") {
+    toolsCalled.push("getCommercialCardContext");
+    const cardContext = await getCommercialCardContext(pool, context, {
+      cardRef: candidate.id || candidate.safeSummary?.displayName || candidate.safeSummary?.cardNumber,
+      limit: 3,
+    });
+    const deterministicAnswer = businessCommercialCardAnswer(plan, cardContext, candidate);
+    const answer = shouldKeepBusinessAnswerDeterministic(plan)
+      ? deterministicAnswer
+      : await maybePolishAnswer({ deterministicAnswer, queryType: "business_search", tone: "direct" });
+    return relationResult({
+      plan,
+      answer,
+      toolsCalled,
+      sources: [businessCandidateSource(candidate), ...(cardContext.cards || []).slice(0, 2).map(commercialCardSource)],
+      recordIds: [candidate.id, ...(cardContext.cards || []).slice(0, 2).map((item) => item.id)].filter(Boolean),
+      success: true,
+      reason: "answered_from_business_search",
+    });
+  }
+
+  return missingBusinessContextResult(plan, candidate, toolsCalled, "unsupported_business_candidate");
 }
 
 async function runBusinessSearchPlan(pool, context, plan, toolsCalled = []) {
@@ -2307,6 +2691,7 @@ function uniqueValues(values = []) {
 function candidateTypesForFollowUp(plan = {}) {
   const requested = requestedFieldsForPlan(plan);
   const types = Array.isArray(plan.candidateTypes) ? plan.candidateTypes : [];
+  const allBusinessTypes = ["shipment", "customer", "commercial_card", "document", "workflow_item", "cheque"];
   if (
     requested.includes(BUSINESS_REQUESTED_FIELDS.PHONE) ||
     requested.includes(BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE) ||
@@ -2314,12 +2699,12 @@ function candidateTypesForFollowUp(plan = {}) {
     requested.includes(BUSINESS_REQUESTED_FIELDS.ACCOUNTING) ||
     requested.includes(BUSINESS_REQUESTED_FIELDS.CUSTOMER_NUMBER)
   ) {
-    return uniqueValues(["customer", ...types, "shipment", "commercial_card"]);
+    return uniqueValues(["customer", ...types, ...allBusinessTypes]);
   }
-  return uniqueValues(types.length ? types : ["shipment", "customer", "commercial_card"]);
+  return uniqueValues(types.length ? types : allBusinessTypes);
 }
 
-function followUpBusinessPlanFromRecentMessages(message = "", recentMessages = []) {
+export function followUpBusinessPlanFromRecentMessages(message = "", recentMessages = []) {
   const selection = extractAmbiguitySelection(message);
   if (!selection) return null;
   const previousPlan = previousBusinessPlanFromRecentMessages(recentMessages);

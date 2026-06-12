@@ -10,6 +10,7 @@ import {
 } from "../src/server/ai/ai-context-planner.js";
 import {
   extractAmbiguitySelection,
+  followUpBusinessPlanFromRecentMessages,
   renderBusinessAmbiguityMessage,
 } from "../src/server/ai/ai-orchestrator.js";
 import { llmProviderStatus } from "../src/server/ai/llm-provider.js";
@@ -39,6 +40,13 @@ const businessCases = [
     types: ["shipment", "customer"],
     requestedField: BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE,
     requestedFields: [BUSINESS_REQUESTED_FIELDS.PHONE],
+  },
+  {
+    message: "محموله آنتویس چاپ آقای سنجری",
+    terms: ["آنتویس", "چاپ", "سنجری"],
+    types: ["shipment", "customer"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.SUMMARY,
+    requestedFields: [BUSINESS_REQUESTED_FIELDS.SUMMARY],
   },
   {
     message: "برای آقای سنجری در چه حاله",
@@ -134,6 +142,30 @@ const businessCases = [
     requestedField: BUSINESS_REQUESTED_FIELDS.STATUS,
     requestedFields: [BUSINESS_REQUESTED_FIELDS.STATUS],
   },
+  {
+    message: "سند محموله 14051102036",
+    terms: ["14051102036"],
+    forbiddenTerms: ["سند", "محموله"],
+    types: ["document", "shipment", "customer"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.SUMMARY,
+    requestedFields: [BUSINESS_REQUESTED_FIELDS.SUMMARY],
+  },
+  {
+    message: "مانع محموله 14051102036",
+    terms: ["14051102036"],
+    forbiddenTerms: ["مانع", "محموله"],
+    types: ["workflow_item", "shipment", "customer"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.SUMMARY,
+    requestedFields: [BUSINESS_REQUESTED_FIELDS.SUMMARY],
+  },
+  {
+    message: "چک مشتری 214",
+    terms: ["214"],
+    forbiddenTerms: ["چک", "مشتری"],
+    types: ["cheque", "customer", "shipment"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.SUMMARY,
+    requestedFields: [BUSINESS_REQUESTED_FIELDS.SUMMARY],
+  },
 ];
 
 for (const testCase of businessCases) {
@@ -184,6 +216,18 @@ assert.deepEqual(
 assert.equal(extractAmbiguitySelection("به 214"), "214", "short ambiguity follow-up should extract selected code");
 assert.equal(extractAmbiguitySelection("به ۲۱۴"), "214", "Persian digit ambiguity follow-up should normalize selected code");
 
+const followUpPlan = followUpBusinessPlanFromRecentMessages("به 214", [
+  { role: "user", content: "شماره آقای سنجری" },
+]);
+assert.ok(followUpPlan, "ambiguity follow-up should rebuild the previous business plan");
+assert.deepEqual(followUpPlan.queryTerms, ["214"], "follow-up query should search the selected code only");
+assert.equal(followUpPlan.requestedField, BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE, "follow-up should preserve the requested field");
+assert.ok(followUpPlan.requestedFields.includes(BUSINESS_REQUESTED_FIELDS.PHONE), "follow-up should preserve phone alias");
+assert.ok(followUpPlan.requestedFields.includes(BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE), "follow-up should preserve normalized customer phone field");
+for (const type of ["customer", "shipment", "commercial_card", "document", "workflow_item", "cheque"]) {
+  assert.ok(followUpPlan.candidateTypes.includes(type), `follow-up should include ${type}`);
+}
+
 const ambiguityText = renderBusinessAmbiguityMessage({
   plan: { language: "fa", queryTerms: ["سنجری"] },
   candidates: [
@@ -201,6 +245,14 @@ const ambiguityText = renderBusinessAmbiguityMessage({
         shipmentCode: "14051102036",
         customerName: "سنجری",
         status: "در جریان",
+      },
+    },
+    {
+      type: "cheque",
+      safeSummary: {
+        chequeNumber: "991122",
+        bankName: "ملت",
+        status: "در انتظار",
       },
     },
   ],
