@@ -304,7 +304,7 @@ async function readOperation(sequence) {
 }
 
 async function publicOperation(sequence) {
-  const routes = ["/", "/login", "/signup", "/pricing", "/track/search"];
+  const routes = ["/", "/login", "/contact"];
   const route = routes[sequence % routes.length];
   return timedFetch(`public:${route}`, route, { skipAuth: true });
 }
@@ -593,7 +593,7 @@ async function runBrowserProbes(vus) {
     { name: "desktop", width: 1280, height: 720 },
     { name: "mobile", width: 390, height: 844 },
   ];
-  const routes = ["/", "/track/search", "/dashboard", "/customers", "/shipments", "/documents"];
+  const routes = ["/", "/login", "/dashboard", "/customers", "/shipments", "/documents"];
   try {
     for (const viewport of probes) {
       const context = await browser.newContext({
@@ -635,7 +635,7 @@ async function runBrowserProbes(vus) {
           await page.goto(route, { waitUntil: "domcontentloaded", timeout: requestTimeoutMs });
           await page.waitForLoadState("networkidle", { timeout: Math.min(5000, requestTimeoutMs) }).catch(() => {});
           const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
-          const protectedRedirectedToLogin = route !== "/" && route !== "/track/search" && /\/login$/.test(page.url());
+          const protectedRedirectedToLogin = route !== "/" && route !== "/login" && /\/login$/.test(page.url());
           const ok = !overflow && !protectedRedirectedToLogin && consoleErrors.length === 0;
           samples.push({
             kind: "browser",

@@ -133,13 +133,12 @@ test.describe.serial("public tracking leak hardening", () => {
       const byToken = await readOk<any>(
         await publicContext.get(`/api/public/track/${encodeURIComponent(access.token)}`)
       );
-      const bySearch = await readOk<any>(
-        await publicContext.post("/api/public/track/search", {
-          data: { shipmentCode: "LS-9801", verification: "info@arian.com" },
-        })
-      );
+      const removedSearch = await publicContext.post("/api/public/track/search", {
+        data: { shipmentCode: "LS-9801", verification: "info@arian.com" },
+      });
+      expect(removedSearch.status()).toBe(404);
 
-      for (const payload of [byToken, bySearch]) {
+      for (const payload of [byToken]) {
         expectPublicTrackingPayloadIsSafe(payload);
         expect(payload.documents.some((document: any) => document.id === visibleDocument.id)).toBe(true);
         expect(payload.documents.some((document: any) => document.id === privateDocument.id)).toBe(false);

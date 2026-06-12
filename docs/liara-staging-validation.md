@@ -25,12 +25,9 @@ DOCUMENT_STORAGE_DIR=storage/documents
 DOCUMENT_MAX_BYTES=26214400
 RATE_LIMIT_STORE=postgres
 TRUST_PROXY=true
-ZARINPAL_SANDBOX=false
-ZARINPAL_MERCHANT_ID=<live-merchant-id>
-ZARINPAL_TIMEOUT_MS=10000
 ```
 
-Do not commit real database URLs, seed passwords, or merchant credentials.
+Do not commit real database URLs, seed passwords, session secrets, or storage credentials.
 
 ## Database Setup
 
@@ -89,27 +86,14 @@ npm run smoke:staging
 The smoke script checks:
 
 - `/api/health` and `/api/db/health`
-- SPA shell routes `/`, `/login`, `/signup`, `/admin`
+- SPA shell routes `/`, `/login`, `/contact`, `/admin`
+- removed self-serve/payment/SMS public APIs return 404
 - owner login, if `STAGING_OWNER_PASSWORD` is set
 - private document upload/download
 - customer-visible document exposure through public tracking
-- live Zarinpal gateway handoff with no completed charge
-- Zarinpal callback failure path with `Status=NOK`
-- admin payment/signup state after the failed/no-charge callback
 
 Use these optional flags only when deliberately narrowing the smoke:
 
 ```powershell
 $env:STAGING_SKIP_AUTH_SMOKE = "true"
-$env:STAGING_SKIP_ZARINPAL_HANDOFF = "true"
 ```
-
-## Zarinpal No-Charge Rule
-
-The staging smoke requests a live Zarinpal gateway URL and verifies that it starts with:
-
-```text
-https://www.zarinpal.com/pg/StartPay/
-```
-
-It does not enter card details and does not complete a charge. Instead it calls the app callback with `Status=NOK`, which should render `/signup/pending?payment=failed`, leave the signup unapproved, and create no receipt.

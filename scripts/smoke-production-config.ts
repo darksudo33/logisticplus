@@ -12,8 +12,6 @@ const env = {
   DOCUMENT_STORAGE_DIR: missingStorageDir,
   NODE_ENV: "production",
   RATE_LIMIT_STORE: "memory",
-  ZARINPAL_MERCHANT_ID: "",
-  ZARINPAL_SANDBOX: "true",
 };
 
 const child = spawn(process.execPath, ["server.js"], {
@@ -45,8 +43,6 @@ child.on("exit", (code) => {
     "Production configuration error",
     "DOCUMENT_STORAGE_DIR",
     "RATE_LIMIT_STORE",
-    "ZARINPAL_SANDBOX",
-    "ZARINPAL_MERCHANT_ID",
   ];
   const missing = expected.filter((term) => !output.includes(term));
   if (missing.length) {
@@ -55,5 +51,5 @@ child.on("exit", (code) => {
     process.exit(1);
   }
 
-  console.log("Production config smoke passed: missing storage, live Zarinpal config, and unsafe production rate-limit store fail loudly.");
+  console.log("Production config smoke passed: missing storage and unsafe production rate-limit store fail loudly.");
 });

@@ -107,7 +107,7 @@ test.describe.serial("production readiness regression checks", () => {
       { name: "desktop", width: 1280, height: 720 },
       { name: "mobile", width: 390, height: 844 },
     ];
-    const routes = ["/dashboard", "/customers", "/shipments", "/tasks", "/documents", "/track/search"];
+    const routes = ["/dashboard", "/customers", "/shipments", "/tasks", "/documents", "/login"];
 
     for (const viewport of viewports) {
       const context = await browser.newContext({

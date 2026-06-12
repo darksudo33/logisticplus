@@ -41,12 +41,6 @@ export function validateProductionConfig() {
   }
   validateHttpsUrl(process.env.APP_PUBLIC_URL, "APP_PUBLIC_URL", errors);
 
-  if (process.env.ZARINPAL_SANDBOX !== "false") {
-    errors.push('ZARINPAL_SANDBOX must be set to "false" in production.');
-  }
-  if (!String(process.env.ZARINPAL_MERCHANT_ID || "").trim()) {
-    errors.push("ZARINPAL_MERCHANT_ID is required in production.");
-  }
   if (process.env.SMS_ENABLED === "true" && process.env.SMS_DRY_RUN === "false") {
     if (!String(process.env.SMSIR_API_KEY || "").trim()) {
       errors.push("SMSIR_API_KEY is required when live SMS sending is enabled.");

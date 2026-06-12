@@ -7,19 +7,6 @@ function hashCustomerAccessToken(token) {
   return crypto.createHash("sha256").update(String(token || "")).digest("hex");
 }
 
-function publicPhoneDigits(value) {
-  const persianDigits = "Û°Û±Û²Û³Û´ÛµÛ¶Û·Û¸Û¹";
-  const arabicDigits = "Ù Ù¡Ù¢Ù£Ù¤Ù¥Ù¦Ù§Ù¨Ù©";
-  return String(value || "")
-    .replace(/[Û°-Û¹Ù -Ù©]/g, (digit) => {
-      const persianIndex = persianDigits.indexOf(digit);
-      if (persianIndex >= 0) return String(persianIndex);
-      const arabicIndex = arabicDigits.indexOf(digit);
-      return arabicIndex >= 0 ? String(arabicIndex) : digit;
-    })
-    .replace(/\D/g, "");
-}
-
 function publicDocumentAccessSecret() {
   return (
     process.env.PUBLIC_DOCUMENT_ACCESS_SECRET ||
@@ -314,34 +301,6 @@ export async function getPublicTrackingTokenAuditState(queryable, token) {
     organizationId: shipment.organization_id,
     enabled: true,
   };
-}
-
-export async function searchPublicTracking(queryable, { shipmentCode, verification }) {
-  if (!shipmentCode || !verification) return null;
-  const normalizedVerification = String(verification).trim().toLowerCase();
-  const verificationDigits = publicPhoneDigits(verification);
-  const result = await queryable.query(
-    `SELECT s.id
-     FROM shipments s
-      LEFT JOIN customers c
-        ON c.organization_id = s.organization_id
-       AND c.archived_at IS NULL
-       AND c.id = COALESCE(s.customer_id, s.legacy_data->>'customerId')
-      WHERE lower(s.shipment_code) = lower($1)
-        AND s.customer_access_enabled = TRUE
-        AND s.archived_at IS NULL
-       AND (
-         lower(COALESCE(c.email, '')) = $2
-         OR ($3 <> '' AND regexp_replace(COALESCE(c.phone, ''), '\\D', '', 'g') = $3)
-         OR lower(COALESCE(s.legacy_data->>'customerEmail', '')) = $2
-         OR ($3 <> '' AND regexp_replace(COALESCE(s.legacy_data->>'customerPhone', ''), '\\D', '', 'g') = $3)
-       )
-     LIMIT 1`,
-    [shipmentCode, normalizedVerification, verificationDigits]
-  );
-  const shipment = result.rows[0];
-  if (!shipment) return null;
-  return buildPublicShipmentPayload(queryable, shipment.id);
 }
 
 export async function getPublicDocument(queryable, documentId, access = {}) {

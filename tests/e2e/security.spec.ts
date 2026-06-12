@@ -782,7 +782,7 @@ test.describe.serial("security regression harness", () => {
   test("serves public tracking through a customer-safe payload only", async ({ page }) => {
     await resetRateLimitBuckets();
     await page.goto("/track/not-a-real-token-for-playwright-tests");
-    await expect(page.locator('a[href="/track/search"]').first()).toBeVisible();
+    await expect(page.locator('a[href="/track/search"]')).toHaveCount(0);
 
     const owner = await loginApi();
     const publicContext = await apiContext();
@@ -870,34 +870,13 @@ test.describe.serial("security regression harness", () => {
     );
     expect(byResetToken.shipment.code).toBe("LS-9801");
 
-    const bySearch = await readOk<any>(
-      await publicContext.post("/api/public/track/search", {
-        data: {
-          shipmentCode: "LS-9801",
-          verification: "info@arian.com",
-        },
-      })
-    );
-    expect(bySearch.shipment.code).toBe("LS-9801");
-    expectPublicTrackingPayloadIsSafe(bySearch);
-    const searchedPublicDocument = bySearch.documents.find((document: any) => document.id === visibleDocument.id);
-    expect(searchedPublicDocument?.downloadUrl).toContain("/api/public/documents/");
-    const searchDocumentDownload = await publicContext.get(searchedPublicDocument.downloadUrl);
-    expect(searchDocumentDownload.status(), await searchDocumentDownload.text()).toBeLessThan(400);
-
-    const wrongVerification = await publicContext.post("/api/public/track/search", {
+    const removedSearch = await publicContext.post("/api/public/track/search", {
       data: {
         shipmentCode: "LS-9801",
-        verification: "not-the-customer@example.test",
+        verification: "info@arian.com",
       },
     });
-    await expectUnavailable(wrongVerification);
-
-    const invalidSearch = await publicContext.post("/api/public/track/search", {
-      data: { shipmentCode: "", verification: "" },
-    });
-    expect(invalidSearch.status(), await invalidSearch.text()).toBe(400);
-    expect((await invalidSearch.json()).error.code).toBe("VALIDATION_ERROR");
+    expect(removedSearch.status()).toBe(404);
 
     await expectUnavailable(await publicContext.get("/api/public/documents/doc1"));
 
@@ -939,24 +918,6 @@ test.describe.serial("security regression harness", () => {
     }
     expect(limitedDocumentUpload, "document upload should be throttled").not.toBeNull();
     expect(limitedDocumentUpload!.headers()["retry-after"]).toBeTruthy();
-
-    await readOk(await owner.post("/api/shipments/s1/customer-access/generate"));
-    let limitedPublicTrackSearch = null;
-    for (let attempt = 0; attempt < 25; attempt += 1) {
-      const response = await publicContext.post("/api/public/track/search", {
-        data: {
-          shipmentCode: "LS-9801",
-          verification: "info@arian.com",
-        },
-      });
-      if (response.status() === 429) {
-        limitedPublicTrackSearch = response;
-        break;
-      }
-      await readOk(response);
-    }
-    expect(limitedPublicTrackSearch, "public tracking search should be throttled").not.toBeNull();
-    expect(limitedPublicTrackSearch!.headers()["retry-after"]).toBeTruthy();
 
     let limitedSignup = null;
     for (let attempt = 0; attempt < 12; attempt += 1) {

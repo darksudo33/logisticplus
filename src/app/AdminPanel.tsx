@@ -405,15 +405,12 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
   const refresh = React.useCallback(async () => {
     setLoading(true);
     try {
-      const [overviewData, orgData, planData, requestData, contactData, smsData, smsAnalyticsData, smsTemplateData, paymentData, invoiceData, errorData] = await Promise.all([
+      const [overviewData, orgData, planData, requestData, contactData, paymentData, invoiceData, errorData] = await Promise.all([
         api<any>("/api/admin/overview"),
         api<Organization[]>("/api/admin/organizations"),
         api<Plan[]>("/api/plans"),
         api<any[]>("/api/admin/signup-requests"),
         api<ContactRequest[]>("/api/admin/contact-requests"),
-        api<SmsDelivery[]>("/api/admin/sms-deliveries?limit=100"),
-        api<SmsAnalytics>("/api/admin/sms-analytics"),
-        api<SmsTemplate[]>("/api/admin/sms-templates"),
         api<any[]>("/api/admin/payments"),
         api<any[]>("/api/admin/billing/invoices"),
         api<any[]>(`/api/admin/error-logs?resolved=${errorFilter}`),
@@ -424,9 +421,9 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
       setManualSignup((current) => ({ ...current, planId: current.planId || planData[0]?.id || "" }));
       setRequests(requestData);
       setContactRequests(contactData);
-      setSmsDeliveries(smsData);
-      setSmsAnalytics(smsAnalyticsData);
-      setSmsTemplates(smsTemplateData);
+      setSmsDeliveries([]);
+      setSmsAnalytics(null);
+      setSmsTemplates([]);
       setPayments(paymentData);
       setInvoices(invoiceData);
       setErrors(errorData);
@@ -525,53 +522,17 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
   };
 
   const enableSmsAddonAndPrepareInvoice = async () => {
-    if (!selectedOrgId) return;
-    const nextLimits = { ...limits, smsNotifications: true };
-    const cleaned = Object.fromEntries(Object.entries(nextLimits).filter(([, value]) => value !== "" && value !== null && value !== undefined));
-    const data = await api<any>(`/api/admin/organizations/${selectedOrgId}/subscription`, {
-      method: "PATCH",
-      body: JSON.stringify({ limitsOverride: cleaned }),
-    });
-    setLimits(data.limitsOverride || {});
-    setNewInvoice((current) => ({
-      ...current,
-      organizationId: selectedOrgId,
-      description: "افزونه پرداختی SMS هشدار جلسات، دمیوراژ و وظایف فوری",
-    }));
-    await loadOrganization(selectedOrgId);
-    toast.success("SMS برای مشتری فعال شد؛ صدور فاکتور دستی آماده است");
-    setTab("billing");
+    toast.info("SMS در نسخه انتشار عمومی فعال نیست.");
   };
 
   const runSmsWorker = async () => {
-    const confirmed = window.confirm(
-      "اجرای دستی SMS worker ممکن است در محیط production پیامک واقعی ارسال کند. فقط اگر صف و تنظیمات را بررسی کرده‌اید ادامه دهید."
-    );
-    if (!confirmed) return;
-
-    setSmsRunning(true);
-    try {
-      const result = await api<any>("/api/admin/sms-deliveries/run-worker", {
-        method: "POST",
-        body: JSON.stringify({ limit: 50 }),
-      });
-      toast.success(`SMS worker: ${Number(result.sent || 0).toLocaleString("fa-IR")} ارسال ثبت شد`);
-      setSmsDeliveries(await api<SmsDelivery[]>("/api/admin/sms-deliveries?limit=100"));
-      setSmsAnalytics(await api<SmsAnalytics>("/api/admin/sms-analytics"));
-    } catch (error: any) {
-      toast.error(error.message || "اجرای SMS worker انجام نشد");
-    } finally {
-      setSmsRunning(false);
-    }
+    setSmsRunning(false);
+    toast.info("SMS worker در نسخه انتشار عمومی فعال نیست.");
   };
 
   const saveSmsTemplate = async (template: SmsTemplate) => {
-    const updated = await api<SmsTemplate>(`/api/admin/sms-templates/${encodeURIComponent(template.key)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ body: template.body, enabled: template.enabled }),
-    });
-    setSmsTemplates((items) => items.map((item) => (item.key === updated.key ? updated : item)));
-    toast.success("قالب پیامک ذخیره شد");
+    setSmsTemplates((items) => items.map((item) => (item.key === template.key ? template : item)));
+    toast.info("SMS در نسخه انتشار عمومی فعال نیست.");
   };
 
   const changeOrgStatus = async (action: "activate" | "suspend") => {
@@ -725,7 +686,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
     { key: "contacts", label: "تماس‌ها", count: overview?.pendingContactRequests },
     { key: "requests", label: "ثبت‌نام‌ها", count: overview?.pendingApprovals },
     { key: "subscriptions", label: "اشتراک و محدودیت" },
-    { key: "sms", label: "SMS", count: smsAnalytics?.summary?.queued },
     { key: "billing", label: "صورتحساب و پرداخت" },
     { key: "errors", label: "خطاها", count: overview?.unresolvedErrors },
   ];
@@ -747,7 +707,7 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
     queued: smsDeliveries.filter((delivery) => delivery.status === "queued").length,
   };
   const openErrors = Number(overview?.unresolvedErrors ?? errors.filter((error) => !error.resolvedAt).length);
-  const pendingActionsCount = pendingSignupRequests.length + pendingContacts.length + paidPendingReview + openErrors + Number(smsSummary.queued || 0);
+  const pendingActionsCount = pendingSignupRequests.length + pendingContacts.length + paidPendingReview + openErrors;
   const recentOrganizations = [...organizations]
     .sort((a: any, b: any) => safeDateValue(b.createdAt) - safeDateValue(a.createdAt))
     .slice(0, 6);
@@ -761,7 +721,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
     ...requests.map((item) => ({ type: "ثبت‌نام", title: item.companyName, status: item.status, at: item.createdAt })),
     ...contactRequests.map((item) => ({ type: "تماس", title: item.companyName, status: item.status, at: item.createdAt })),
     ...payments.map((item) => ({ type: "پرداخت", title: item.organizationName || item.provider, status: item.status, at: item.createdAt || item.paidAt })),
-    ...smsDeliveries.map((item) => ({ type: "SMS", title: item.recipientName || item.userName || item.organizationName, status: item.status, at: item.createdAt || item.sentAt })),
     ...errors.map((item) => ({ type: "خطا", title: item.message, status: item.resolvedAt ? "resolved" : item.source, at: item.createdAt })),
   ].sort((a, b) => safeDateValue(b.at) - safeDateValue(a.at)).slice(0, 8);
   const paymentStatusCounts = payments.reduce((counts: Record<string, number>, payment) => {
@@ -774,7 +733,7 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
   const sectionMeta: Record<AdminTabKey, { title: string; subtitle: string; icon: React.ElementType; action?: React.ReactNode }> = {
     overview: {
       title: "نمای کلی پلتفرم",
-      subtitle: "سلامت، درآمد، پیامک، درخواست‌ها و وضعیت عملیاتی Logistic Plus",
+      subtitle: "سلامت، درآمد، درخواست‌ها و وضعیت عملیاتی Logistic Plus",
       icon: LayoutDashboard,
     },
     organizations: {
@@ -794,7 +753,7 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
     },
     subscriptions: {
       title: "اشتراک، محدودیت و کاربران سازمان",
-      subtitle: "مدیریت پلن، افزونه SMS، محدودیت‌ها و کاربران شرکت‌ها",
+      subtitle: "مدیریت پلن، محدودیت‌ها و کاربران شرکت‌ها",
       icon: ShieldCheck,
     },
     sms: {
@@ -891,7 +850,7 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
                   </div>
                   <h1 className="text-3xl font-black tracking-tight md:text-4xl">نمای کلی پلتفرم</h1>
                   <p className="mt-2 max-w-3xl text-sm leading-7 text-muted-foreground">
-                    مرکز فرماندهی سلامت پلتفرم، درآمد، SMS، درخواست‌ها و عملیات SaaS Logistic Plus.
+                    مرکز فرماندهی سلامت پلتفرم، درآمد، درخواست‌ها و عملیات Logistic Plus.
                   </p>
                 </div>
                 <div className="flex flex-col gap-3 xl:items-end">
@@ -899,7 +858,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
                     {[
                       ["API", platformHealth.api === "healthy" ? "سالم" : platformHealth.api === "down" ? "قطع" : "نامشخص", Server, platformHealth.api === "healthy" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"],
                       ["DB", platformHealth.db === "healthy" ? "سالم" : platformHealth.db === "down" ? "قطع" : "نامشخص", Database, platformHealth.db === "healthy" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"],
-                      ["SMS worker", Number(smsSummary.queued || 0) > 0 ? `${numberFa(smsSummary.queued)} در صف` : "آرام", Send, Number(smsSummary.failed || 0) > 0 ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-blue-50 text-blue-700 border-blue-200"],
                       ["Mode", typeof window !== "undefined" && window.location.hostname.includes("logisticplus.ir") ? "Production" : "Local/Test", Globe2, "bg-slate-50 text-slate-700 border-slate-200"],
                     ].map(([label, value, Icon, tone]: any) => (
                       <div key={label} className={cn("flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-black", tone)}>
@@ -935,7 +893,7 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
                   </div>
                   <h2 className="text-2xl font-black tracking-tight md:text-3xl">امروز {numberFa(pendingActionsCount)} مورد نیازمند توجه دارید</h2>
                   <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
-                    درخواست‌های ثبت‌نام، تماس، پرداخت‌های نیازمند بررسی، صف SMS و خطاهای باز از همین‌جا قابل پایش هستند.
+                    درخواست‌های ثبت‌نام، تماس، پرداخت‌های نیازمند بررسی و خطاهای باز از همین‌جا قابل پایش هستند.
                   </p>
                   <div className="mt-5 flex flex-wrap gap-2">
                     <Button className="rounded-xl font-bold" onClick={() => setTab(pendingSignupRequests.length ? "requests" : "organizations")}>
@@ -975,7 +933,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
               <DashboardKpiCard icon={CreditCard} label="پرداخت‌های منتظر بررسی" value={numberFa(paidPendingReview)} description="پرداخت‌شده یا نیازمند اقدام مالی" accent="bg-violet-50 text-violet-700" statusText="Billing" />
               <DashboardKpiCard icon={CircleDollarSign} label="درآمد تاییدشده" value={money(paidRevenue)} description={`${numberFa(paidPayments.length)} پرداخت تاییدشده`} accent="bg-emerald-50 text-emerald-700" statusText="Paid" />
               <DashboardKpiCard icon={FileWarning} label="خطاهای باز" value={numberFa(openErrors)} description="موارد حل‌نشده یا اخیر" accent="bg-rose-50 text-rose-700" statusText={openErrors ? "Alert" : "OK"} />
-              <DashboardKpiCard icon={Send} label="SMS ارسال / ناموفق" value={`${numberFa(smsSummary.totalSent)} / ${numberFa(smsSummary.failed)}`} description={`${numberFa(smsSummary.queued)} پیام در صف، ${numberFa(smsSummary.skipped)} skip`} accent="bg-sky-50 text-sky-700" statusText="SMS" />
               <DashboardKpiCard icon={Users} label="سازمان‌های فعال" value={numberFa(activeOrganizations.length)} description="وضعیت active در لیست سازمان‌ها" accent="bg-slate-100 text-slate-700" statusText="Org" />
             </section>
 
@@ -1049,23 +1006,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
               </div>
 
               <aside className="space-y-5">
-                <DashboardPanel testId="admin-sms-health-panel" title="سلامت SMS" description="صف، شکست‌ها و وضعیت worker بدون اجرای ارسال" icon={Send} action={<Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("sms")}>جزئیات SMS</Button>}>
-                  <div className="grid gap-3">
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-700"><div className="text-lg font-black">{numberFa(smsSummary.totalSent)}</div><div className="text-[10px] font-bold">ارسال</div></div>
-                      <div className="rounded-2xl bg-rose-50 p-3 text-rose-700"><div className="text-lg font-black">{numberFa(smsSummary.failed)}</div><div className="text-[10px] font-bold">ناموفق</div></div>
-                      <div className="rounded-2xl bg-amber-50 p-3 text-amber-700"><div className="text-lg font-black">{numberFa(smsSummary.queued)}</div><div className="text-[10px] font-bold">صف</div></div>
-                    </div>
-                    {(smsSummary.failed || smsSummary.queued) ? (
-                      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold leading-6 text-amber-800">
-                        صف یا خطای SMS وجود دارد؛ قبل از اجرای worker وضعیت provider و هزینه ارسال را بررسی کنید.
-                      </div>
-                    ) : (
-                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-bold text-emerald-800">صف SMS آرام است.</div>
-                    )}
-                  </div>
-                </DashboardPanel>
-
                 <DashboardPanel testId="admin-errors-panel" title="خطاهای اخیر" description="خلاصه رخدادهای باز یا تازه" icon={FileWarning} action={<Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("errors")}>مشاهده خطاها</Button>}>
                   <div className="space-y-2">
                     {errors.slice(0, 4).length ? errors.slice(0, 4).map((error) => (
@@ -1083,7 +1023,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
                       ["DB health", platformHealth.db === "healthy" ? "سالم" : platformHealth.db === "down" ? "قطع" : "نامشخص", Database],
                       ["Rate limit store", "نامشخص", ShieldCheck],
                       ["Document storage", "نامشخص", HardDrive],
-                      ["SMS config", smsTemplates.length ? `${numberFa(smsTemplates.filter((template) => template.enabled).length)} قالب فعال` : "نامشخص", Send],
                       ["APP public URL", typeof window !== "undefined" ? window.location.origin : "نامشخص", Globe2],
                     ].map(([label, value, Icon]: any) => (
                       <div key={label} className="flex items-center justify-between gap-3 rounded-xl bg-muted/45 px-3 py-2.5 text-xs">
@@ -1427,23 +1366,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
                   </label>
                 ))}
               </div>
-              <div className="rounded-xl border border-emerald-500/25 bg-emerald-50/50 p-4">
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 text-sm font-black text-emerald-800">
-                      <BellRing className="h-4 w-4" />
-                      افزونه SMS هشدارها
-                    </div>
-                    <p className="mt-2 text-xs leading-6 text-emerald-900/75">
-                      پلن Enterprise این قابلیت را پیش‌فرض دارد؛ برای پلن‌های پایین‌تر می‌توانید آن را به‌عنوان افزونه پرداختی فعال کنید و از جریان صورتحساب دستی فاکتور صادر کنید.
-                    </p>
-                  </div>
-                  <Button type="button" variant="outline" className="shrink-0 rounded-xl border-emerald-500/30 text-xs font-bold text-emerald-800 hover:bg-emerald-100" onClick={enableSmsAddonAndPrepareInvoice}>
-                    <ReceiptText className="ml-2 h-4 w-4" />
-                    فعال‌سازی و آماده‌سازی فاکتور
-                  </Button>
-                </div>
-              </div>
               <div className="grid gap-3 md:grid-cols-5">
                 {Object.entries(orgDetail?.usage || {}).map(([key, value]) => (
                   <div key={key} className="rounded-xl border border-border bg-muted/25 p-3">
@@ -1516,61 +1438,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
                             </tr>
                           );
                         })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-              <div className="rounded-xl border border-border">
-                <div className="flex flex-col gap-3 border-b border-border p-4 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 text-sm font-black">
-                      <Send className="h-4 w-4 text-primary" />
-                      آخرین پیامک‌ها
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">صف، ارسال، خطا و skip برای مشتری انتخاب‌شده</p>
-                  </div>
-                  <Button type="button" variant="outline" className="h-9 rounded-xl text-xs font-bold" onClick={runSmsWorker} disabled={smsRunning}>
-                    {smsRunning ? (
-                      <ActionSkeleton className="w-24" />
-                    ) : (
-                      <>
-                        <Send className="ml-2 h-4 w-4" />
-                        اجرای worker
-                      </>
-                    )}
-                  </Button>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-right text-xs">
-                    <thead className="bg-muted/50 text-muted-foreground">
-                      <tr><th className="px-4 py-3">وضعیت</th><th className="px-4 py-3">گیرنده</th><th className="px-4 py-3">منبع</th><th className="px-4 py-3">Provider</th><th className="px-4 py-3">نتیجه</th></tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {selectedSmsDeliveries.length === 0 ? (
-                        <EmptyTableRow colSpan={5}>
-                          <EmptyState
-                            icon={BellRing}
-                            title="هنوز پیامکی برای این مشتری ثبت نشده"
-                            description="بعد از رخدادهای جلسه، دمیوراژ یا وظایف فوری، نتیجه ارسال یا skip اینجا دیده می‌شود."
-                            compact
-                          />
-                        </EmptyTableRow>
-                      ) : (
-                        selectedSmsDeliveries.map((delivery) => (
-                          <tr key={delivery.id} className="align-top hover:bg-muted/30">
-                            <td className="px-4 py-3"><StatusBadge status={delivery.status} /></td>
-                            <td className="px-4 py-3">
-                              <div className="font-bold">{delivery.userName || "کاربر نامشخص"}</div>
-                              <div className="mt-1 text-muted-foreground" dir="ltr">{delivery.recipientPhone || "بدون شماره"}</div>
-                            </td>
-                            <td className="px-4 py-3 font-bold">{delivery.sourceType || "manual"}</td>
-                            <td className="px-4 py-3">{delivery.provider || "sms.ir"}</td>
-                            <td className="max-w-xs px-4 py-3 text-muted-foreground">
-                              {delivery.errorMessage || delivery.skipReason || (delivery.providerResponse?.dryRun ? "dry-run" : delivery.sentAt ? "sent" : formatDate(delivery.createdAt))}
-                            </td>
-                          </tr>
-                        ))
                       )}
                     </tbody>
                   </table>

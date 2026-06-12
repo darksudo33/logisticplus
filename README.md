@@ -1,6 +1,6 @@
 # Logistic Plus
 
-Logistic Plus is a Persian RTL logistics SaaS for shipment operations, customer tracking, documents, workflow tasks, billing, and company administration.
+Logistic Plus is a Persian RTL logistics operations app for shipment operations, customer tracking, documents, workflow tasks, billing records, and company administration.
 
 The current repository uses:
 
@@ -9,7 +9,7 @@ The current repository uses:
 - Express in [server.js](/C:/Users/Ahmadreza/Documents/logisticplus/server.js) for the API and production static serving.
 - PostgreSQL through the raw `pg` data layer in [src/server/db.js](/C:/Users/Ahmadreza/Documents/logisticplus/src/server/db.js).
 - SQL schema setup through [db/schema.sql](/C:/Users/Ahmadreza/Documents/logisticplus/db/schema.sql).
-- SMS.ir/dry-run SMS delivery through [src/server/sms-provider.js](/C:/Users/Ahmadreza/Documents/logisticplus/src/server/sms-provider.js) and queued alert processing through [src/server/sms-worker.js](/C:/Users/Ahmadreza/Documents/logisticplus/src/server/sms-worker.js).
+- Password login with platform-admin controlled company/user provisioning. Public signup, Zarinpal payment handoff, contact, pricing, landing, and SMS login/worker surfaces are not active in the public-release app.
 
 Do not assume this project is Next.js or Prisma-based unless the stack is deliberately changed later.
 
@@ -18,8 +18,8 @@ Do not assume this project is Next.js or Prisma-based unless the stack is delibe
 Last checked: 2026-05-17.
 
 - Local app is running on `http://localhost:3000`; `/api/health` and `/api/db/health` return ok.
-- Browser smoke checked `/`, `/contact`, `/login`, `/dashboard`, and `/admin`; the public pages render RTL content with no console errors or horizontal overflow.
-- The protected app currently opens for the seeded owner session. Admin includes SaaS organizations, contact requests, signups, subscription limits, billing/payment views, operational errors, and SMS analytics/templates/deliveries/manual worker controls.
+- Browser smoke should check `/`, `/login`, `/dashboard`, `/admin`, and token-based public tracking routes. `/` shows the login entry; removed public marketing/self-serve/search routes redirect to login.
+- The protected app currently opens for the seeded owner session. Admin includes manual organization/user provisioning, historical signup/contact review, subscription limits, billing records, and operational errors.
 - The regression suite is green: `npm.cmd run test:e2e:setup` reset `logisticplus_test`, then `npm.cmd run test:e2e` passed 43/43 tests.
 - `npm.cmd run lint`, `node --check server.js`, `node --check src/server/db.js`, and `npm.cmd run build` pass. The build still emits Vite's existing large chunk warning.
 - In the Codex desktop sandbox, Vite/esbuild may fail to read parent directories while loading `vite.config.ts`; rerunning the same build outside the sandbox passed.
@@ -47,7 +47,7 @@ npm install
 Copy-Item .env.example .env
 ```
 
-3. Edit `.env` for your PostgreSQL connection, seed password, document storage, public URL, and payment settings.
+3. Edit `.env` for your PostgreSQL connection, seed password, document storage, and public URL.
 
 For local development, the default database URLs are:
 
@@ -108,23 +108,10 @@ Important variables:
 - `INITIAL_ADMIN_PHONE`: optional phone for the first real production admin.
 - `SEED_USER_ID`: owner user id used by the bridge script; defaults to `u1`.
 - `SEED_ORGANIZATION_ID`: default organization id used by the bridge script.
-- `APP_PUBLIC_URL`: public base URL used for generated links and Zarinpal callbacks.
+- `APP_PUBLIC_URL`: public base URL used for generated links.
 - `PORT`: HTTP port used by `server.js`; defaults to `3000`.
 - `DOCUMENT_STORAGE_DIR`: local upload storage directory.
 - `DOCUMENT_MAX_BYTES`: max upload size in bytes.
-- `ZARINPAL_SANDBOX`: use sandbox-style local callback behavior unless set to `false`.
-- `ZARINPAL_MERCHANT_ID`: required for real Zarinpal payment requests.
-- `ZARINPAL_TIMEOUT_MS`: timeout for Zarinpal request/verify calls; defaults to `10000`.
-- `SMS_ENABLED`: enables SMS sending path; dry-run mode can still be used without provider credentials.
-- `SMS_DRY_RUN`: defaults to `true`; keep it enabled until SMS.ir account settings are verified.
-- `SMSIR_API_KEY` / `SMSIR_LINE_NUMBER`: SMS.ir credentials required only when `SMS_DRY_RUN=false`.
-- `SMSIR_USE_DEFAULT_LINE`: allow live sends without `SMSIR_LINE_NUMBER` when the SMS.ir account supports a default line.
-- `SMS_TIMEOUT_MS`: timeout for SMS.ir delivery calls; defaults to `10000`.
-- `SMS_WORKER_ENABLED`: starts the background alert worker when set to `true`; admin can run the worker manually without enabling this.
-- `SMS_WORKER_INTERVAL_MS`: background SMS worker interval; values below one minute fall back to five minutes.
-- `SMS_SMOKE_OWNER_EMAIL`: optional owner email for the guarded live production SMS smoke script.
-- `SMS_SMOKE_TARGET_PHONE`: optional target phone for the guarded live production SMS smoke script.
-- `SMS_SMOKE_ALLOW_CURRENT_KEY`: set only for an intentional live smoke before the known exposed SMS.ir key has been rotated; otherwise the script refuses live sending.
 - `RATE_LIMIT_STORE`: `memory` or `postgres`; defaults to `postgres` in production and `memory` in development.
 - `TRUST_PROXY`: whether Express should trust the platform reverse proxy; defaults to `true` in production.
 - `DISABLE_HMR`: set to `true` to disable Vite HMR.
@@ -137,7 +124,7 @@ Important variables:
 - `STAGING_PUBLIC_URL`: deployed staging base URL used by `npm run smoke:staging`.
 - `STAGING_OWNER_EMAIL` / `STAGING_OWNER_PASSWORD`: optional owner credentials for authenticated staging smoke checks.
 - `STAGING_SMOKE_SHIPMENT_ID`: shipment id used by staging public tracking checks.
-- `STAGING_SKIP_AUTH_SMOKE` / `STAGING_SKIP_ZARINPAL_HANDOFF`: skip high-impact staging smoke sections when credentials or merchant setup are not available.
+- `STAGING_SKIP_AUTH_SMOKE`: skip authenticated staging smoke checks when credentials are not available.
 - `STAGING_ALLOW_INSECURE_URL`: local-only escape hatch for validating `npm run smoke:staging` against an HTTP URL.
 
 Do not commit real secrets.
@@ -146,17 +133,9 @@ Do not commit real secrets.
 
 Document uploads are intentionally strict. The server accepts only matching extension/MIME pairs for PDF, common image formats, Word/Excel files, CSV, TXT, and RTF. Empty files, executable/script extensions, unknown extensions, and MIME mismatches are rejected. Document `shipmentId` and `customerId` parents must belong to the authenticated user's organization before any file bytes are stored.
 
-Abuse protection rate-limits login failures, public signup, payment start, and document upload/replace requests. Local development uses an in-memory limiter by default. Production should use `RATE_LIMIT_STORE=postgres`, which stores counters in the `rate_limit_buckets` table so limits are shared across app instances.
+Abuse protection rate-limits login failures, public tracking/search/chat, and document upload/replace requests. Local development uses an in-memory limiter by default. Production should use `RATE_LIMIT_STORE=postgres`, which stores counters in the `rate_limit_buckets` table so limits are shared across app instances.
 
 Public document downloads are limited to customer-visible documents attached to shipments with customer tracking access enabled. Token-based public tracking remains the safer customer-facing document path.
-
-## SMS Alerts
-
-SMS delivery is dry-run by default and uses SMS.ir only when `SMS_ENABLED=true` and `SMS_DRY_RUN=false`. The same provider path backs phone-code login, queued operational alerts, and admin-triggered worker runs.
-
-Queued alert coverage currently includes high-priority task assignments/reassignments, compliance meeting reminders, demurrage windows, and customer-visible shipment status updates. SMS alerts are gated by the organization's active subscription features; lower plans need the `smsNotifications` limit override or an upgraded plan before operational SMS rows are queued.
-
-Platform admin can review SMS analytics, delivery logs, editable templates, and the manual worker from `/admin`. Keep `SMS_WORKER_ENABLED=false` for initial production rollout and use the manual worker or the guarded smoke script until provider credentials, line/default-line behavior, and template text are verified.
 
 ## Useful Commands
 
@@ -176,7 +155,6 @@ npm run test:e2e:setup
 npm run test:e2e
 npm run smoke:production-config
 npm run smoke:staging
-npm run sms:prod-smoke -- precheck
 ```
 
 Command notes:
@@ -193,9 +171,8 @@ Command notes:
 - `npm run test:e2e:setup` drops/recreates only `TEST_DATABASE_URL`, then runs `db:seed` and `db:bridge` against it.
 - `npm run test:e2e` runs the Playwright security regression suite against `TEST_PORT`.
 - `npm run test:e2e:headed` runs the same suite with a visible browser.
-- `npm run smoke:production-config` confirms production startup checks fail loudly when Liara disk/Zarinpal config is missing.
+- `npm run smoke:production-config` confirms production startup checks fail loudly when required Liara storage/rate-limit settings are unsafe.
 - `npm run smoke:staging` validates a deployed Liara staging app when `STAGING_PUBLIC_URL` is set.
-- `npm run sms:prod-smoke -- precheck|prepare|run-worker|report` is a guarded Liara production SMS smoke utility; `run-worker` refuses live sending until the SMS.ir key rotation guard is satisfied.
 - `npm run deploy` runs `liara deploy` and requires Liara CLI authentication plus the correct fresh app selected or passed with `--app`.
 - `npm run deploy:staging` deploys with `liara.staging.json`, app `logisticplus-staging`, and disk mount `logisticplus-documents-staging:storage/documents`.
 
@@ -215,18 +192,12 @@ npm run start
 Public routes include:
 
 - `/`
-- `/contact`
-- `/pricing`
-- `/signup`
-- `/signup/pending`
-- `/billing/callback/zarinpal`
 - `/login`
-- `/track/search`
 - `/track/:token`
 
 Protected app routes require login and include dashboard, shipments, shipment detail/edit, customers, tasks, documents, compliance, cheques, quotations, archive, changelog, settings, profile, management, admin, and the disabled chat screen.
 
-Login supports password auth and phone SMS codes for users with a valid phone number. Chat is intentionally visible but disabled for now. Public tracking must remain customer-safe and must not expose internal notes, audit logs, staff tasks, financial details, private files, chat, or compliance internals.
+Login supports password auth for users created by platform/admin flows. Chat is intentionally visible but disabled for now. Public tracking must remain customer-safe and must not expose internal notes, audit logs, staff tasks, financial details, private files, chat, or compliance internals.
 
 ## Deployment Notes
 
@@ -253,11 +224,6 @@ For production, configure at minimum:
 - `DOCUMENT_STORAGE_DUAL_WRITE_REQUIRED=true`
 - `RATE_LIMIT_STORE=postgres`
 - `TRUST_PROXY=true`
-- `ZARINPAL_SANDBOX=false`
-- `ZARINPAL_MERCHANT_ID`
-- `ZARINPAL_TIMEOUT_MS`
-- `SMS_DRY_RUN=true`
-- `SMS_WORKER_ENABLED=false`
 - `INITIAL_ADMIN_EMAIL`
 - `INITIAL_ADMIN_PASSWORD`
 - `INITIAL_ADMIN_NAME`
@@ -271,7 +237,7 @@ Fresh Liara production should use private Liara Object Storage for new documents
 1. Create or select the Node.js app in Liara and keep `liara.json` as a NodeJS app on port `3000`.
 2. Create a Liara PostgreSQL database and set `DATABASE_URL` in app environment variables.
 3. Create a private Liara Object Storage bucket for documents.
-4. Set production env vars: `NODE_ENV=production`, `APP_PUBLIC_URL=https://<your-domain>`, `SESSION_SECRET`, `DOCUMENT_STORAGE_MODE=object`, `OBJECT_STORAGE_ENABLED=true`, Liara S3-compatible object-storage vars, `RATE_LIMIT_STORE=postgres`, `TRUST_PROXY=true`, `ZARINPAL_SANDBOX=false`, the live `ZARINPAL_MERCHANT_ID` when payments are ready, `SMS_DRY_RUN=true` for the first SMS rollout, and all required `INITIAL_ADMIN_*` vars.
+4. Set production env vars: `NODE_ENV=production`, `APP_PUBLIC_URL=https://<your-domain>`, `SESSION_SECRET`, `DOCUMENT_STORAGE_MODE=object`, `OBJECT_STORAGE_ENABLED=true`, Liara S3-compatible object-storage vars, `RATE_LIMIT_STORE=postgres`, `TRUST_PROXY=true`, and all required `INITIAL_ADMIN_*` vars.
 5. Run local preflight from [docs/deployment/liara-fresh-deploy-runbook.md](/C:/Users/Ahmadreza/Documents/logisticplus/docs/deployment/liara-fresh-deploy-runbook.md).
 6. Deploy with `liara deploy --app <LIARA_APP_NAME>` or the Liara Console flow.
 7. Run migrations in Liara shell: `liara shell --app <LIARA_APP_NAME> --command "npm run db:migrate"`.
@@ -279,9 +245,7 @@ Fresh Liara production should use private Liara Object Storage for new documents
 9. Run the first admin bootstrap: `liara shell --app <LIARA_APP_NAME> --command "npm run seed:production-admin"`.
 10. Smoke object storage: `liara shell --app <LIARA_APP_NAME> --command "npm run documents:storage:smoke"`.
 11. Login as the initial admin, verify `/admin`, verify `/dashboard`, then create real users and operational organization data manually.
-12. After deploy, smoke check `/api/health`, upload/download a private document, expose one customer-visible document through a tracking token, and run one controlled live Zarinpal payment when credentials are ready.
-
-For live SMS rollout, rotate the SMS.ir API key first, then set `SMS_ENABLED=true`, `SMS_DRY_RUN=false`, and either `SMSIR_LINE_NUMBER` or `SMSIR_USE_DEFAULT_LINE=true`. Use `npm run sms:prod-smoke -- precheck`, `prepare`, `run-worker`, and `report` in order for a controlled production send.
+12. After deploy, smoke check `/api/health`, upload/download a private document, expose one customer-visible document through a tracking token, and verify password login for the initial admin.
 
 Production data cleanup utility, not part of the fresh deployment path:
 
@@ -294,7 +258,7 @@ Run a Liara database backup before `--apply`. The utility preserves the owner us
 
 ### Liara Staging Validation
 
-Use the staging runbook in [docs/liara-staging-validation.md](/C:/Users/Ahmadreza/Documents/logisticplus/docs/liara-staging-validation.md) before production cutover. The staging path uses a separate Liara app, PostgreSQL database, and disk, then validates a live Zarinpal gateway handoff without completing a card charge.
+Use the staging runbook in [docs/liara-staging-validation.md](/C:/Users/Ahmadreza/Documents/logisticplus/docs/liara-staging-validation.md) before production cutover. The staging path uses a separate Liara app, PostgreSQL database, and disk, then validates health, password login, document storage, public tracking, and removed self-serve APIs.
 
 Useful Liara references:
 
@@ -319,7 +283,7 @@ The setup script refuses to reset a database unless the `TEST_DATABASE_URL` data
 
 If Playwright cannot download its bundled browser in your region, install Chrome or Edge locally. The config auto-detects common Windows Chrome/Edge paths, or you can set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`.
 
-As of 2026-05-17, `npm.cmd run test:e2e` passes 43/43 tests after setup. Coverage includes customer CRUD/archive, public funnel/contact requests, auth/session/RBAC/tenant isolation, public tracking safety, document hardening, billing/Zarinpal sandbox behavior, PostgreSQL-backed throttles, SMS login/alerts, and clean-database empty states.
+As of 2026-06-12, the public-release cleanup requires a focused Playwright refresh for old public funnel, SMS, and Zarinpal assertions. Do not treat the previous public signup/pricing/SMS/Zarinpal coverage statement as current after this cleanup.
 
 The current verification commands are:
 

@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import {
   AlertCircle,
-  ArrowRight,
   Calendar,
   CheckCircle2,
   Circle,
@@ -11,16 +10,12 @@ import {
   FileText,
   HelpCircle,
   MapPin,
-  Search,
   ShieldCheck,
   Truck,
   Route as RouteIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { ActionSkeleton } from "@/components/ui/skeleton";
 import { PublicTrackingSkeleton } from "@/src/components/SkeletonStates";
 
 type PublicDocument = {
@@ -441,75 +436,6 @@ function PublicTrackingResult({ data }: { data: PublicTrackingPayload }) {
   );
 }
 
-function PublicTrackSearch() {
-  const [shipmentCode, setShipmentCode] = useState("");
-  const [verification, setVerification] = useState("");
-  const [data, setData] = useState<PublicTrackingPayload | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setLoading(true);
-    setError("");
-    setData(null);
-    try {
-      const response = await fetch("/api/public/track/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shipmentCode, verification }),
-      });
-      const payload = await response.json();
-      if (!response.ok || !payload.ok) throw new Error(payload.error?.message || unavailableMessage);
-      setData(payload.data);
-    } catch {
-      setError("برای این اطلاعات، رهگیری قابل نمایش پیدا نشد.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <PublicShell>
-      <Card className="rounded-2xl border-blue-100 bg-white shadow-sm">
-        <CardHeader>
-          <CardTitle className="text-xl font-black text-slate-950">جستجوی امن محموله</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
-            <Input
-              value={shipmentCode}
-              onChange={(event) => setShipmentCode(event.target.value)}
-              placeholder="شماره محموله"
-              className="h-11 text-right"
-              dir="ltr"
-            />
-            <Input
-              value={verification}
-              onChange={(event) => setVerification(event.target.value)}
-              placeholder="ایمیل یا شماره تماس مشتری"
-              className="h-11 text-right"
-            />
-            <Button disabled={loading || !shipmentCode || !verification} className="h-11 gap-2">
-              {loading ? (
-                <ActionSkeleton inverted className="w-20" />
-              ) : (
-                <>
-                  <Search className="h-4 w-4" />
-                  جستجو
-                </>
-              )}
-            </Button>
-          </form>
-          {error && <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm font-semibold text-red-700">{error}</p>}
-        </CardContent>
-      </Card>
-      {loading && <PublicTrackingSkeleton />}
-      {data && <PublicTrackingResult data={data} />}
-    </PublicShell>
-  );
-}
-
 function PublicShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-950 font-sans" dir="rtl">
@@ -580,12 +506,6 @@ export default function PublicTrack() {
               <h1 className="text-xl font-black text-slate-950">رهگیری در دسترس نیست</h1>
               <p className="mt-2 text-sm font-medium leading-7 text-slate-500">{error}</p>
             </div>
-            <Button asChild variant="outline" className="gap-2">
-              <Link to="/track/search">
-                <ArrowRight className="h-4 w-4" />
-                جستجوی امن محموله
-              </Link>
-            </Button>
           </CardContent>
         </Card>
       )}
@@ -593,5 +513,3 @@ export default function PublicTrack() {
     </PublicShell>
   );
 }
-
-export { PublicTrackSearch };

@@ -211,11 +211,6 @@ export const publicDocumentQuerySchema = z.object({
   ),
 });
 
-export const publicTrackSearchBodySchema = z.object({
-  shipmentCode: z.string().trim().min(1, "Shipment code is required.").max(120),
-  verification: z.string().trim().min(1, "Verification value is required.").max(200),
-});
-
 export const documentMetadataSchema = z.object({
   title: optionalTrimmedText(180),
   type: optionalTrimmedText(80),

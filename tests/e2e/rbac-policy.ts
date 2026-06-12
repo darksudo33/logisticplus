@@ -94,7 +94,6 @@ export const RBAC_TENANT_POLICY: RoutePolicy[] = [
   { family: "platform-admin", method: "POST", path: "/api/admin/sms-deliveries/run-worker", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
   { family: "public-contact", method: "POST", path: "/api/contact-requests", auth: "public", permission: null, tenantScope: "public-safe" },
   { family: "public-tracking", method: "GET", path: "/api/public/track/:token", auth: "public", permission: null, tenantScope: "public-safe" },
-  { family: "public-tracking", method: "POST", path: "/api/public/track/search", auth: "public", permission: null, tenantScope: "public-safe" },
 ];
 
 export const NORMAL_APP_ROUTE_FAMILIES = [

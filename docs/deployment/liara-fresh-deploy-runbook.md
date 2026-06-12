@@ -71,23 +71,7 @@ S3_FORCE_PATH_STYLE=true
 DOCUMENT_STORAGE_DUAL_WRITE_REQUIRED=true
 ```
 
-SMS and Zarinpal:
-
-```text
-ZARINPAL_SANDBOX=false
-ZARINPAL_MERCHANT_ID=<live merchant id when payments are ready>
-ZARINPAL_TIMEOUT_MS=10000
-SMS_ENABLED=false
-SMS_DRY_RUN=true
-SMSIR_API_KEY=<set only when live SMS is ready>
-SMSIR_LINE_NUMBER=<set only when live SMS is ready>
-SMSIR_USE_DEFAULT_LINE=false
-SMS_TIMEOUT_MS=10000
-SMS_WORKER_ENABLED=false
-SMS_WORKER_INTERVAL_MS=300000
-```
-
-Keep SMS disabled/dry-run until live provider settings and templates are verified. Keep payment, SMS, database, and object-storage secrets out of source control and support logs.
+Keep database, object-storage, session, and bootstrap secrets out of source control and support logs. Public signup, Zarinpal payment handoff, contact/pricing/landing pages, and SMS login/worker surfaces are not used by the public-release app.
 
 ## Local Preflight
 
@@ -148,7 +132,7 @@ npm run documents:storage:backfill
 - Direct-only platform permission `platform.admin`.
 - Tenant roles: `CEO`, `MANAGER`, `OPERATIONS`, `CUSTOMER_SERVICE`, `FINANCE`, `QUOTATION_MANAGER`, `COMPLIANCE_STAFF`, `EMPLOYEE`, `CUSTOMER_VIEWER`.
 - Role-permission rows for tenant access. No role receives `platform.admin`.
-- Default SMS template rows. Existing template bodies and enabled flags are preserved.
+- Default SMS template rows for schema/catalog compatibility. Existing template bodies and enabled flags are preserved.
 - First organization subscription when the initial organization already exists.
 
 `seed:production-admin` creates or ensures the first real admin user, first real organization, owner membership, explicit `platform.admin` user grant, and active first-organization subscription. It preserves existing passwords unless `--reset-password` is passed.
@@ -169,7 +153,7 @@ Neither seed creates demo customers, demo shipments, documents, imported legacy 
 - Private public-document download is blocked.
 - Audit logs are written.
 - Public tracking responses do not contain storage keys, object keys, bucket names, storage paths, signed URLs, token hashes, or internal document fields.
-- SMS is disabled/dry-run unless real production credentials are ready.
+- Removed public self-serve/payment/SMS endpoints return 404.
 
 ## Rollback Plan
 

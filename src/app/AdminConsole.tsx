@@ -34,11 +34,6 @@ const adminSections: AdminNavItem[] = [
     description: "پرداخت‌ها، فاکتورها و رسیدها",
   },
   {
-    key: "sms",
-    label: "SMS",
-    description: "تحویل، تحلیل، قالب‌ها و worker محافظت‌شده",
-  },
-  {
     key: "errors",
     label: "خطاها",
     description: "لاگ خطاها و وضعیت حل‌شدن",

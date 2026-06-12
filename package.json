@@ -38,7 +38,6 @@
     "smoke:production-config": "tsx scripts/smoke-production-config.ts",
     "smoke:staging": "tsx scripts/validate-liara-staging.ts",
     "safety:check": "node scripts/safety-check.mjs",
-    "sms:prod-smoke": "node scripts/live-sms-production-smoke.mjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "deploy": "liara deploy",
