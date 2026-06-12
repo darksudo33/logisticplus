@@ -1,4 +1,4 @@
-import { organizationScopeClause } from "../tenant-scope.js";
+import { organizationScopeClause, requireOrganizationScope } from "../tenant-scope.js";
 import { DEFAULT_SHIPMENT_TYPE_CODE } from "../../shared/shipment-form-fields.js";
 
 function jsonObjectValue(value) {
@@ -201,4 +201,87 @@ export async function getShipmentOperationalRecord(
 ) {
   const row = await getShipmentRecord(pool, shipmentId, { organizationId });
   return toUiShipment(row, { includeCustomerPrivateDetails });
+}
+
+export function toExitedShipment(row) {
+  if (!row) return null;
+  const customerCode = row.customer_code || row.customer_id || "";
+  return {
+    ...toUiShipment(row),
+    customerDisplayName: customerCode,
+    cotageNumber: row.cotage_number || "",
+    declarationReference: row.declaration_reference || "",
+    exitDate: row.exit_date || "",
+    releaseStatus: row.release_status || "",
+    customsStatus: row.customs_status || "",
+    assignedManagerName: row.assigned_manager_name || "",
+    lastUpdatedAt: row.shipment_updated_at || row.updated_at || row.exited_archived_at || row.created_at,
+  };
+}
+
+export async function listExitedShipmentRecords(
+  pool,
+  {
+    organizationId,
+    filters = {},
+  } = {}
+) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listExitedShipmentRecords");
+  const values = [scopedOrganizationId];
+  const conditions = [
+    "s.organization_id = $1",
+    "s.archived_at IS NULL",
+    "s.exited_archived_at IS NOT NULL",
+  ];
+  const addValue = (value) => `$${values.push(value)}`;
+
+  if (filters.customerId) conditions.push(`s.customer_id = ${addValue(filters.customerId)}`);
+  if (filters.shipmentTypeCode) conditions.push(`s.shipment_type_code = ${addValue(filters.shipmentTypeCode)}`);
+  if (filters.postExitStatus) conditions.push(`s.post_exit_status = ${addValue(filters.postExitStatus)}`);
+  if (filters.assignedManagerId) conditions.push(`s.assigned_manager_id = ${addValue(filters.assignedManagerId)}`);
+  if (filters.exitDateFrom) conditions.push(`k.exit_date >= ${addValue(filters.exitDateFrom)}`);
+  if (filters.exitDateTo) conditions.push(`k.exit_date <= ${addValue(filters.exitDateTo)}`);
+  if (filters.q) {
+    const queryParam = addValue(`%${filters.q}%`);
+    conditions.push(`(
+      s.shipment_code ILIKE ${queryParam}
+      OR s.customer_name ILIKE ${queryParam}
+      OR c.company_name ILIKE ${queryParam}
+      OR c.contact_name ILIKE ${queryParam}
+      OR k.cotage_number ILIKE ${queryParam}
+      OR k.declaration_reference ILIKE ${queryParam}
+      OR k.bill_of_lading_number ILIKE ${queryParam}
+      OR k.order_registration_number ILIKE ${queryParam}
+    )`);
+  }
+
+  const limitParam = addValue(filters.limit || 100);
+  const result = await pool.query(
+    `SELECT
+       s.*,
+       s.updated_at AS shipment_updated_at,
+       c.customer_code,
+       COALESCE(c.customer_code, s.customer_id) AS customer_display_name,
+       k.cotage_number,
+       k.declaration_reference,
+       k.exit_date,
+       k.release_status,
+       k.customs_status,
+       assigned_manager.name AS assigned_manager_name
+     FROM shipments s
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
+     LEFT JOIN shipment_kootaj_details k
+       ON k.shipment_id = s.id
+      AND k.organization_id = s.organization_id
+     LEFT JOIN app_users assigned_manager
+       ON assigned_manager.id = s.assigned_manager_id
+      AND assigned_manager.organization_id = s.organization_id
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY COALESCE(s.post_exit_follow_up_at, s.exited_archived_at, s.updated_at) DESC, s.updated_at DESC
+     LIMIT ${limitParam}`,
+    values
+  );
+  return result.rows.map(toExitedShipment);
 }
