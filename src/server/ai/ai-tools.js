@@ -138,6 +138,72 @@ function definitionBlockerLabel(definition, code) {
   return cleanText(blocker?.labelFa) || cleanText(code);
 }
 
+export async function resolveShipmentRef(pool, context, { text = "", shipmentRef = "", limit = 5 } = {}) {
+  requireCeoToolContext(context);
+  const ref = normalizeAiLookupCode(shipmentRef || text).trim();
+  const compact = compactCode(ref);
+  if (!ref || !compact) return [];
+  const boundedLimit = Math.min(Math.max(Number(limit) || 5, 1), 5);
+  const fuzzyRef = ref.length >= 3 ? `%${ref}%` : ref;
+  const result = await pool.query(
+    `SELECT
+       s.id,
+       s.shipment_code,
+       s.customer_id,
+       s.customer_name,
+       s.status,
+       s.estimated_delivery_at,
+       s.updated_at,
+       c.customer_code,
+       c.company_name AS customer_company_name,
+       c.contact_name AS customer_contact_name,
+       p.sections_json #>> '{base,currentStage}' AS current_stage,
+       p.sections_json #>> '{base,statusText}' AS status_text,
+       p.sections_json #>> '{base,commercialCardId}' AS commercial_card_id
+     FROM shipments s
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
+      AND c.archived_at IS NULL
+     LEFT JOIN shipment_v2_profiles p
+       ON p.shipment_id = s.id
+      AND p.organization_id = s.organization_id
+     WHERE s.organization_id = $1
+       AND s.archived_at IS NULL
+       AND s.exited_archived_at IS NULL
+       AND (
+         lower(s.id) = lower($2)
+         OR lower(s.shipment_code) = lower($2)
+         OR lower(COALESCE(s.legacy_data->>'trackingNumber', '')) = lower($2)
+         OR lower(COALESCE(s.legacy_data->>'referenceNumber', '')) = lower($2)
+         OR regexp_replace(lower(COALESCE(s.shipment_code, '')), '[^a-z0-9]', '', 'g') = $3
+         OR ($4 <> $2 AND (
+           s.shipment_code ILIKE $4
+           OR s.customer_name ILIKE $4
+           OR c.customer_code ILIKE $4
+           OR c.company_name ILIKE $4
+           OR c.contact_name ILIKE $4
+         ))
+       )
+     ORDER BY
+       CASE
+         WHEN lower(s.shipment_code) = lower($2) THEN 0
+         WHEN regexp_replace(lower(COALESCE(s.shipment_code, '')), '[^a-z0-9]', '', 'g') = $3 THEN 1
+         WHEN lower(s.id) = lower($2) THEN 2
+         ELSE 3
+       END,
+       s.updated_at DESC,
+       s.created_at DESC
+     LIMIT $5`,
+    [context.organizationId, ref, compact, fuzzyRef, boundedLimit]
+  );
+  return result.rows.map((row) => ({
+    ...shipmentSummary(row),
+    currentStatus: cleanText(row.status_text) || cleanText(row.current_stage) || cleanText(row.status),
+    estimatedDelivery: cleanText(row.estimated_delivery_at),
+  }));
+}
+
 export async function searchShipmentByCode(pool, context, { shipmentCode } = {}) {
   requireCeoToolContext(context);
   const code = normalizeAiLookupCode(shipmentCode);
@@ -267,6 +333,7 @@ export async function getShipmentFullProfile(pool, context, { shipmentId } = {})
     },
     parties: {
       consigneeName: cleanText(base.consigneeName),
+      commercialCardId: cleanText(base.commercialCardId),
       commercialCardDisplayName: cleanText(base.commercialCardDisplayName),
       malvaniDisplayName: cleanText(base.malvaniDisplayName),
     },
@@ -432,6 +499,42 @@ export async function getShipmentWorkflowStatus(pool, context, { shipmentId } = 
   };
 }
 
+export async function resolveCustomerRef(pool, context, { text = "", customerRef = "", limit = 5 } = {}) {
+  requireCeoToolContext(context);
+  const ref = normalizeAiLookupCode(customerRef || text).trim();
+  const compact = compactCode(ref);
+  if (!ref || !compact) return [];
+  const boundedLimit = Math.min(Math.max(Number(limit) || 5, 1), 5);
+  const fuzzyRef = ref.length >= 2 ? `%${ref}%` : ref;
+  const result = await pool.query(
+    `SELECT id, customer_code, company_name, contact_name, phone, status, updated_at
+     FROM customers
+     WHERE organization_id = $1
+       AND archived_at IS NULL
+       AND (
+         lower(id) = lower($2)
+         OR lower(COALESCE(customer_code, '')) = lower($2)
+         OR regexp_replace(lower(COALESCE(customer_code, '')), '[^a-z0-9]', '', 'g') = $3
+         OR ($4 <> $2 AND (
+           company_name ILIKE $4
+           OR contact_name ILIKE $4
+           OR customer_code ILIKE $4
+         ))
+       )
+     ORDER BY
+       CASE
+         WHEN lower(COALESCE(customer_code, '')) = lower($2) THEN 0
+         WHEN regexp_replace(lower(COALESCE(customer_code, '')), '[^a-z0-9]', '', 'g') = $3 THEN 1
+         WHEN lower(id) = lower($2) THEN 2
+         ELSE 3
+       END,
+       updated_at DESC
+     LIMIT $5`,
+    [context.organizationId, ref, compact, fuzzyRef, boundedLimit]
+  );
+  return result.rows.map(customerSummary);
+}
+
 export async function searchCustomerByCode(pool, context, { customerCode } = {}) {
   requireCeoToolContext(context);
   const code = normalizeAiLookupCode(customerCode);
@@ -549,6 +652,67 @@ export async function getCustomerShipments(pool, context, { customerId } = {}) {
   }));
 }
 
+export async function getShipmentDetailContext(pool, context, { shipmentId } = {}) {
+  requireCeoToolContext(context);
+  const shipment = await getShipmentFullProfile(pool, context, { shipmentId });
+  if (!shipment) return null;
+  const commercialCardContext = await getCommercialCardContext(pool, context, {
+    shipmentId: shipment.id,
+    customerId: shipment.customerId,
+    cardRef: shipment.parties?.commercialCardId || shipment.parties?.commercialCardDisplayName,
+    limit: 3,
+  });
+  const commercialCard = commercialCardContext.cards[0] || null;
+  return {
+    type: "shipment_detail_context",
+    shipment: {
+      id: shipment.id,
+      shipmentCode: shipment.shipmentCode,
+      status: shipment.status,
+      currentStatus: shipment.currentStatus,
+      currentStep: shipment.currentStep,
+      priority: shipment.priority,
+      route: shipment.route,
+      ports: shipment.ports,
+      operationalDates: shipment.operationalDates,
+      updatedAt: shipment.updatedAt,
+      actionUrl: shipment.actionUrl,
+    },
+    customer: {
+      id: shipment.customerId,
+      customerCode: shipment.customerCode,
+      name: shipment.customerName,
+      actionUrl: shipment.customerId ? `/customers/${shipment.customerId}` : "",
+    },
+    commercialCard,
+    commercialCards: commercialCardContext.cards,
+  };
+}
+
+export async function getCustomerDetailContext(pool, context, { customerId } = {}) {
+  requireCeoToolContext(context);
+  if (!customerId) return null;
+  const [customer, shipments, commercialCardContext] = await Promise.all([
+    getCustomerProfile(pool, context, { customerId }),
+    getCustomerShipments(pool, context, { customerId }),
+    getCommercialCardContext(pool, context, { customerId, limit: 5 }),
+  ]);
+  if (!customer) return null;
+  return {
+    type: "customer_detail_context",
+    customer: {
+      id: customer.id,
+      customerCode: customer.customerCode,
+      companyName: customer.companyName,
+      contactName: customer.contactName,
+      status: customer.status,
+      actionUrl: customer.actionUrl,
+    },
+    shipments,
+    commercialCards: commercialCardContext.cards,
+  };
+}
+
 function documentDto(row = {}) {
   return {
     id: row.id,
@@ -649,6 +813,8 @@ function businessEntityContactSearchDto(row = {}) {
 function commercialCardDto(row = {}) {
   const data = jsonObject(row.data);
   const id = cleanText(row.item_id) || cleanText(data.id);
+  const contacts = Array.isArray(data.contacts) ? data.contacts : [];
+  const documents = Array.isArray(data.documents) ? data.documents : [];
   return {
     id,
     displayName:
@@ -660,8 +826,14 @@ function commercialCardDto(row = {}) {
     holderName: cleanText(data.holderName),
     companyName: cleanText(data.companyName),
     responsibleName: cleanText(data.responsibleName),
+    responsiblePhone: cleanText(data.responsiblePhone),
     cardNumber: cleanText(data.cardNumber),
+    issueDate: cleanText(data.issueDate),
+    expirationDate: cleanText(data.expirationDate),
+    nationalId: cleanText(data.nationalId),
     status: cleanText(data.status),
+    documentsCount: documents.filter((item) => item && !item.archivedAt).length,
+    contactsCount: contacts.filter((item) => item && !item.archivedAt).length,
     updatedAt: isoTimestamp(row.updated_at),
     actionUrl: "/daily-status",
   };
@@ -1126,6 +1298,139 @@ export async function searchCommercialCards(pool, context, { query = "", limit =
     [context.organizationId, `%${q}%`, Math.min(Math.max(Number(limit) || 5, 1), 10)]
   );
   return result.rows.map(commercialCardDto);
+}
+
+function uniqueCommercialCards(cards = []) {
+  const seen = new Set();
+  const unique = [];
+  for (const card of cards) {
+    const key = card.id || card.cardNumber || card.displayName;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(card);
+  }
+  return unique;
+}
+
+async function findCommercialCardsByRefs(pool, context, refs = [], { limit = 5 } = {}) {
+  requireCeoToolContext(context);
+  const lookups = [...new Set(refs.map((item) => normalizeAiLookupCode(item).trim()).filter(Boolean))].slice(0, 8);
+  if (!lookups.length) return [];
+  const patterns = lookups.map((item) => `%${item}%`);
+  const result = await pool.query(
+    `SELECT DISTINCT ON (organization_id, item_id)
+       item_id,
+       data,
+       updated_at
+     FROM user_records
+     WHERE organization_id = $1
+       AND collection = 'commercialCards'
+       AND COALESCE(data->>'isArchived', 'false') <> 'true'
+       AND COALESCE(data->>'archivedAt', '') = ''
+       AND (
+         item_id = ANY($2::text[])
+         OR data->>'id' = ANY($2::text[])
+         OR data->>'holderName' ILIKE ANY($3::text[])
+         OR data->>'companyName' ILIKE ANY($3::text[])
+         OR data->>'responsibleName' ILIKE ANY($3::text[])
+         OR data->>'cardNumber' ILIKE ANY($3::text[])
+       )
+     ORDER BY organization_id, item_id, updated_at DESC
+     LIMIT $4`,
+    [context.organizationId, lookups, patterns, Math.min(Math.max(Number(limit) || 5, 1), 5)]
+  );
+  return result.rows.map(commercialCardDto);
+}
+
+async function commercialCardRefsForShipment(pool, context, shipmentId) {
+  requireCeoToolContext(context);
+  if (!shipmentId) return { refs: [], shipmentCode: "", displayName: "" };
+  const result = await pool.query(
+    `SELECT
+       s.shipment_code,
+       p.sections_json #>> '{base,commercialCardId}' AS profile_card_id,
+       p.sections_json #>> '{base,commercialCardDisplayName}' AS profile_card_display_name,
+       k.commercial_card_id AS kootaj_card_id
+     FROM shipments s
+     LEFT JOIN shipment_v2_profiles p
+       ON p.shipment_id = s.id
+      AND p.organization_id = s.organization_id
+     LEFT JOIN shipment_kootaj_details k
+       ON k.shipment_id = s.id
+      AND k.organization_id = s.organization_id
+     WHERE s.id = $1
+       AND s.organization_id = $2
+       AND s.archived_at IS NULL
+       AND s.exited_archived_at IS NULL
+     LIMIT 1`,
+    [shipmentId, context.organizationId]
+  );
+  const row = result.rows[0] || {};
+  const refs = [
+    cleanText(row.profile_card_id),
+    cleanText(row.kootaj_card_id),
+    cleanText(row.profile_card_display_name),
+  ].filter(Boolean);
+  return {
+    refs,
+    shipmentCode: cleanText(row.shipment_code),
+    displayName: cleanText(row.profile_card_display_name),
+  };
+}
+
+export async function getCommercialCardContext(
+  pool,
+  context,
+  { customerId, shipmentId, cardRef, limit = 5 } = {}
+) {
+  requireCeoToolContext(context);
+  const refs = [cardRef].filter(Boolean);
+  let relation = { customerId: customerId || "", shipmentId: shipmentId || "", shipmentCode: "", displayName: "" };
+
+  if (shipmentId) {
+    const shipmentRefs = await commercialCardRefsForShipment(pool, context, shipmentId);
+    refs.push(...shipmentRefs.refs);
+    relation = { ...relation, shipmentCode: shipmentRefs.shipmentCode, displayName: shipmentRefs.displayName };
+  }
+
+  if (customerId) {
+    const customer = await getCustomerProfile(pool, context, { customerId });
+    if (customer) {
+      refs.push(customer.customerCode, customer.companyName, customer.contactName);
+      relation = {
+        ...relation,
+        customerCode: customer.customerCode,
+        customerName: customer.companyName || customer.contactName,
+      };
+    }
+  }
+
+  let cards = await findCommercialCardsByRefs(pool, context, refs, { limit });
+  if (!cards.length && relation.displayName) {
+    cards = [{
+      id: "",
+      displayName: relation.displayName,
+      holderName: relation.displayName,
+      companyName: "",
+      responsibleName: "",
+      responsiblePhone: "",
+      cardNumber: "",
+      issueDate: "",
+      expirationDate: "",
+      nationalId: "",
+      status: "",
+      documentsCount: 0,
+      contactsCount: 0,
+      updatedAt: "",
+      actionUrl: "/daily-status",
+    }];
+  }
+
+  return {
+    type: "commercial_card_context",
+    relation,
+    cards: uniqueCommercialCards(cards).slice(0, Math.min(Math.max(Number(limit) || 5, 1), 5)),
+  };
 }
 
 export async function getBusinessEntityContacts(pool, context, { entityType, entityId } = {}) {
