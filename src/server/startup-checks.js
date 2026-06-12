@@ -36,6 +36,9 @@ export function validateProductionConfig() {
   if (!process.env.DATABASE_URL) {
     errors.push("DATABASE_URL is required in production.");
   }
+  if (!String(process.env.SESSION_SECRET || "").trim()) {
+    errors.push("SESSION_SECRET is required in production.");
+  }
   validateHttpsUrl(process.env.APP_PUBLIC_URL, "APP_PUBLIC_URL", errors);
 
   if (process.env.ZARINPAL_SANDBOX !== "false") {
@@ -53,9 +56,11 @@ export function validateProductionConfig() {
       errors.push("SMSIR_LINE_NUMBER is required for live SMS unless SMSIR_USE_DEFAULT_LINE=true.");
     }
   }
-
   try {
-    resolveRateLimitStore();
+    const rateLimitStore = resolveRateLimitStore();
+    if (rateLimitStore !== "postgres") {
+      errors.push("RATE_LIMIT_STORE must be postgres in production.");
+    }
   } catch (error) {
     errors.push(error.message);
   }

@@ -4,6 +4,7 @@ build/
 coverage/
 playwright-report/
 test-results/
+.codex-qa-screenshots/
 storage/test-documents/
 storage/documents/
 backups/

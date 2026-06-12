@@ -25,6 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
+import { QUOTATIONS_UI_ENABLED } from "@/src/config/features";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import { differenceInDays, parseISO, addDays } from "date-fns-jalali";
@@ -53,12 +54,19 @@ export default function ArchivePage() {
   const archivedShipments = shipments.filter(s => s.isArchived);
   const archivedCheques = cheques.filter(c => c.status === "ARCHIVED");
   const archivedDocuments = documents.filter(d => d.isArchived);
+  const filterDisabledDeletedItems = (items: typeof deletedItems) =>
+    QUOTATIONS_UI_ENABLED ? items : items.filter((item) => String(item.entityType || "").toUpperCase() !== "QUOTE");
+  const visibleDeletedItems = filterDisabledDeletedItems(deletedItems);
 
   React.useEffect(() => {
     fetch("/api/archive")
       .then((response) => response.json())
       .then((payload) => {
-        if (payload?.ok) setApiArchiveItems(payload.data || []);
+        if (payload?.ok) {
+          setApiArchiveItems((payload.data || []).filter((item: any) => (
+            QUOTATIONS_UI_ENABLED || String(item.entityType || item.type || "").toLowerCase() !== "quotation"
+          )));
+        }
       })
       .catch(() => setApiArchiveItems([]));
   }, []);
@@ -110,7 +118,7 @@ export default function ArchivePage() {
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
     } else {
-      return deletedItems
+      return visibleDeletedItems
         .filter(item => {
           const itemData = item.data;
           const searchIn = (itemData.trackingNumber || itemData.name || itemData.bankName || "").toLowerCase();
@@ -140,7 +148,7 @@ export default function ArchivePage() {
     { label: "کل آرشیو", value: archivedShipments.length + archivedCheques.length + archivedDocuments.length, icon: Archive, tone: "text-amber-600 bg-amber-500/10" },
     { label: "محموله‌ها", value: archivedShipments.length, icon: Ship, tone: "text-blue-600 bg-blue-500/10" },
     { label: "اسناد", value: archivedDocuments.length, icon: FileText, tone: "text-emerald-600 bg-emerald-500/10" },
-    { label: "سطل زباله", value: deletedItems.length, icon: Trash2, tone: "text-red-600 bg-red-500/10" },
+    { label: "سطل زباله", value: visibleDeletedItems.length, icon: Trash2, tone: "text-red-600 bg-red-500/10" },
   ];
 
   return (
@@ -206,8 +214,8 @@ export default function ArchivePage() {
             >
               <Trash2 className="w-4 h-4" />
               سطل زباله
-              {deletedItems.length > 0 && (
-                <Badge className="bg-red-600 border-none mr-2">{deletedItems.length}</Badge>
+              {visibleDeletedItems.length > 0 && (
+                <Badge className="bg-red-600 border-none mr-2">{visibleDeletedItems.length}</Badge>
               )}
             </Button>
           </div>

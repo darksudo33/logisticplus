@@ -1,6 +1,48 @@
 import crypto from "node:crypto";
 import pg from "pg";
+import {
+  getPublicDocument as getPublicDocumentFromRepository,
+  getPublicDocumentByTrackingToken as getPublicDocumentByTrackingTokenFromRepository,
+  getPublicTrackingTokenAuditState as getPublicTrackingTokenAuditStateFromRepository,
+  getPublicTrackingByToken as getPublicTrackingByTokenFromRepository,
+  searchPublicTracking as searchPublicTrackingFromRepository,
+} from "./public-tracking.js";
+import {
+  markPaymentVerifiedByAuthority as markPaymentVerifiedByAuthorityInRepository,
+} from "./repositories/billing.js";
+import {
+  DEFAULT_SHIPMENT_TYPE_CODE,
+  normalizeShipmentTypeCode,
+  shipmentTypeByCode,
+} from "../shared/shipment-form-fields.js";
+import {
+  getDocumentDetail as getDocumentDetailFromRepository,
+  getDocumentForDownload as getDocumentForDownloadFromRepository,
+  listDocuments as listDocumentsFromRepository,
+  listDocumentStorageKeysForCleanup as listDocumentStorageKeysForCleanupFromRepository,
+} from "./repositories/documents.js";
+import {
+  canViewCustomerPrivateDetails,
+  getCustomerRecord as getCustomerRecordFromRepository,
+  listCustomerPhoneNumbers,
+  listCustomersDetailed as listCustomersDetailedFromRepository,
+  toUiCustomer as toUiCustomerFromRepository,
+} from "./repositories/customers.js";
+import {
+  getShipmentRecord as getShipmentRecordFromRepository,
+  listShipmentRecords as listShipmentRecordsFromRepository,
+} from "./repositories/shipments.js";
+import {
+  parseShipmentCode,
+  resolveManualShipmentCode,
+  SHIPMENT_CODE_ERRORS,
+} from "./shipment-codes.js";
+import {
+  previewUserDeletion as previewUserDeletionFromRepository,
+} from "./repositories/users.js";
 import { DEFAULT_SMS_TEMPLATE_MAP, renderSmsTemplateBody } from "./sms-templates.js";
+import { organizationIdFromTenantContext, organizationScopeClause, requireOrganizationScope } from "./tenant-scope.js";
+import { withTransaction } from "./transaction.js";
 
 const { Pool } = pg;
 
@@ -13,6 +55,7 @@ const TRANSIENT_SESSION_HOURS = 12;
 const REMEMBER_SESSION_DAYS = 30;
 const LOGIN_SMS_CODE_TTL_MINUTES = 5;
 const LOGIN_SMS_MAX_ATTEMPTS = 5;
+const QUOTATIONS_UI_SURFACE_ENABLED = false;
 
 export function hashSessionToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
@@ -62,6 +105,565 @@ function normalizeDigits(value) {
 
 function phoneDigitsSql(columnExpression) {
   return `regexp_replace(translate(COALESCE(${columnExpression}, ''), '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789'), '\\D', '', 'g')`;
+}
+
+const SEARCH_REQUEST_TYPES = new Set([
+  "all",
+  "shipments",
+  "customers",
+  "documents",
+  "tasks",
+  "archive",
+  "tracking",
+  "users",
+]);
+const SEARCH_TYPES_FOR_ALL = ["shipments", "customers", "documents", "tasks", "tracking", "users"];
+const MAX_SEARCH_LIMIT = 50;
+const MAX_SEARCH_OFFSET = 500;
+
+export function normalizeOperationalSearchQuery(value) {
+  return normalizeDigits(value)
+    .replace(/\u064a/g, "\u06cc")
+    .replace(/\u0649/g, "\u06cc")
+    .replace(/\u0643/g, "\u06a9")
+    .replace(/[\u200c\u200d\u200e\u200f\u00a0]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizedSearchSql(expression) {
+  let sql = `translate(COALESCE(${expression}, ''), '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789')`;
+  sql = `replace(${sql}, 'ي', 'ی')`;
+  sql = `replace(${sql}, 'ى', 'ی')`;
+  sql = `replace(${sql}, 'ك', 'ک')`;
+  for (const codePoint of [8204, 8205, 8206, 8207, 160]) {
+    sql = `replace(${sql}, chr(${codePoint}), ' ')`;
+  }
+  sql = `replace(${sql}, chr(65279), '')`;
+  return `lower(regexp_replace(${sql}, '\\s+', ' ', 'g'))`;
+}
+
+function appendSearchMatcher(values, normalizedQuery, fieldExpressions) {
+  const exactParam = `$${values.push(normalizedQuery)}`;
+  const prefixParam = `$${values.push(`${normalizedQuery}%`)}`;
+  const containsParam = `$${values.push(`%${normalizedQuery}%`)}`;
+  const containsChecks = fieldExpressions.map((expression) => `${expression} LIKE ${containsParam}`);
+  const exactChecks = fieldExpressions.map((expression) => `${expression} = ${exactParam}`);
+  const prefixChecks = fieldExpressions.map((expression) => `${expression} LIKE ${prefixParam}`);
+  return {
+    condition: `(${containsChecks.join(" OR ")})`,
+    score: `(CASE WHEN ${exactChecks.join(" OR ")} THEN 300 WHEN ${prefixChecks.join(" OR ")} THEN 200 ELSE 100 END)`,
+  };
+}
+
+function collectMatchedFields(fieldValues, normalizedQuery) {
+  return Object.entries(fieldValues || {})
+    .filter(([, value]) => normalizeOperationalSearchQuery(value).includes(normalizedQuery))
+    .map(([key]) => key);
+}
+
+function toSearchResult(row, normalizedQuery) {
+  return {
+    id: row.id,
+    type: row.result_type,
+    title: row.title || row.id,
+    subtitle: row.subtitle || "",
+    description: row.description || "",
+    url: row.url || "/dashboard",
+    badges: Array.isArray(row.badges) ? row.badges.filter(Boolean) : [],
+    matchedFields: collectMatchedFields(row.field_values, normalizedQuery),
+    updatedAt: new Date(row.updated_at || Date.now()).toISOString(),
+  };
+}
+
+async function runOperationalSearchQuery(sql, values, normalizedQuery) {
+  const result = await pool.query(sql, values);
+  return {
+    total: Number(result.rows[0]?.total_count || 0),
+    rows: result.rows.map((row) => ({
+      result: toSearchResult(row, normalizedQuery),
+      score: Number(row.search_score || 0),
+      updatedAt: new Date(row.updated_at || 0).getTime(),
+    })),
+  };
+}
+
+function createForbiddenSearchError(type) {
+  const error = new Error(`Search access denied for ${type}.`);
+  error.statusCode = 403;
+  error.code = "FORBIDDEN";
+  return error;
+}
+
+function hasSearchPermission(permissions, permissionKey) {
+  return permissions.includes(permissionKey) || permissions.includes("platform.admin");
+}
+
+function getSearchAccess(permissions) {
+  const canViewAllTasks = hasSearchPermission(permissions, "tasks.view_all");
+  const canViewOwnTasks = hasSearchPermission(permissions, "tasks.view_own");
+  return {
+    shipments: hasSearchPermission(permissions, "shipments.view_all"),
+    customers: hasSearchPermission(permissions, "customers.view"),
+    documents: hasSearchPermission(permissions, "documents.view_all"),
+    tasks: canViewAllTasks || canViewOwnTasks,
+    tasksOwnOnly: !canViewAllTasks && canViewOwnTasks,
+    archive: hasSearchPermission(permissions, "archive.view"),
+    tracking: hasSearchPermission(permissions, "shipments.view_all"),
+    users: hasSearchPermission(permissions, "users.manage"),
+  };
+}
+
+function clampSearchLimit(limit) {
+  const parsed = Number.parseInt(String(limit || ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 20;
+  return Math.min(parsed, MAX_SEARCH_LIMIT);
+}
+
+function clampSearchOffset(offset) {
+  const parsed = Number.parseInt(String(offset || ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.min(parsed, MAX_SEARCH_OFFSET);
+}
+
+async function searchShipments({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const ownerParam = `$${values.push(user.id)}`;
+  const includePrivateCustomerDetails = canViewCustomerPrivateDetails(user);
+  const customerSearchExpression = includePrivateCustomerDetails
+    ? "CONCAT_WS(' ', s.customer_name, c.company_name, c.contact_name, c.customer_code)"
+    : "COALESCE(c.customer_code, s.customer_id, '')";
+  const customerDisplayExpression = "COALESCE(c.customer_code, s.customer_id)";
+  const fields = {
+    shipmentNumber: normalizedSearchSql("s.shipment_code"),
+    trackingNumber: normalizedSearchSql("s.legacy_data->>'trackingNumber'"),
+    referenceNumber: normalizedSearchSql("CONCAT_WS(' ', s.legacy_data->>'referenceNumber', s.legacy_data->>'containerNumber')"),
+    customerName: normalizedSearchSql(customerSearchExpression),
+    origin: normalizedSearchSql("s.origin"),
+    destination: normalizedSearchSql("s.destination"),
+    status: normalizedSearchSql("s.status"),
+    recipientSender: normalizedSearchSql("CONCAT_WS(' ', s.legacy_data->>'recipient', s.legacy_data->>'sender')"),
+    notes: normalizedSearchSql("s.legacy_data->>'notes'"),
+    cotageNumber: normalizedSearchSql("k.cotage_number"),
+    declarationReference: normalizedSearchSql("k.declaration_reference"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       s.id,
+       'shipment' AS result_type,
+       COALESCE(NULLIF(s.shipment_code, ''), s.id) AS title,
+       CONCAT_WS(' · ', NULLIF(${customerDisplayExpression}, ''), NULLIF(CONCAT_WS(' → ', s.origin, s.destination), '')) AS subtitle,
+       CONCAT(
+         CASE WHEN s.exited_archived_at IS NOT NULL THEN 'خروج‌شده · ' ELSE '' END,
+         'وضعیت فعلی: ',
+         COALESCE(NULLIF(s.status, ''), 'ثبت نشده')
+       ) AS description,
+       CONCAT('/shipments/', s.id) AS url,
+       COALESCE(s.updated_at, s.created_at) AS updated_at,
+       ${matcher.score} AS search_score,
+       CASE WHEN s.exited_archived_at IS NOT NULL THEN ARRAY['خروج‌شده']::text[] ELSE ARRAY[]::text[] END AS badges,
+       jsonb_build_object(
+         'shipmentNumber', s.shipment_code,
+         'trackingNumber', s.legacy_data->>'trackingNumber',
+         'referenceNumber', CONCAT_WS(' ', s.legacy_data->>'referenceNumber', s.legacy_data->>'containerNumber'),
+         'customerName', ${customerDisplayExpression},
+         'customerCode', COALESCE(c.customer_code, s.customer_id),
+         'origin', s.origin,
+         'destination', s.destination,
+         'status', s.status,
+         'recipientSender', CONCAT_WS(' ', s.legacy_data->>'recipient', s.legacy_data->>'sender'),
+         'notes', s.legacy_data->>'notes',
+         'cotageNumber', k.cotage_number,
+         'declarationReference', k.declaration_reference
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM shipments s
+     LEFT JOIN customers c ON c.id = s.customer_id AND c.organization_id = s.organization_id
+     LEFT JOIN shipment_kootaj_details k
+       ON k.shipment_id = s.id
+      AND k.organization_id = s.organization_id
+     WHERE (s.organization_id = ${organizationParam} OR (s.organization_id IS NULL AND s.owner_user_id = ${ownerParam}))
+       AND s.archived_at IS NULL
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(s.updated_at, s.created_at) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchCustomers({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const includePrivateDetails = canViewCustomerPrivateDetails(user);
+  const fields = {
+    customerCode: normalizedSearchSql("COALESCE(c.customer_code, c.id)"),
+  };
+  if (includePrivateDetails) {
+    Object.assign(fields, {
+      customerName: normalizedSearchSql("CONCAT_WS(' ', c.company_name, c.contact_name)"),
+      phone: normalizedSearchSql("c.phone"),
+      email: normalizedSearchSql("c.email"),
+      address: normalizedSearchSql("c.address"),
+      referrer: normalizedSearchSql("c.referrer"),
+      nationalId: normalizedSearchSql("CONCAT_WS(' ', c.legacy_data->>'nationalId', c.legacy_data->>'taxId', c.legacy_data->>'nationalCode')"),
+    });
+  }
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  const subtitleExpression = "''";
+  const descriptionExpression = "'پرونده مشتری'";
+  const fieldValuesExpression = `jsonb_build_object(
+         'customerCode', COALESCE(c.customer_code, c.id),
+         'customerName', COALESCE(c.customer_code, c.id)
+       )`;
+  const titleExpression = "COALESCE(NULLIF(c.customer_code, ''), c.id)";
+  return runOperationalSearchQuery(
+    `SELECT
+       c.id,
+       'customer' AS result_type,
+       ${titleExpression} AS title,
+       ${subtitleExpression} AS subtitle,
+       ${descriptionExpression} AS description,
+       CONCAT('/customers/', c.id) AS url,
+       COALESCE(c.updated_at, c.created_at) AS updated_at,
+       ${matcher.score} AS search_score,
+       ${fieldValuesExpression} AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM customers c
+     WHERE c.organization_id = ${organizationParam}
+       AND c.archived_at IS NULL
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(c.updated_at, c.created_at) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchDocuments({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const fields = {
+    title: normalizedSearchSql("d.title"),
+    fileName: normalizedSearchSql("d.file_name"),
+    documentType: normalizedSearchSql("d.legacy_data->>'type'"),
+    relatedShipment: normalizedSearchSql("s.shipment_code"),
+    relatedCustomer: normalizedSearchSql("CONCAT_WS(' ', c.customer_code, c.company_name, c.contact_name)"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       d.id,
+       'document' AS result_type,
+       COALESCE(NULLIF(d.title, ''), NULLIF(d.file_name, ''), d.id) AS title,
+       CONCAT_WS(' · ', NULLIF(d.file_name, ''), NULLIF(s.shipment_code, ''), NULLIF(c.customer_code, '')) AS subtitle,
+       CONCAT('نوع سند: ', COALESCE(NULLIF(d.legacy_data->>'type', ''), 'OTHER')) AS description,
+       '/documents' AS url,
+       COALESCE(d.updated_at, d.created_at) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'title', d.title,
+         'fileName', d.file_name,
+         'documentType', d.legacy_data->>'type',
+         'relatedShipment', s.shipment_code,
+         'relatedCustomer', COALESCE(c.customer_code, d.customer_id)
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM documents d
+     LEFT JOIN shipments s ON s.id = d.shipment_id
+     LEFT JOIN customers c ON c.id = d.customer_id
+     WHERE d.organization_id = ${organizationParam}
+       AND d.archived_at IS NULL
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(d.updated_at, d.created_at) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchDocumentVersions({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const fields = {
+    title: normalizedSearchSql("d.title"),
+    fileName: normalizedSearchSql("dv.file_name"),
+    versionNumber: normalizedSearchSql("dv.version::text"),
+    relatedShipment: normalizedSearchSql("s.shipment_code"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       CONCAT(d.id, ':v', dv.version::text) AS id,
+       'document' AS result_type,
+       CONCAT(COALESCE(NULLIF(d.title, ''), NULLIF(dv.file_name, ''), d.id), ' v', dv.version::text) AS title,
+       CONCAT_WS(' · ', NULLIF(dv.file_name, ''), NULLIF(s.shipment_code, '')) AS subtitle,
+       'نسخه سند' AS description,
+       '/documents' AS url,
+       COALESCE(dv.created_at, d.updated_at, d.created_at) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'title', d.title,
+         'fileName', dv.file_name,
+         'versionNumber', dv.version::text,
+         'relatedShipment', s.shipment_code
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM document_versions dv
+     JOIN documents d ON d.id = dv.document_id
+     LEFT JOIN shipments s ON s.id = d.shipment_id
+     WHERE d.organization_id = ${organizationParam}
+       AND d.archived_at IS NULL
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(dv.created_at, d.updated_at, d.created_at) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchTasks({ user, normalizedQuery, fetchLimit, ownOnly }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const fields = {
+    title: normalizedSearchSql("t.title"),
+    description: normalizedSearchSql("t.description"),
+    status: normalizedSearchSql("t.status"),
+    assignedUser: normalizedSearchSql("t.assigned_to_name"),
+    dueDate: normalizedSearchSql("t.due_at"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const assignedFilter = ownOnly ? `AND t.assigned_to_id = $${values.push(user.id)}` : "";
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       t.id,
+       'task' AS result_type,
+       t.title AS title,
+       CONCAT_WS(' · ', NULLIF(t.assigned_to_name, ''), NULLIF(t.status, ''), NULLIF(t.due_at, '')) AS subtitle,
+       COALESCE(NULLIF(t.description, ''), 'وظیفه عملیاتی') AS description,
+       '/tasks' AS url,
+       COALESCE(t.updated_at, t.created_at) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'title', t.title,
+         'description', t.description,
+         'status', t.status,
+         'assignedUser', t.assigned_to_name,
+         'dueDate', t.due_at
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM tasks t
+     WHERE t.organization_id = ${organizationParam}
+       ${assignedFilter}
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(t.updated_at, t.created_at) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchTracking({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const ownerParam = `$${values.push(user.id)}`;
+  const fields = {
+    trackingCode: normalizedSearchSql("s.shipment_code"),
+    shipmentNumber: normalizedSearchSql("s.shipment_code"),
+    publicStatus: normalizedSearchSql("CONCAT_WS(' ', s.legacy_data->>'publicStatusLabel', s.legacy_data->>'publicStatusDescription', events.event_text)"),
+    publicRoute: normalizedSearchSql("CONCAT_WS(' ', s.origin, s.destination)"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       s.id,
+       'tracking' AS result_type,
+       COALESCE(NULLIF(s.shipment_code, ''), s.id) AS title,
+       CONCAT_WS(' · ', NULLIF(s.origin, ''), NULLIF(s.destination, '')) AS subtitle,
+       COALESCE(NULLIF(s.legacy_data->>'publicStatusLabel', ''), NULLIF(events.latest_label, ''), 'رهگیری مشتری') AS description,
+       CONCAT('/shipments/', s.id) AS url,
+       GREATEST(COALESCE(s.updated_at, s.created_at), COALESCE(events.last_event_at, s.created_at)) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'trackingCode', s.shipment_code,
+         'shipmentNumber', s.shipment_code,
+         'publicStatus', CONCAT_WS(' ', s.legacy_data->>'publicStatusLabel', s.legacy_data->>'publicStatusDescription', events.event_text),
+         'publicRoute', CONCAT_WS(' ', s.origin, s.destination)
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM shipments s
+     LEFT JOIN LATERAL (
+       SELECT
+         STRING_AGG(CONCAT_WS(' ', e.public_label, e.public_description), ' ') AS event_text,
+         (ARRAY_AGG(e.public_label ORDER BY e.created_at DESC))[1] AS latest_label,
+         MAX(e.created_at) AS last_event_at
+       FROM shipment_status_events e
+       WHERE e.shipment_id = s.id
+         AND e.organization_id = ${organizationParam}
+         AND e.is_customer_visible = TRUE
+     ) events ON TRUE
+     WHERE (s.organization_id = ${organizationParam} OR (s.organization_id IS NULL AND s.owner_user_id = ${ownerParam}))
+       AND s.archived_at IS NULL
+       AND s.customer_access_enabled = TRUE
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, GREATEST(COALESCE(s.updated_at, s.created_at), COALESCE(events.last_event_at, s.created_at)) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchArchive({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const fields = {
+    title: normalizedSearchSql("ar.title"),
+    summary: normalizedSearchSql("ar.summary"),
+    customerName: normalizedSearchSql("CONCAT_WS(' ', ar.customer_name, c.customer_code, s.customer_id)"),
+    entityType: normalizedSearchSql("ar.entity_type"),
+    entityId: normalizedSearchSql("ar.entity_id"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  const includeQuotationArchiveParam = `$${values.push(QUOTATIONS_UI_SURFACE_ENABLED)}`;
+  const archiveCustomerDisplayExpression = "COALESCE(c.customer_code, s.customer_id, CASE WHEN ar.entity_type = 'customer' THEN ar.entity_id END, ar.customer_name)";
+  return runOperationalSearchQuery(
+    `SELECT
+       ar.id,
+       'archive' AS result_type,
+       COALESCE(NULLIF(ar.title, ''), ar.entity_id, ar.id) AS title,
+       CONCAT_WS(' · ', NULLIF(${archiveCustomerDisplayExpression}, ''), NULLIF(ar.entity_type, '')) AS subtitle,
+       COALESCE(NULLIF(ar.summary, ''), 'رکورد بایگانی شده') AS description,
+       '/archive' AS url,
+       COALESCE(ar.archived_at, NOW()) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'title', ar.title,
+         'summary', ar.summary,
+         'customerName', ${archiveCustomerDisplayExpression},
+         'entityType', ar.entity_type,
+         'entityId', ar.entity_id
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM archive_records ar
+     LEFT JOIN shipments s
+       ON s.id = ar.shipment_id
+      AND s.organization_id = ar.organization_id
+     LEFT JOIN customers c
+       ON c.organization_id = ar.organization_id
+      AND (
+        c.id = s.customer_id
+        OR (ar.entity_type = 'customer' AND c.id = ar.entity_id)
+      )
+     WHERE ar.organization_id = ${organizationParam}
+       AND ar.restored_at IS NULL
+       AND (${includeQuotationArchiveParam}::boolean OR ar.entity_type <> 'quotation')
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(ar.archived_at, NOW()) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+async function searchUsers({ user, normalizedQuery, fetchLimit }) {
+  const values = [];
+  const organizationParam = `$${values.push(user.organizationId)}`;
+  const fields = {
+    name: normalizedSearchSql("u.name"),
+    email: normalizedSearchSql("u.email"),
+    role: normalizedSearchSql("u.role"),
+    department: normalizedSearchSql("u.department"),
+    phone: normalizedSearchSql("u.phone"),
+  };
+  const matcher = appendSearchMatcher(values, normalizedQuery, Object.values(fields));
+  const limitParam = `$${values.push(fetchLimit)}`;
+  return runOperationalSearchQuery(
+    `SELECT
+       u.id,
+       'user' AS result_type,
+       COALESCE(NULLIF(u.name, ''), u.email, u.id) AS title,
+       CONCAT_WS(' · ', NULLIF(u.role, ''), NULLIF(u.department, ''), NULLIF(u.email, '')) AS subtitle,
+       COALESCE(NULLIF(u.phone, ''), 'کاربر شرکت') AS description,
+       '/management' AS url,
+       COALESCE(u.updated_at, u.created_at) AS updated_at,
+       ${matcher.score} AS search_score,
+       jsonb_build_object(
+         'name', u.name,
+         'email', u.email,
+         'role', u.role,
+         'department', u.department,
+         'phone', u.phone
+       ) AS field_values,
+       COUNT(*) OVER()::int AS total_count
+     FROM app_users u
+     WHERE u.organization_id = ${organizationParam}
+       AND COALESCE(u.status, 'active') <> 'deleted'
+       AND ${matcher.condition}
+     ORDER BY search_score DESC, COALESCE(u.updated_at, u.created_at) DESC
+     LIMIT ${limitParam}`,
+    values,
+    normalizedQuery
+  );
+}
+
+export async function searchOperationalRecords({ user, tenantContext, q, type = "all", limit = 20, offset = 0 } = {}) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "searchOperationalRecords")
+    : user?.organizationId;
+  if (!scopedOrganizationId) {
+    throw createForbiddenSearchError("organization");
+  }
+  const scopedUser = { ...user, organizationId: scopedOrganizationId, organization_id: scopedOrganizationId };
+
+  const requestedType = SEARCH_REQUEST_TYPES.has(String(type)) ? String(type) : "all";
+  const normalizedQuery = normalizeOperationalSearchQuery(q);
+  const safeLimit = clampSearchLimit(limit);
+  const safeOffset = clampSearchOffset(offset);
+  const fetchLimit = Math.min(MAX_SEARCH_OFFSET + MAX_SEARCH_LIMIT, safeOffset + safeLimit);
+  const permissions = await getUserPermissions(user.id);
+  const access = getSearchAccess(permissions);
+  const selectedTypes = requestedType === "all" ? SEARCH_TYPES_FOR_ALL : [requestedType];
+
+  if (requestedType !== "all" && !access[requestedType]) {
+    throw createForbiddenSearchError(requestedType);
+  }
+
+  const searches = [];
+  for (const selectedType of selectedTypes) {
+    if (!access[selectedType]) continue;
+    if (selectedType === "shipments") searches.push(searchShipments({ user: scopedUser, normalizedQuery, fetchLimit }));
+    if (selectedType === "customers") searches.push(searchCustomers({ user: scopedUser, normalizedQuery, fetchLimit }));
+    if (selectedType === "documents") {
+      searches.push(searchDocuments({ user: scopedUser, normalizedQuery, fetchLimit }));
+      searches.push(searchDocumentVersions({ user: scopedUser, normalizedQuery, fetchLimit }));
+    }
+    if (selectedType === "tasks") searches.push(searchTasks({ user: scopedUser, normalizedQuery, fetchLimit, ownOnly: access.tasksOwnOnly }));
+    if (selectedType === "archive") searches.push(searchArchive({ user: scopedUser, normalizedQuery, fetchLimit }));
+    if (selectedType === "tracking") searches.push(searchTracking({ user: scopedUser, normalizedQuery, fetchLimit }));
+    if (selectedType === "users") searches.push(searchUsers({ user: scopedUser, normalizedQuery, fetchLimit }));
+  }
+
+  const settled = await Promise.all(searches);
+  const combined = settled.flatMap((item) => item.rows);
+  combined.sort((a, b) => b.score - a.score || b.updatedAt - a.updatedAt);
+
+  return {
+    query: normalizedQuery,
+    total: settled.reduce((sum, item) => sum + item.total, 0),
+    limit: safeLimit,
+    offset: safeOffset,
+    results: combined.slice(safeOffset, safeOffset + safeLimit).map((item) => item.result),
+  };
 }
 
 export function normalizeSmsPhone(phone) {
@@ -118,27 +720,168 @@ export async function getUserById(userId) {
   return result.rows[0] || null;
 }
 
-export async function getRecordsForUser(ownerUserId) {
-  const result = await pool.query(
-    `SELECT collection, item_id, data
-     FROM user_records
-     WHERE owner_user_id = $1
-     ORDER BY collection, item_id`,
-    [ownerUserId]
-  );
-
-  return result.rows.reduce((acc, row) => {
+function recordsFromRows(rows) {
+  return rows.reduce((acc, row) => {
     if (!acc[row.collection]) acc[row.collection] = [];
     acc[row.collection].push(row.data);
     return acc;
   }, {});
 }
 
-export async function replaceRecordsForUser(ownerUserId, recordsByCollection) {
+async function listOrganizationUserRecords(organizationId, collection) {
+  if (!organizationId) return [];
+  const result = await pool.query(
+    `SELECT DISTINCT ON (item_id) data
+     FROM user_records
+     WHERE organization_id = $1
+       AND collection = $2
+     ORDER BY item_id, updated_at DESC`,
+    [organizationId, collection]
+  );
+  return result.rows.map((row) => row.data);
+}
+
+async function listOrganizationUsersForBootstrap(organizationId) {
+  const result = await pool.query(
+    `SELECT u.id, u.name, u.email, u.role, u.avatar, u.is_online, u.department, u.status, u.last_seen_at,
+            u.phone, u.location, u.bio, u.two_factor_enabled, u.notification_preferences, u.organization_id,
+            o.status AS organization_status,
+            o.name AS organization_name,
+            o.plan_id AS organization_plan_id,
+            os.status AS subscription_status
+     FROM app_users u
+     LEFT JOIN organizations o ON o.id = u.organization_id
+     LEFT JOIN organization_subscriptions os ON os.organization_id = o.id
+     WHERE u.organization_id = $1
+     ORDER BY u.name ASC`,
+    [organizationId]
+  );
+  return result.rows.map(toUiUser);
+}
+
+async function listBootstrapShipments(ownerUserId, organizationId, { includeCustomerPrivateDetails = true } = {}) {
+  if (!organizationId) {
+    const result = await pool.query(
+      `SELECT *
+       FROM shipments
+       WHERE owner_user_id = $1
+         AND exited_archived_at IS NULL
+       ORDER BY updated_at DESC, created_at DESC`,
+      [ownerUserId]
+    );
+    return result.rows.map((row) => toUiShipment(row, { includeCustomerPrivateDetails }));
+  }
+  const result = await pool.query(
+    `SELECT
+       s.*,
+       c.customer_code,
+       COALESCE(c.company_name, c.contact_name, s.customer_name, s.legacy_data->>'customerName') AS customer_display_name,
+       p.id AS v2_profile_id,
+       p.flow_code AS v2_flow_code,
+       p.sections_json AS v2_sections_json,
+       p.updated_at AS v2_profile_updated_at
+     FROM shipments s
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
+      AND c.archived_at IS NULL
+     LEFT JOIN shipment_v2_profiles p
+       ON p.shipment_id = s.id
+      AND p.organization_id = s.organization_id
+     WHERE s.exited_archived_at IS NULL
+       AND (
+          s.organization_id = $1
+          OR (s.owner_user_id = $2 AND s.organization_id IS NULL)
+        )
+      ORDER BY COALESCE(p.updated_at, s.updated_at) DESC, s.created_at DESC`,
+    [organizationId, ownerUserId]
+  );
+  return result.rows.map((row) => toUiShipment(row, { includeCustomerPrivateDetails }));
+}
+
+export async function getRecordsForUser(ownerUserId, { organizationId, tenantContext } = {}) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "getRecordsForUser")
+    : organizationId
+      ? requireOrganizationScope(organizationId, "getRecordsForUser")
+      : null;
+  const user = await getUserById(ownerUserId);
+  if (scopedOrganizationId && user?.organization_id !== scopedOrganizationId) return null;
+
+  const values = [ownerUserId];
+  const organizationFilter = scopedOrganizationId ? ` AND (organization_id = $${values.push(scopedOrganizationId)} OR organization_id IS NULL)` : "";
+  const result = await pool.query(
+    `SELECT collection, item_id, data
+     FROM user_records
+     WHERE owner_user_id = $1${organizationFilter}
+     ORDER BY collection, item_id`,
+    values
+  );
+
+  const records = recordsFromRows(result.rows);
+  const userOrganizationId = user?.organization_id || null;
+  if (!userOrganizationId || String(user?.role || "").toUpperCase() === "CUSTOMER_VIEWER") {
+    return records;
+  }
+
+  const [
+    users,
+    customers,
+    shipments,
+    tasks,
+    documents,
+    appointments,
+    quotes,
+    shipmentSteps,
+    commercialCards,
+  ] = await Promise.all([
+    listOrganizationUsersForBootstrap(userOrganizationId),
+    listCustomersDetailed({
+      organizationId: userOrganizationId,
+      includeArchived: true,
+      includePrivateDetails: canViewCustomerPrivateDetails(user),
+    }),
+    listBootstrapShipments(ownerUserId, userOrganizationId, {
+      includeCustomerPrivateDetails: canViewCustomerPrivateDetails(user),
+    }),
+    listTasks({ organizationId: userOrganizationId, includeAll: true }),
+    listDocuments({ organizationId: userOrganizationId, includeArchived: true }),
+    listComplianceMeetings({ organizationId: userOrganizationId, includeArchived: true }),
+    QUOTATIONS_UI_SURFACE_ENABLED
+      ? listQuotations({
+          organizationId: userOrganizationId,
+          includeArchived: true,
+          includeCustomerPrivateDetails: canViewCustomerPrivateDetails(user),
+        })
+      : Promise.resolve([]),
+    listOrganizationUserRecords(userOrganizationId, "shipmentSteps"),
+    listOrganizationUserRecords(userOrganizationId, "commercialCards"),
+  ]);
+
+  return {
+    ...records,
+    users,
+    customers,
+    shipments,
+    tasks,
+    documents,
+    appointments,
+    quotes,
+    shipmentSteps,
+    commercialCards,
+  };
+}
+
+export async function replaceRecordsForUser(ownerUserId, recordsByCollection, { organizationId, tenantContext } = {}) {
   const client = await pool.connect();
   const entries = Object.entries(recordsByCollection || {}).filter(([, records]) =>
     Array.isArray(records)
   );
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "replaceRecordsForUser")
+    : organizationId
+      ? requireOrganizationScope(organizationId, "replaceRecordsForUser")
+      : null;
 
   try {
     await client.query("BEGIN");
@@ -146,9 +889,29 @@ export async function replaceRecordsForUser(ownerUserId, recordsByCollection) {
       ownerUserId,
     ]);
     const ownerOrganizationId = ownerResult.rows[0]?.organization_id || null;
+    if (scopedOrganizationId && ownerOrganizationId !== scopedOrganizationId) {
+      await client.query("ROLLBACK");
+      return null;
+    }
 
     let total = 0;
     for (const [collection, records] of entries) {
+      if (
+        collection === "notifications" ||
+        collection === "customers" ||
+        collection === "channels" ||
+        collection === "messages" ||
+        (!QUOTATIONS_UI_SURFACE_ENABLED && collection === "quotes")
+      ) {
+        // Notifications are canonical in the notifications table; the compatibility
+        // bridge must not overwrite real read state or resurrect seed/demo rows.
+        // Customers are canonical and may be privacy-sanitized in bootstrap payloads.
+        // Live chat is canonical in chat_* tables and must not be reseeded from
+        // legacy channels/messages collections.
+        // Quotations are temporarily hidden from the UI and must be managed only
+        // through the canonical quotation API while the UI surface is disabled.
+        continue;
+      }
       const uniqueRecords = Array.from(
         records
           .reduce((items, record, index) => {
@@ -218,7 +981,7 @@ export async function createSession(userId, { remember = false } = {}) {
     [userId]
   );
 
-  return { token, expiresAt, remember };
+  return { id, token, expiresAt, remember };
 }
 
 function createLoginSmsCode() {
@@ -326,6 +1089,8 @@ export async function getSessionByToken(token) {
     `SELECT
        s.id AS session_id,
        s.expires_at,
+       s.revoked_at,
+       s.last_seen_at AS session_last_seen_at,
        u.id,
        u.name,
        u.email,
@@ -340,16 +1105,23 @@ export async function getSessionByToken(token) {
        u.bio,
        u.two_factor_enabled,
        u.notification_preferences,
-       u.organization_id,
-       o.status AS organization_status,
-       o.name AS organization_name,
-       o.plan_id AS organization_plan_id,
-       os.status AS subscription_status
-     FROM app_sessions s
-     JOIN app_users u ON u.id = s.user_id
-     LEFT JOIN organizations o ON o.id = u.organization_id
-     LEFT JOIN organization_subscriptions os ON os.organization_id = o.id
-     WHERE s.token_hash = $1 AND s.expires_at > NOW()
+        u.organization_id,
+        om.role AS membership_role,
+        om.status AS membership_status,
+        o.status AS organization_status,
+        o.name AS organization_name,
+        o.plan_id AS organization_plan_id,
+        os.status AS subscription_status
+      FROM app_sessions s
+      JOIN app_users u ON u.id = s.user_id
+      LEFT JOIN organization_members om
+        ON om.organization_id = u.organization_id
+       AND om.user_id = u.id
+      LEFT JOIN organizations o ON o.id = u.organization_id
+      LEFT JOIN organization_subscriptions os ON os.organization_id = o.id
+     WHERE s.token_hash = $1
+       AND s.expires_at > NOW()
+       AND s.revoked_at IS NULL
      LIMIT 1`,
     [tokenHash]
   );
@@ -357,10 +1129,14 @@ export async function getSessionByToken(token) {
   const row = result.rows[0];
   if (!row) return null;
 
-  await pool.query(
-    "UPDATE app_sessions SET last_seen_at = NOW() WHERE id = $1",
-    [row.session_id]
-  );
+  const lastSeenAt = row.session_last_seen_at ? new Date(row.session_last_seen_at).getTime() : 0;
+  if (!lastSeenAt || Date.now() - lastSeenAt > 60_000) {
+    pool
+      .query("UPDATE app_sessions SET last_seen_at = NOW() WHERE id = $1", [row.session_id])
+      .catch((error) => {
+        console.error("Session last_seen update failed:", error);
+      });
+  }
 
   return {
     sessionId: row.session_id,
@@ -381,11 +1157,42 @@ export async function getSessionByToken(token) {
       notification_preferences: row.notification_preferences,
       organization_id: row.organization_id,
       organizationId: row.organization_id,
+      membershipId: row.organization_id ? `${row.organization_id}:${row.id}` : null,
+      membershipRole: row.membership_role,
+      membershipStatus: row.membership_status,
       organizationStatus: row.organization_status,
       organizationName: row.organization_name,
       organizationPlanId: row.organization_plan_id,
       subscriptionStatus: row.subscription_status,
     },
+  };
+}
+
+export async function getSessionAuditStateByToken(token) {
+  if (!token) return null;
+  const tokenHash = hashSessionToken(token);
+  const result = await pool.query(
+    `SELECT
+       s.id,
+       s.user_id,
+       s.expires_at,
+       s.revoked_at,
+       u.organization_id
+     FROM app_sessions s
+     LEFT JOIN app_users u ON u.id = s.user_id
+     WHERE s.token_hash = $1
+     LIMIT 1`,
+    [tokenHash]
+  );
+  const session = result.rows[0];
+  if (!session) return { matched: false, reason: "unknown_session" };
+  const expired = session.expires_at && new Date(session.expires_at).getTime() <= Date.now();
+  return {
+    matched: true,
+    sessionId: session.id,
+    userId: session.user_id,
+    organizationId: session.organization_id,
+    reason: session.revoked_at ? "revoked" : expired ? "expired" : "not_active",
   };
 }
 
@@ -421,11 +1228,17 @@ export async function updateUserProfile(userId, updates) {
   return result.rows[0] || null;
 }
 
-export async function updateUserPassword(userId, passwordHash) {
-  await pool.query(
-    "UPDATE app_users SET password_hash = $2, updated_at = NOW() WHERE id = $1",
-    [userId, passwordHash]
+export async function updateUserPassword(userId, passwordHash, { organizationId } = {}) {
+  const values = [userId, passwordHash];
+  const organizationFilter = organizationId ? ` AND organization_id = $${values.push(organizationId)}` : "";
+  const result = await pool.query(
+    `UPDATE app_users
+     SET password_hash = $2, updated_at = NOW()
+     WHERE id = $1 ${organizationFilter}
+     RETURNING id`,
+    values
   );
+  return result.rows[0] || null;
 }
 
 export async function updateUserSecurity(userId, updates) {
@@ -456,28 +1269,153 @@ export async function updateUserNotificationPreferences(userId, preferences) {
 
 export async function deleteSessionByToken(token) {
   if (!token) return;
-  await pool.query("DELETE FROM app_sessions WHERE token_hash = $1", [
+  await pool.query("UPDATE app_sessions SET revoked_at = COALESCE(revoked_at, NOW()) WHERE token_hash = $1", [
     hashSessionToken(token),
   ]);
 }
 
 export async function getUserPermissions(userId) {
   const result = await pool.query(
-    `SELECT p.key, u.email
-     FROM app_users u
-     JOIN roles r ON lower(r.name) = lower(u.role)
-     JOIN role_permissions rp ON rp.role_id = r.id
-     JOIN permissions p ON p.id = rp.permission_id
-     WHERE u.id = $1
-     ORDER BY p.key`,
+    `SELECT key
+     FROM (
+       SELECT p.key
+       FROM app_users u
+       JOIN roles r ON lower(r.name) = lower(u.role)
+       JOIN role_permissions rp ON rp.role_id = r.id
+       JOIN permissions p ON p.id = rp.permission_id
+       WHERE u.id = $1
+       UNION
+       SELECT p.key
+       FROM user_permissions up
+       JOIN permissions p ON p.id = up.permission_id
+       WHERE up.user_id = $1
+     ) granted_permissions
+     ORDER BY key`,
     [userId]
   );
-  const permissions = new Set(result.rows.map((row) => row.key));
-  const email = result.rows[0]?.email;
-  if (userId === "u1" || String(email || "").toLowerCase() === "darksudo22@gmail.com") {
-    permissions.add("platform.admin");
+  return result.rows.map((row) => row.key);
+}
+
+async function getUserPermissionsWithClient(queryable, userId) {
+  const result = await queryable.query(
+    `SELECT key
+     FROM (
+       SELECT p.key
+       FROM app_users u
+       JOIN roles r ON lower(r.name) = lower(u.role)
+       JOIN role_permissions rp ON rp.role_id = r.id
+       JOIN permissions p ON p.id = rp.permission_id
+       WHERE u.id = $1
+       UNION
+       SELECT p.key
+       FROM user_permissions up
+       JOIN permissions p ON p.id = up.permission_id
+       WHERE up.user_id = $1
+     ) granted_permissions
+     ORDER BY key`,
+    [userId]
+  );
+  return result.rows.map((row) => row.key);
+}
+
+export async function grantUserPermission(userId, permissionKey, { grantedById, reason, audit } = {}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const targetResult = await client.query(
+      "SELECT id, organization_id, role, status FROM app_users WHERE id = $1 LIMIT 1",
+      [userId]
+    );
+    const target = targetResult.rows[0];
+    if (!target) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const permissionResult = await client.query("SELECT id, key FROM permissions WHERE key = $1 LIMIT 1", [permissionKey]);
+    const permission = permissionResult.rows[0];
+    if (!permission) {
+      const error = new Error("Permission was not found.");
+      error.statusCode = 404;
+      error.code = "PERMISSION_NOT_FOUND";
+      throw error;
+    }
+    const before = { permissions: await getUserPermissionsWithClient(client, userId) };
+    await client.query(
+      `INSERT INTO user_permissions (user_id, permission_id, granted_by_id, reason)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, permission_id) DO UPDATE SET
+         granted_by_id = EXCLUDED.granted_by_id,
+         reason = EXCLUDED.reason`,
+      [userId, permission.id, grantedById || null, reason || null]
+    );
+    const after = { permissions: await getUserPermissionsWithClient(client, userId) };
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? target.organization_id ?? null,
+        before,
+        after,
+        metadata: { ...(audit.metadata || {}), permissionKey },
+        queryable: client,
+        required: true,
+      });
+    }
+    await client.query("COMMIT");
+    return { target, permissionKey, before, after };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
-  return [...permissions].sort();
+}
+
+export async function revokeUserPermission(userId, permissionKey, { audit } = {}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const targetResult = await client.query(
+      "SELECT id, organization_id, role, status FROM app_users WHERE id = $1 LIMIT 1",
+      [userId]
+    );
+    const target = targetResult.rows[0];
+    if (!target) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const permissionResult = await client.query("SELECT id, key FROM permissions WHERE key = $1 LIMIT 1", [permissionKey]);
+    const permission = permissionResult.rows[0];
+    if (!permission) {
+      const error = new Error("Permission was not found.");
+      error.statusCode = 404;
+      error.code = "PERMISSION_NOT_FOUND";
+      throw error;
+    }
+    const before = { permissions: await getUserPermissionsWithClient(client, userId) };
+    await client.query(
+      "DELETE FROM user_permissions WHERE user_id = $1 AND permission_id = $2",
+      [userId, permission.id]
+    );
+    const after = { permissions: await getUserPermissionsWithClient(client, userId) };
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? target.organization_id ?? null,
+        before,
+        after,
+        metadata: { ...(audit.metadata || {}), permissionKey },
+        queryable: client,
+        required: true,
+      });
+    }
+    await client.query("COMMIT");
+    return { target, permissionKey, before, after };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function requirePermission(user, permissionKey) {
@@ -518,7 +1456,7 @@ export function getFeatureConfig(feature) {
   return featureTables[feature] || null;
 }
 
-export async function listFeatureRecords(feature, { organizationId } = {}) {
+export async function listFeatureRecords(feature, { organizationId, includeCustomerPrivateDetails = true } = {}) {
   const config = getFeatureConfig(feature);
   if (!config) {
     const error = new Error(`Unknown feature: ${feature}`);
@@ -526,10 +1464,15 @@ export async function listFeatureRecords(feature, { organizationId } = {}) {
     error.code = "NOT_FOUND";
     throw error;
   }
+  if (feature === "shipments") {
+    const rows = await listShipmentRecordsFromRepository(pool, { organizationId });
+    return rows.map((row) => toUiShipment(row, { includeCustomerPrivateDetails }));
+  }
 
+  const scopedOrganizationId = requireOrganizationScope(organizationId, `listFeatureRecords:${feature}`);
   const values = [];
-  const where = organizationId ? "WHERE organization_id = $1" : "";
-  if (organizationId) values.push(organizationId);
+  const where = "WHERE organization_id = $1";
+  values.push(scopedOrganizationId);
   const result = await pool.query(
     `SELECT * FROM ${config.table} ${where} ORDER BY ${config.orderBy}`,
     values
@@ -538,13 +1481,667 @@ export async function listFeatureRecords(feature, { organizationId } = {}) {
 }
 
 export async function getShipmentRecord(shipmentId, { organizationId } = {}) {
-  const values = [shipmentId];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
+  return getShipmentRecordFromRepository(pool, shipmentId, { organizationId });
+}
+
+export async function getShipmentOperationalRecord(shipmentId, { organizationId, includeCustomerPrivateDetails = true } = {}) {
+  const row = await getShipmentRecordFromRepository(pool, shipmentId, { organizationId });
+  return toUiShipment(row, { includeCustomerPrivateDetails });
+}
+
+function jsonObjectValue(value) {
+  if (!value) return {};
+  if (typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function textValue(value) {
+  if (value === undefined || value === null) return "";
+  return String(value).trim();
+}
+
+function toUiShipment(row, { includeCustomerPrivateDetails = true } = {}) {
+  if (!row) return null;
+  const legacy = row.legacy_data || {};
+  const v2Sections = jsonObjectValue(row.v2_sections_json);
+  const v2Base = jsonObjectValue(v2Sections.base);
+  const hasV2Profile = Boolean(row.v2_profile_id || row.v2_flow_code);
+  const v2StatusText = textValue(v2Base.statusText);
+  const v2CurrentStage = textValue(v2Base.currentStage);
+  const v2Origin = textValue(v2Base.origin);
+  const v2DischargePort = textValue(v2Base.dischargePort);
+  const v2DeliveryPort = textValue(v2Base.deliveryPort);
+  const freeTimeDays = Number(legacy.freeTimeDays || row.free_time_days || 0);
+  const customerCode = row.customer_code || legacy.customerCode || legacy.customer_code || row.customer_id || legacy.customerId || "";
+  const customerName = customerCode;
+  return {
+    id: row.id,
+    trackingNumber: row.shipment_code || legacy.trackingNumber || row.id,
+    containerNumber: legacy.containerNumber || "",
+    customerId: row.customer_id || legacy.customerId || "",
+    customerCode,
+    customerName,
+    origin: v2Origin || row.origin || legacy.origin || "",
+    destination: v2DeliveryPort || row.destination || legacy.destination || "",
+    status: row.status || legacy.status || "PENDING",
+    v2ProfileId: row.v2_profile_id || null,
+    v2FlowCode: row.v2_flow_code || null,
+    hasV2Profile,
+    displayStatusText: v2StatusText,
+    currentStage: v2CurrentStage,
+    dischargePort: v2DischargePort,
+    deliveryPort: v2DeliveryPort || row.destination || legacy.destination || "",
+    shipmentDirection: row.shipment_direction || legacy.shipmentDirection || legacy.shipment_direction || "import",
+    transportMode: row.transport_mode || legacy.transportMode || legacy.transport_mode || "",
+    shipmentTypeCode: row.shipment_type_code || legacy.shipmentTypeCode || legacy.shipment_type_code || DEFAULT_SHIPMENT_TYPE_CODE,
+    createdAt: row.created_at || legacy.createdAt || new Date().toISOString(),
+    estimatedDelivery: row.estimated_delivery_at || legacy.estimatedDelivery || "",
+    actualDelivery: row.actual_delivery_at || legacy.actualDelivery || undefined,
+    freeTimeDays: Number.isFinite(freeTimeDays) ? freeTimeDays : 0,
+    isArchived: Boolean(row.archived_at || legacy.isArchived),
+    isExitedArchived: Boolean(row.exited_archived_at),
+    exitedArchivedAt: row.exited_archived_at || null,
+    exitedArchivedById: row.exited_archived_by_id || null,
+    exitedArchiveReason: row.exited_archive_reason || "",
+    postExitStatus: row.post_exit_status || "needs_follow_up",
+    postExitNote: row.post_exit_note || "",
+    postExitFollowUpAt: row.post_exit_follow_up_at || null,
+    postExitClosedAt: row.post_exit_closed_at || null,
+    postExitClosedById: row.post_exit_closed_by_id || null,
+    customerAccessEnabled: Boolean(row.customer_access_enabled || legacy.customerAccessEnabled),
+    hasCustomerAccess: Boolean(
+      row.customer_access_enabled ||
+        legacy.customerAccessEnabled ||
+        legacy.publicTrackingToken ||
+        legacy.customerAccessToken
+    ),
+    priority: row.priority || legacy.priority || "normal",
+    assignedManagerId: row.assigned_manager_id || legacy.assignedManagerId || undefined,
+    updatedAt: row.updated_at || legacy.updatedAt || row.created_at || new Date().toISOString(),
+    notes: legacy.notes || "",
+    containerCount: legacy.containerCount ?? undefined,
+    grossWeightKg: legacy.grossWeightKg ?? legacy.weight ?? undefined,
+    weight: legacy.weight ?? legacy.grossWeightKg ?? undefined,
+    customsDeclarationNumber: legacy.customsDeclarationNumber || "",
+    customsStatus: legacy.customsStatus || "",
+    importPermitNumber: legacy.importPermitNumber || "",
+  };
+}
+
+function shipmentTypeColumnsFromMutation(updates = {}, fallback = {}) {
+  const requestedType =
+    updates.shipmentTypeCode ??
+    updates.shipment_type_code ??
+    fallback.shipment_type_code ??
+    fallback.shipmentTypeCode ??
+    DEFAULT_SHIPMENT_TYPE_CODE;
+  const shipmentTypeCode = normalizeShipmentTypeCode(requestedType);
+  const shipmentType = shipmentTypeByCode.get(shipmentTypeCode);
+  const shipmentDirection =
+    updates.shipmentDirection ??
+    updates.shipment_direction ??
+    fallback.shipment_direction ??
+    fallback.shipmentDirection ??
+    shipmentType?.direction ??
+    "import";
+  const transportMode =
+    updates.transportMode ??
+    updates.transport_mode ??
+    fallback.transport_mode ??
+    fallback.transportMode ??
+    shipmentType?.transportMode ??
+    null;
+  return {
+    shipmentTypeCode,
+    shipmentDirection,
+    transportMode,
+  };
+}
+
+function cleanShipmentLegacyPatch(updates = {}) {
+  const legacyPatch = {};
+  for (const key of [
+    "containerNumber",
+    "containerCount",
+    "grossWeightKg",
+    "weight",
+    "actualDelivery",
+    "freeTimeDays",
+    "notes",
+    "customsDeclarationNumber",
+    "customsStatus",
+    "importPermitNumber",
+  ]) {
+    if (updates[key] !== undefined) legacyPatch[key] = updates[key] ?? "";
+  }
+  if (updates.shipmentTypeCode !== undefined || updates.shipment_type_code !== undefined) {
+    legacyPatch.shipmentTypeCode = updates.shipmentTypeCode ?? updates.shipment_type_code ?? "";
+  }
+  if (updates.shipmentDirection !== undefined || updates.shipment_direction !== undefined) {
+    legacyPatch.shipmentDirection = updates.shipmentDirection ?? updates.shipment_direction ?? "";
+  }
+  if (updates.transportMode !== undefined || updates.transport_mode !== undefined) {
+    legacyPatch.transportMode = updates.transportMode ?? updates.transport_mode ?? "";
+  }
+  return legacyPatch;
+}
+
+async function validateShipmentMutationRelations(client, { organizationId, ownerUserId, customerId, assignedManagerId }) {
+  if (ownerUserId) {
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    if (owner.rows[0]?.organization_id !== organizationId) {
+      const error = new Error("Shipment owner does not belong to the authenticated organization.");
+      error.code = "TENANT_SCOPE_REQUIRED";
+      error.statusCode = 403;
+      throw error;
+    }
+  }
+
+  let customerRow = null;
+  if (customerId) {
+    const customer = await client.query(
+      "SELECT id, customer_code, company_name, contact_name FROM customers WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL",
+      [customerId, organizationId]
+    );
+    if (!customer.rows[0]) {
+      const error = new Error("Shipment customer was not found.");
+      error.code = "CUSTOMER_NOT_FOUND";
+      error.statusCode = 404;
+      throw error;
+    }
+    customerRow = customer.rows[0];
+  }
+
+  if (assignedManagerId) {
+    const manager = await client.query(
+      "SELECT id FROM app_users WHERE id = $1 AND organization_id = $2 AND status <> 'suspended'",
+      [assignedManagerId, organizationId]
+    );
+    if (!manager.rows[0]) {
+      const error = new Error("Assigned manager was not found.");
+      error.code = "ASSIGNED_MANAGER_NOT_FOUND";
+      error.statusCode = 404;
+      throw error;
+    }
+  }
+
+  return customerRow;
+}
+
+export async function createShipmentRecord({ ownerUserId, actorUserId, organizationId, tenantContext, shipment, includeCustomerPrivateDetails = true }) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createShipmentRecord")
+    : requireOrganizationScope(organizationId, "createShipmentRecord");
+  const client = await pool.connect();
+  const id = crypto.randomUUID();
+  const shipmentCode = String(shipment.shipmentCode || shipment.trackingNumber || "").trim();
+  const legacyPatch = cleanShipmentLegacyPatch(shipment);
+  const typeColumns = shipmentTypeColumnsFromMutation(shipment);
+
+  try {
+    await client.query("BEGIN");
+    const customer = await validateShipmentMutationRelations(client, {
+      organizationId: scopedOrganizationId,
+      ownerUserId,
+      customerId: shipment.customerId || null,
+      assignedManagerId: shipment.assignedManagerId || null,
+    });
+    const codeParts = await resolveManualShipmentCode(client, {
+      organizationId: scopedOrganizationId,
+      shipmentCode,
+    });
+    const result = await client.query(
+      `INSERT INTO shipments (
+         id, organization_id, owner_user_id, shipment_code, customer_id, customer_name, status,
+         shamsi_year, shamsi_date, shamsi_sequence,
+         shipment_direction, transport_mode, shipment_type_code,
+         origin, destination, estimated_delivery_at, assigned_manager_id, legacy_data, created_by_id, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19, NOW())
+       RETURNING *`,
+      [
+        id,
+        scopedOrganizationId,
+        ownerUserId,
+        codeParts.shipmentCode,
+        shipment.customerId || null,
+        shipment.customerName || customer?.company_name || customer?.contact_name || null,
+        shipment.status || "PENDING",
+        codeParts.shamsiYear,
+        codeParts.shamsiDate,
+        codeParts.shamsiSequence,
+        typeColumns.shipmentDirection,
+        typeColumns.transportMode,
+        typeColumns.shipmentTypeCode,
+        shipment.origin || null,
+        shipment.destination || null,
+        shipment.estimatedDelivery || null,
+        shipment.assignedManagerId || null,
+        JSON.stringify({
+          ...legacyPatch,
+          trackingNumber: codeParts.shipmentCode,
+          customerId: shipment.customerId || undefined,
+          customerName: shipment.customerName || customer?.company_name || customer?.contact_name || undefined,
+          shipmentTypeCode: typeColumns.shipmentTypeCode,
+          shipmentDirection: typeColumns.shipmentDirection,
+          transportMode: typeColumns.transportMode,
+        }),
+        actorUserId || ownerUserId,
+      ]
+    );
+    await client.query("COMMIT");
+    return toUiShipment(
+      {
+        ...result.rows[0],
+        customer_code: customer?.customer_code || null,
+        customer_display_name: customer?.company_name || customer?.contact_name || result.rows[0].customer_name || "",
+      },
+      { includeCustomerPrivateDetails }
+    );
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error?.code === "23505") {
+      error.statusCode = 409;
+      error.code = "SHIPMENT_CODE_EXISTS";
+      error.message = SHIPMENT_CODE_ERRORS.duplicate;
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateShipmentOperationalFields(id, updates = {}, { organizationId, actorUserId, includeCustomerPrivateDetails = true } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateShipmentOperationalFields");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query(
+      `SELECT
+         s.*,
+         c.customer_code,
+         COALESCE(c.company_name, c.contact_name, s.customer_name, s.legacy_data->>'customerName') AS customer_display_name
+       FROM shipments s
+       LEFT JOIN customers c
+         ON c.id = s.customer_id
+        AND c.organization_id = s.organization_id
+        AND c.archived_at IS NULL
+       WHERE s.id = $1
+         AND s.organization_id = $2
+       FOR UPDATE OF s`,
+      [id, scopedOrganizationId]
+    );
+    const before = beforeResult.rows[0];
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const customer = await validateShipmentMutationRelations(client, {
+      organizationId: scopedOrganizationId,
+      customerId: updates.customerId || null,
+      assignedManagerId: updates.assignedManagerId || null,
+    });
+    const legacyPatch = cleanShipmentLegacyPatch(updates);
+    const hasShipmentTypeUpdate =
+      updates.shipmentTypeCode !== undefined ||
+      updates.shipment_type_code !== undefined ||
+      updates.shipmentDirection !== undefined ||
+      updates.shipment_direction !== undefined ||
+      updates.transportMode !== undefined ||
+      updates.transport_mode !== undefined;
+    const typeColumns = shipmentTypeColumnsFromMutation(updates, before);
+    let nextShipmentCode = before.shipment_code;
+    let nextShipmentCodeParts = null;
+    if (updates.trackingNumber !== undefined || updates.shipmentCode !== undefined) {
+      const requestedShipmentCode = String(updates.shipmentCode || updates.trackingNumber || "").trim();
+      if (!requestedShipmentCode) {
+        parseShipmentCode(requestedShipmentCode);
+      }
+      if (requestedShipmentCode && requestedShipmentCode !== before.shipment_code) {
+        nextShipmentCodeParts = await resolveManualShipmentCode(client, {
+          organizationId: scopedOrganizationId,
+          shipmentCode: requestedShipmentCode,
+          excludeShipmentId: id,
+        });
+        nextShipmentCode = nextShipmentCodeParts.shipmentCode;
+      }
+    }
+    const nextLegacy = {
+      ...(before.legacy_data || {}),
+      ...legacyPatch,
+      ...(updates.trackingNumber !== undefined || updates.shipmentCode !== undefined
+        ? { trackingNumber: nextShipmentCode }
+        : {}),
+      ...(updates.customerId !== undefined ? { customerId: updates.customerId || "" } : {}),
+      ...(updates.customerName !== undefined ? { customerName: updates.customerName || "" } : {}),
+      ...(hasShipmentTypeUpdate
+        ? {
+            shipmentTypeCode: typeColumns.shipmentTypeCode,
+            shipmentDirection: typeColumns.shipmentDirection,
+            transportMode: typeColumns.transportMode,
+          }
+        : {}),
+    };
+
+    const columns = [];
+    const values = [id, scopedOrganizationId];
+    const addColumn = (column, value) => {
+      values.push(value);
+      columns.push(`${column} = $${values.length}`);
+    };
+
+    if (updates.trackingNumber !== undefined || updates.shipmentCode !== undefined) {
+      addColumn("shipment_code", nextShipmentCode);
+      if (nextShipmentCodeParts) {
+        addColumn("shamsi_year", nextShipmentCodeParts.shamsiYear);
+        addColumn("shamsi_date", nextShipmentCodeParts.shamsiDate);
+        addColumn("shamsi_sequence", nextShipmentCodeParts.shamsiSequence);
+      }
+    }
+    if (updates.customerId !== undefined) addColumn("customer_id", updates.customerId || null);
+    if (updates.customerName !== undefined || customer) {
+      addColumn("customer_name", updates.customerName || customer?.company_name || customer?.contact_name || null);
+    }
+    if (updates.status !== undefined) addColumn("status", updates.status);
+    if (hasShipmentTypeUpdate) {
+      addColumn("shipment_direction", typeColumns.shipmentDirection || null);
+      addColumn("transport_mode", typeColumns.transportMode || null);
+      addColumn("shipment_type_code", typeColumns.shipmentTypeCode);
+    }
+    if (updates.origin !== undefined) addColumn("origin", updates.origin || null);
+    if (updates.destination !== undefined) addColumn("destination", updates.destination || null);
+    if (updates.estimatedDelivery !== undefined) addColumn("estimated_delivery_at", updates.estimatedDelivery || null);
+    if (updates.assignedManagerId !== undefined) addColumn("assigned_manager_id", updates.assignedManagerId || null);
+    addColumn("legacy_data", JSON.stringify(nextLegacy));
+
+    const result = await client.query(
+      `UPDATE shipments
+       SET ${columns.join(", ")},
+           updated_at = NOW()
+       WHERE id = $1 AND organization_id = $2
+       RETURNING *`,
+      values
+    );
+    await client.query("COMMIT");
+    return {
+      before: toUiShipment(before, { includeCustomerPrivateDetails }),
+      after: toUiShipment(
+        {
+          ...result.rows[0],
+          customer_code: customer?.customer_code || before.customer_code || null,
+          customer_display_name: customer?.company_name || customer?.contact_name || result.rows[0].customer_name || "",
+        },
+        { includeCustomerPrivateDetails }
+      ),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error?.code === "23505") {
+      error.statusCode = 409;
+      error.code = "SHIPMENT_CODE_EXISTS";
+      error.message = SHIPMENT_CODE_ERRORS.duplicate;
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+const POST_EXIT_STATUS_VALUES = new Set(["needs_follow_up", "in_progress", "settled", "closed"]);
+
+function normalizePostExitStatus(value, fallback = "needs_follow_up") {
+  const normalized = String(value || fallback || "needs_follow_up").trim();
+  return POST_EXIT_STATUS_VALUES.has(normalized) ? normalized : "needs_follow_up";
+}
+
+function toExitedShipment(row) {
+  if (!row) return null;
+  const customerCode = row.customer_code || row.customer_id || "";
+  return {
+    ...toUiShipment(row),
+    customerDisplayName: customerCode,
+    cotageNumber: row.cotage_number || "",
+    declarationReference: row.declaration_reference || "",
+    exitDate: row.exit_date || "",
+    releaseStatus: row.release_status || "",
+    customsStatus: row.customs_status || "",
+    assignedManagerName: row.assigned_manager_name || "",
+    lastUpdatedAt: row.shipment_updated_at || row.updated_at || row.exited_archived_at || row.created_at,
+  };
+}
+
+export async function listExitedShipmentRecords({
+  organizationId,
+  filters = {},
+} = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listExitedShipmentRecords");
+  const values = [scopedOrganizationId];
+  const conditions = [
+    "s.organization_id = $1",
+    "s.archived_at IS NULL",
+    "s.exited_archived_at IS NOT NULL",
+  ];
+  const addValue = (value) => `$${values.push(value)}`;
+
+  if (filters.customerId) conditions.push(`s.customer_id = ${addValue(filters.customerId)}`);
+  if (filters.shipmentTypeCode) conditions.push(`s.shipment_type_code = ${addValue(filters.shipmentTypeCode)}`);
+  if (filters.postExitStatus) conditions.push(`s.post_exit_status = ${addValue(filters.postExitStatus)}`);
+  if (filters.assignedManagerId) conditions.push(`s.assigned_manager_id = ${addValue(filters.assignedManagerId)}`);
+  if (filters.exitDateFrom) conditions.push(`k.exit_date >= ${addValue(filters.exitDateFrom)}`);
+  if (filters.exitDateTo) conditions.push(`k.exit_date <= ${addValue(filters.exitDateTo)}`);
+  if (filters.q) {
+    const queryParam = addValue(`%${filters.q}%`);
+    conditions.push(`(
+      s.shipment_code ILIKE ${queryParam}
+      OR s.customer_name ILIKE ${queryParam}
+      OR c.company_name ILIKE ${queryParam}
+      OR c.contact_name ILIKE ${queryParam}
+      OR k.cotage_number ILIKE ${queryParam}
+      OR k.declaration_reference ILIKE ${queryParam}
+      OR k.bill_of_lading_number ILIKE ${queryParam}
+      OR k.order_registration_number ILIKE ${queryParam}
+    )`);
+  }
+
+  const limitParam = addValue(filters.limit || 100);
   const result = await pool.query(
-    `SELECT * FROM shipments WHERE id = $1 ${organizationFilter} LIMIT 1`,
+    `SELECT
+       s.*,
+       s.updated_at AS shipment_updated_at,
+       c.customer_code,
+       COALESCE(c.customer_code, s.customer_id) AS customer_display_name,
+       k.cotage_number,
+       k.declaration_reference,
+       k.exit_date,
+       k.release_status,
+       k.customs_status,
+       assigned_manager.name AS assigned_manager_name
+     FROM shipments s
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
+     LEFT JOIN shipment_kootaj_details k
+       ON k.shipment_id = s.id
+      AND k.organization_id = s.organization_id
+     LEFT JOIN app_users assigned_manager
+       ON assigned_manager.id = s.assigned_manager_id
+      AND assigned_manager.organization_id = s.organization_id
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY COALESCE(s.post_exit_follow_up_at, s.exited_archived_at, s.updated_at) DESC, s.updated_at DESC
+     LIMIT ${limitParam}`,
     values
   );
-  return result.rows[0] || null;
+  return result.rows.map(toExitedShipment);
+}
+
+export async function moveShipmentToExitedArchive(id, { organizationId, actorUserId, reason } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "moveShipmentToExitedArchive");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query(
+      `SELECT *
+       FROM shipments
+       WHERE id = $1
+         AND organization_id = $2
+         AND archived_at IS NULL
+       FOR UPDATE`,
+      [id, scopedOrganizationId]
+    );
+    const before = beforeResult.rows[0];
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const result = await client.query(
+      `UPDATE shipments
+       SET exited_archived_at = COALESCE(exited_archived_at, NOW()),
+           exited_archived_by_id = COALESCE(exited_archived_by_id, $3),
+           exited_archive_reason = $4,
+           post_exit_status = COALESCE(post_exit_status, 'needs_follow_up'),
+           updated_at = NOW()
+       WHERE id = $1
+         AND organization_id = $2
+       RETURNING *`,
+      [id, scopedOrganizationId, actorUserId || null, reason || null]
+    );
+    await client.query("COMMIT");
+    return {
+      before: toUiShipment(before),
+      after: toUiShipment(result.rows[0]),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function restoreShipmentFromExitedArchive(id, { organizationId, actorUserId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "restoreShipmentFromExitedArchive");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query(
+      `SELECT *
+       FROM shipments
+       WHERE id = $1
+         AND organization_id = $2
+         AND archived_at IS NULL
+       FOR UPDATE`,
+      [id, scopedOrganizationId]
+    );
+    const before = beforeResult.rows[0];
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const result = await client.query(
+      `UPDATE shipments
+       SET exited_archived_at = NULL,
+           updated_at = NOW()
+       WHERE id = $1
+         AND organization_id = $2
+       RETURNING *`,
+      [id, scopedOrganizationId]
+    );
+    await client.query("COMMIT");
+    return {
+      before: toUiShipment(before),
+      after: toUiShipment(result.rows[0]),
+      actorUserId,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateShipmentPostExitFields(id, updates = {}, { organizationId, actorUserId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateShipmentPostExitFields");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query(
+      `SELECT *
+       FROM shipments
+       WHERE id = $1
+         AND organization_id = $2
+         AND archived_at IS NULL
+       FOR UPDATE`,
+      [id, scopedOrganizationId]
+    );
+    const before = beforeResult.rows[0];
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    if (!before.exited_archived_at) {
+      const error = new Error("Shipment is not in exited archive.");
+      error.statusCode = 409;
+      error.code = "SHIPMENT_NOT_EXITED_ARCHIVED";
+      throw error;
+    }
+
+    const nextStatus = updates.postExitStatus !== undefined
+      ? normalizePostExitStatus(updates.postExitStatus, before.post_exit_status)
+      : before.post_exit_status || "needs_follow_up";
+    const nextNote = updates.postExitNote !== undefined ? updates.postExitNote || null : before.post_exit_note;
+    const nextFollowUpAt = updates.postExitFollowUpAt !== undefined ? updates.postExitFollowUpAt || null : before.post_exit_follow_up_at;
+    const closeNow = nextStatus === "closed" && before.post_exit_status !== "closed";
+    const reopen = nextStatus !== "closed";
+
+    const result = await client.query(
+      `UPDATE shipments
+       SET post_exit_status = $3,
+           post_exit_note = $4,
+           post_exit_follow_up_at = $5,
+           post_exit_closed_at = CASE
+             WHEN $3 = 'closed' THEN COALESCE(post_exit_closed_at, NOW())
+             WHEN $6::boolean THEN NULL
+             ELSE post_exit_closed_at
+           END,
+           post_exit_closed_by_id = CASE
+             WHEN $3 = 'closed' AND $7::boolean THEN $8
+             WHEN $6::boolean THEN NULL
+             ELSE post_exit_closed_by_id
+           END,
+           updated_at = NOW()
+       WHERE id = $1
+         AND organization_id = $2
+       RETURNING *`,
+      [
+        id,
+        scopedOrganizationId,
+        nextStatus,
+        nextNote,
+        nextFollowUpAt,
+        reopen,
+        closeNow,
+        actorUserId || null,
+      ]
+    );
+    await client.query("COMMIT");
+    return {
+      before: toUiShipment(before),
+      after: toUiShipment(result.rows[0]),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function toUiDocument(row) {
@@ -556,6 +2153,7 @@ function toUiDocument(row) {
     customerId: row.customer_id || legacy.customerId || undefined,
     name: row.title || row.file_name || legacy.name || row.id,
     type: legacy.type || "OTHER",
+    note: legacy.note || legacy.notes || "",
     fileSize: row.file_size || legacy.fileSize || "",
     uploadedBy: row.uploaded_by_name || legacy.uploadedBy || "",
     createdAt: row.created_at || legacy.createdAt || new Date().toISOString(),
@@ -566,24 +2164,62 @@ function toUiDocument(row) {
   };
 }
 
+const documentStorageAuditKeys = new Set([
+  "storage_key",
+  "storage_provider",
+  "object_key",
+  "storage_bucket",
+  "storage_region",
+  "local_path",
+  "checksum",
+  "checksum_sha256",
+  "size_bytes",
+  "content_type",
+  "storage_migrated_at",
+  "storage_verified_at",
+  "storage_migration_status",
+  "storage_migration_error",
+]);
+
+function sanitizeDocumentAuditSnapshot(value) {
+  if (Array.isArray(value)) return value.map(sanitizeDocumentAuditSnapshot);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !documentStorageAuditKeys.has(key))
+      .map(([key, nested]) => [key, sanitizeDocumentAuditSnapshot(nested)])
+  );
+}
+
 function toUiTask(row) {
   if (!row) return null;
   const legacy = row.legacy_data || {};
   return {
     id: row.id,
+    organizationId: row.organization_id || legacy.organizationId || undefined,
+    ownerUserId: row.owner_user_id || legacy.ownerUserId || undefined,
     title: row.title,
     description: row.description || "",
     assignedToUserId: row.assigned_to_id || legacy.assignedToUserId || "",
     assignedToName: row.assigned_to_name || legacy.assignedToName || "",
+    assignedByUserId: row.assigned_by_id || legacy.assignedByUserId || "",
     assignedByName: row.assigned_by_name || legacy.assignedByName || "",
+    assignedAt: row.assigned_at || legacy.assignedAt || "",
+    assignmentNote: row.assignment_note || legacy.assignmentNote || "",
     status: row.status || legacy.status || "TODO",
     priority: row.priority || legacy.priority || "MEDIUM",
     dueDate: row.due_at || legacy.dueDate || "",
     deadline: legacy.deadline || "",
     shipmentId: row.shipment_id || legacy.shipmentId || undefined,
     createdAt: row.created_at || legacy.createdAt || new Date().toISOString(),
+    completedAt: row.completed_at || legacy.completedAt || undefined,
+    completedByUserId: row.completed_by_user_id || legacy.completedByUserId || undefined,
     sourceType: row.source_type || legacy.sourceType || "MANUAL",
     sourceId: row.source_id || legacy.sourceId || undefined,
+    workflowInstanceId: row.workflow_instance_id || legacy.workflowInstanceId || undefined,
+    workflowStepCode: row.workflow_step_code || legacy.workflowStepCode || undefined,
+    workflowBlockerId: row.workflow_blocker_id || legacy.workflowBlockerId || undefined,
+    blockerCode: row.blocker_code || legacy.blockerCode || undefined,
   };
 }
 
@@ -611,28 +2247,14 @@ function toUiUser(row) {
   };
 }
 
-function toUiCustomer(row) {
-  if (!row) return null;
-  const legacy = row.legacy_data || {};
-  return {
-    id: row.id,
-    name: row.contact_name || legacy.name || row.company_name,
-    company: row.company_name || legacy.company || "",
-    phone: row.phone || legacy.phone || "",
-    email: row.email || legacy.email || "",
-    address: row.address || legacy.address || "",
-    shipmentsCount: Number(legacy.shipmentsCount || 0),
-    createdAt: row.created_at || legacy.createdAt || new Date().toISOString(),
-    notes: row.notes || legacy.notes || "",
-    status: row.status || legacy.status || "active",
-    isArchived: Boolean(row.archived_at),
-  };
+function toUiCustomer(row, options = {}) {
+  return toUiCustomerFromRepository(row, options);
 }
 
-function toUiQuote(row) {
+function toUiQuote(row, { includeCustomerPrivateDetails = true } = {}) {
   if (!row) return null;
   const legacy = row.legacy_data || {};
-  return {
+  const quote = {
     id: row.id,
     customerId: row.customer_id || legacy.customerId || undefined,
     customerName: row.customer_name || legacy.customerName || "",
@@ -659,6 +2281,8 @@ function toUiQuote(row) {
     convertedShipmentId: row.converted_shipment_id || legacy.convertedShipmentId || undefined,
     isArchived: Boolean(row.archived_at),
   };
+  if (includeCustomerPrivateDetails) return quote;
+  return { ...quote, customerPhone: "" };
 }
 
 function toUiCheque(row) {
@@ -695,6 +2319,7 @@ function toUiAppointment(row, documents = []) {
     nextActionItems: row.next_action_items || legacy.nextActionItems || "",
     reminderSent: Boolean(row.reminder_sent ?? legacy.reminderSent),
     createdAt: row.created_at || legacy.createdAt || new Date().toISOString(),
+    isArchived: Boolean(row.archived_at),
   };
 }
 
@@ -809,7 +2434,11 @@ async function syncQuoteUserRecord(client, ownerUserId, quoteRow) {
 
 async function syncCustomerUserRecord(client, ownerUserId, customerRow) {
   if (!ownerUserId || !customerRow) return;
-  const uiCustomer = toUiCustomer(customerRow);
+  const phoneNumbers = await listCustomerPhoneNumbers(client, {
+    organizationId: customerRow.organization_id,
+    customerId: customerRow.id,
+  });
+  const uiCustomer = toUiCustomer(customerRow, { phoneNumbers });
   await client.query(
     `INSERT INTO user_records (owner_user_id, organization_id, collection, item_id, data, updated_at)
      VALUES ($1, $2, 'customers', $3, $4::jsonb, NOW())
@@ -825,6 +2454,10 @@ async function syncUsersCollection(client, ownerUserId) {
   if (!ownerUserId) return;
   const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
   const organizationId = owner.rows[0]?.organization_id || null;
+  await syncUsersCollectionForOrganization(client, organizationId, ownerUserId);
+}
+
+async function syncUsersCollectionForOrganization(client, organizationId, fallbackOwnerUserId = null) {
   const result = await client.query(
     `SELECT id, name, email, role, avatar, is_online, department, status, last_seen_at,
             phone, location, bio, two_factor_enabled, notification_preferences, organization_id
@@ -834,7 +2467,7 @@ async function syncUsersCollection(client, ownerUserId) {
     ,
     organizationId ? [organizationId] : []
   );
-  const ownerIds = organizationId ? result.rows.map((row) => row.id) : [ownerUserId];
+  const ownerIds = organizationId ? result.rows.map((row) => row.id) : [fallbackOwnerUserId].filter(Boolean);
   for (const targetOwnerId of ownerIds) {
     for (const row of result.rows) {
       await client.query(
@@ -862,15 +2495,33 @@ function taskSelect() {
 }
 
 function normalizeTaskStatus(status) {
-  const value = String(status || "TODO").toUpperCase();
-  return ["TODO", "IN_PROGRESS", "DONE", "BLOCKED", "CANCELLED"].includes(value)
-    ? value
-    : "TODO";
+  const value = String(status || "TODO").trim().toUpperCase();
+  const aliases = {
+    OPEN: "TODO",
+    ASSIGNED: "ASSIGNED",
+    WAITING: "WAITING",
+    INPROGRESS: "IN_PROGRESS",
+    IN_PROGRESS: "IN_PROGRESS",
+    BLOCKED: "BLOCKED",
+    DONE: "DONE",
+    COMPLETED: "DONE",
+    CANCELLED: "CANCELLED",
+    CANCELED: "CANCELLED",
+    TODO: "TODO",
+  };
+  return aliases[value] || "TODO";
 }
 
 function normalizeTaskPriority(priority) {
-  const value = String(priority || "MEDIUM").toUpperCase();
-  return ["LOW", "MEDIUM", "HIGH", "URGENT"].includes(value) ? value : "MEDIUM";
+  const value = String(priority || "MEDIUM").trim().toUpperCase();
+  const aliases = {
+    LOW: "LOW",
+    NORMAL: "MEDIUM",
+    MEDIUM: "MEDIUM",
+    HIGH: "HIGH",
+    URGENT: "URGENT",
+  };
+  return aliases[value] || "MEDIUM";
 }
 
 async function createTaskNotification(client, { userId, task, title, body }) {
@@ -897,93 +2548,139 @@ async function createTaskNotification(client, { userId, task, title, body }) {
 }
 
 export async function listDocuments({ ownerUserId, shipmentId, customerId, organizationId, includeArchived = false } = {}) {
-  const conditions = [];
-  const values = [];
-
-  if (ownerUserId) {
-    values.push(ownerUserId);
-    conditions.push(`d.owner_user_id = $${values.length}`);
-  }
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`d.organization_id = $${values.length}`);
-  }
-  if (shipmentId) {
-    values.push(shipmentId);
-    conditions.push(`d.shipment_id = $${values.length}`);
-  }
-  if (customerId) {
-    values.push(customerId);
-    conditions.push(`d.customer_id = $${values.length}`);
-  }
-  if (!includeArchived) {
-    conditions.push("d.archived_at IS NULL");
-  }
-
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  const result = await pool.query(
-    `${documentSelect()}
-     ${where}
-     ORDER BY d.updated_at DESC, d.created_at DESC`,
-    values
-  );
-  return result.rows.map(toUiDocument);
+  return listDocumentsFromRepository(pool, { ownerUserId, shipmentId, customerId, organizationId, includeArchived });
 }
 
 export async function createDocumentRecord({
   ownerUserId,
+  organizationId,
+  tenantContext,
   title,
   type,
   fileName,
   mimeType,
   fileSize,
   storageKey,
+  storageProvider = "local",
+  objectKey = null,
+  storageBucket = null,
+  storageRegion = null,
+  localPath = null,
   checksum,
+  checksumSha256 = null,
+  sizeBytes = null,
+  contentType = null,
+  storageMigratedAt = null,
+  storageVerifiedAt = null,
+  storageMigrationStatus = "local",
+  storageMigrationError = null,
   uploadedById,
   uploadedByName,
   shipmentId,
   customerId,
+  note,
   visibility = "internal",
 }) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createDocumentRecord")
+    : requireOrganizationScope(organizationId, "createDocumentRecord");
   const client = await pool.connect();
   const id = crypto.randomUUID();
   const safeVisibility = visibility === "customer_visible" ? "customer_visible" : "internal";
 
   try {
     await client.query("BEGIN");
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    if (owner.rows[0]?.organization_id !== scopedOrganizationId) {
+      await client.query("ROLLBACK");
+      const error = new Error("Document owner does not belong to the authenticated organization.");
+      error.code = "TENANT_SCOPE_REQUIRED";
+      error.statusCode = 403;
+      throw error;
+    }
     const result = await client.query(
       `INSERT INTO documents (
          id, organization_id, owner_user_id, title, file_name, mime_type, file_size, storage_key,
-         checksum, version, uploaded_by_id, uploaded_by_name, shipment_id, customer_id,
+         storage_provider, object_key, storage_bucket, storage_region, local_path,
+         checksum, checksum_sha256, size_bytes, content_type, storage_migrated_at,
+         storage_verified_at, storage_migration_status, storage_migration_error,
+         version, uploaded_by_id, uploaded_by_name, shipment_id, customer_id,
          visibility, legacy_data
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $12, $13, $14::jsonb)
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8,
+         $9, $10, $11, $12, $13,
+         $14, $15, $16, $17, $18,
+         $19, $20, $21,
+         1, $22, $23, $24, $25,
+         $26, $27::jsonb
+       )
        RETURNING *`,
       [
         id,
+        scopedOrganizationId,
         ownerUserId,
         title,
         fileName,
         mimeType,
         fileSize,
         storageKey,
+        storageProvider || "local",
+        objectKey || null,
+        storageBucket || null,
+        storageRegion || null,
+        localPath || storageKey || null,
         checksum,
+        checksumSha256 || checksum || null,
+        sizeBytes === undefined ? null : sizeBytes,
+        contentType || mimeType || null,
+        storageMigratedAt || null,
+        storageVerifiedAt || null,
+        storageMigrationStatus || "local",
+        storageMigrationError || null,
         uploadedById || null,
         uploadedByName || null,
         shipmentId || null,
         customerId || null,
         safeVisibility,
-        JSON.stringify({ name: title, type: type || "OTHER" }),
+        JSON.stringify({ name: title, type: type || "OTHER", note: note || "" }),
       ]
     );
 
     await client.query(
       `INSERT INTO document_versions (
-         id, organization_id, document_id, version, storage_key, file_name, uploaded_by_id
+         id, organization_id, document_id, version, storage_key, storage_provider,
+         object_key, storage_bucket, storage_region, local_path, checksum_sha256,
+         size_bytes, content_type, storage_migrated_at, storage_verified_at,
+         storage_migration_status, storage_migration_error, file_name, uploaded_by_id
        )
-       VALUES ($1, (SELECT organization_id FROM documents WHERE id = $2), $2, 1, $3, $4, $5)
+       VALUES (
+         $1, $2, $3, 1, $4, $5,
+         $6, $7, $8, $9, $10,
+         $11, $12, $13, $14,
+         $15, $16, $17, $18
+       )
        ON CONFLICT (document_id, version) DO NOTHING`,
-      [crypto.randomUUID(), id, storageKey, fileName, uploadedById || null]
+      [
+        crypto.randomUUID(),
+        scopedOrganizationId,
+        id,
+        storageKey,
+        storageProvider || "local",
+        objectKey || null,
+        storageBucket || null,
+        storageRegion || null,
+        localPath || storageKey || null,
+        checksumSha256 || checksum || null,
+        sizeBytes === undefined ? null : sizeBytes,
+        contentType || mimeType || null,
+        storageMigratedAt || null,
+        storageVerifiedAt || null,
+        storageMigrationStatus || "local",
+        storageMigrationError || null,
+        fileName,
+        uploadedById || null,
+      ]
     );
 
     await syncDocumentUserRecord(client, ownerUserId, result.rows[0]);
@@ -998,68 +2695,15 @@ export async function createDocumentRecord({
 }
 
 export async function getDocumentDetail(documentId, { organizationId } = {}) {
-  const values = [documentId];
-  const organizationFilter = organizationId ? `AND d.organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `${documentSelect()}
-     WHERE d.id = $1 ${organizationFilter}
-     LIMIT 1`,
-    values
-  );
-  const document = result.rows[0];
-  if (!document) return null;
-
-  const versions = await pool.query(
-    `SELECT id, version, file_name, storage_key, created_at
-     FROM document_versions
-     WHERE document_id = $1
-     ORDER BY version DESC`,
-    [documentId]
-  );
-
-  return {
-    ...document,
-    ui: toUiDocument(document),
-    versions: versions.rows.map((row) => ({
-      id: row.id,
-      version: row.version,
-      fileName: row.file_name,
-      createdAt: row.created_at,
-    })),
-  };
+  return getDocumentDetailFromRepository(pool, documentId, { organizationId });
 }
 
 export async function getDocumentForDownload(documentId, { organizationId } = {}) {
-  const values = [documentId];
-  const organizationFilter = organizationId ? `AND d.organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `${documentSelect()}
-     WHERE d.id = $1 AND d.archived_at IS NULL ${organizationFilter}
-     LIMIT 1`,
-    values
-  );
-  return result.rows[0] || null;
+  return getDocumentForDownloadFromRepository(pool, documentId, { organizationId });
 }
 
 export async function listDocumentStorageKeysForCleanup(documentId, { organizationId } = {}) {
-  const values = [documentId];
-  const organizationFilter = organizationId ? `AND d.organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `SELECT DISTINCT storage_key
-     FROM (
-       SELECT d.storage_key
-       FROM documents d
-       WHERE d.id = $1 ${organizationFilter}
-       UNION ALL
-       SELECT v.storage_key
-       FROM document_versions v
-       JOIN documents d ON d.id = v.document_id
-       WHERE d.id = $1 ${organizationFilter}
-     ) keys
-     WHERE storage_key IS NOT NULL AND storage_key <> ''`,
-    values
-  );
-  return result.rows.map((row) => row.storage_key);
+  return listDocumentStorageKeysForCleanupFromRepository(pool, documentId, { organizationId });
 }
 
 export async function replaceDocumentFileRecord({
@@ -1068,23 +2712,31 @@ export async function replaceDocumentFileRecord({
   mimeType,
   fileSize,
   storageKey,
+  storageProvider = "local",
+  objectKey = null,
+  storageBucket = null,
+  storageRegion = null,
+  localPath = null,
   checksum,
+  checksumSha256 = null,
+  sizeBytes = null,
+  contentType = null,
+  storageMigratedAt = null,
+  storageVerifiedAt = null,
+  storageMigrationStatus = "local",
+  storageMigrationError = null,
   uploadedById,
   organizationId,
 }) {
-  const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "replaceDocumentFileRecord");
 
-  try {
-    await client.query("BEGIN");
-    const beforeValues = [documentId];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
+  return withTransaction(pool, async (client) => {
     const beforeResult = await client.query(
-      `SELECT * FROM documents WHERE id = $1 ${organizationFilter}`,
-      beforeValues
+      `SELECT * FROM documents WHERE id = $1 AND organization_id = $2`,
+      [documentId, scopedOrganizationId]
     );
     const before = beforeResult.rows[0] || null;
     if (!before) {
-      await client.query("ROLLBACK");
       return null;
     }
 
@@ -1095,44 +2747,98 @@ export async function replaceDocumentFileRecord({
            mime_type = $3,
            file_size = $4,
            storage_key = $5,
-           checksum = $6,
-           version = $7,
+           storage_provider = $6,
+           object_key = $7,
+           storage_bucket = $8,
+           storage_region = $9,
+           local_path = $10,
+           checksum = $11,
+           checksum_sha256 = $12,
+           size_bytes = $13,
+           content_type = $14,
+           storage_migrated_at = $15,
+           storage_verified_at = $16,
+           storage_migration_status = $17,
+           storage_migration_error = $18,
+           version = $19,
            updated_at = NOW()
-       WHERE id = $1
+       WHERE id = $1 AND organization_id = $20
        RETURNING *`,
-      [documentId, fileName, mimeType, fileSize, storageKey, checksum, nextVersion]
+      [
+        documentId,
+        fileName,
+        mimeType,
+        fileSize,
+        storageKey,
+        storageProvider || "local",
+        objectKey || null,
+        storageBucket || null,
+        storageRegion || null,
+        localPath || storageKey || null,
+        checksum,
+        checksumSha256 || checksum || null,
+        sizeBytes === undefined ? null : sizeBytes,
+        contentType || mimeType || null,
+        storageMigratedAt || null,
+        storageVerifiedAt || null,
+        storageMigrationStatus || "local",
+        storageMigrationError || null,
+        nextVersion,
+        scopedOrganizationId,
+      ]
     );
 
     await client.query(
       `INSERT INTO document_versions (
-         id, document_id, version, storage_key, file_name, uploaded_by_id
+         id, organization_id, document_id, version, storage_key, storage_provider,
+         object_key, storage_bucket, storage_region, local_path, checksum_sha256,
+         size_bytes, content_type, storage_migrated_at, storage_verified_at,
+         storage_migration_status, storage_migration_error, file_name, uploaded_by_id
        )
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [crypto.randomUUID(), documentId, nextVersion, storageKey, fileName, uploadedById || null]
+       VALUES (
+         $1, $2, $3, $4, $5, $6,
+         $7, $8, $9, $10, $11,
+         $12, $13, $14, $15,
+         $16, $17, $18, $19
+       )`,
+      [
+        crypto.randomUUID(),
+        scopedOrganizationId,
+        documentId,
+        nextVersion,
+        storageKey,
+        storageProvider || "local",
+        objectKey || null,
+        storageBucket || null,
+        storageRegion || null,
+        localPath || storageKey || null,
+        checksumSha256 || checksum || null,
+        sizeBytes === undefined ? null : sizeBytes,
+        contentType || mimeType || null,
+        storageMigratedAt || null,
+        storageVerifiedAt || null,
+        storageMigrationStatus || "local",
+        storageMigrationError || null,
+        fileName,
+        uploadedById || null,
+      ]
     );
 
     await syncDocumentUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
-    await client.query("COMMIT");
     return { before, after: result.rows[0] };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }
 
-export async function updateDocumentMetadata(documentId, updates = {}, { organizationId } = {}) {
+export async function updateDocumentMetadata(documentId, updates = {}, { organizationId, audit } = {}) {
   const safeVisibility = updates.visibility === "customer_visible" ? "customer_visible" : "internal";
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateDocumentMetadata");
 
   try {
     await client.query("BEGIN");
-    const beforeValues = [documentId];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
     const beforeResult = await client.query(
-      `SELECT * FROM documents WHERE id = $1 ${organizationFilter}`,
-      beforeValues
+      `SELECT * FROM documents WHERE id = $1 AND organization_id = $2`,
+      [documentId, scopedOrganizationId]
     );
     const before = beforeResult.rows[0] || null;
     if (!before) {
@@ -1154,7 +2860,7 @@ export async function updateDocumentMetadata(documentId, updates = {}, { organiz
            visibility = $5,
            legacy_data = $6::jsonb,
            updated_at = NOW()
-       WHERE id = $1
+       WHERE id = $1 AND organization_id = $7
        RETURNING *`,
       [
         documentId,
@@ -1163,10 +2869,21 @@ export async function updateDocumentMetadata(documentId, updates = {}, { organiz
         updates.customerId === undefined ? before.customer_id : updates.customerId || null,
         updates.visibility === undefined ? before.visibility : safeVisibility,
         JSON.stringify(legacy),
+        scopedOrganizationId,
       ]
     );
 
     await syncDocumentUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? scopedOrganizationId,
+        before: sanitizeDocumentAuditSnapshot(before),
+        after: sanitizeDocumentAuditSnapshot(result.rows[0]),
+        queryable: client,
+        required: true,
+      });
+    }
     await client.query("COMMIT");
     return { before, after: result.rows[0] };
   } catch (error) {
@@ -1177,16 +2894,15 @@ export async function updateDocumentMetadata(documentId, updates = {}, { organiz
   }
 }
 
-export async function archiveDocumentRecord(documentId, { organizationId } = {}) {
+export async function archiveDocumentRecord(documentId, { organizationId, actorUserId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "archiveDocumentRecord");
 
   try {
     await client.query("BEGIN");
-    const beforeValues = [documentId];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
     const beforeResult = await client.query(
-      `SELECT * FROM documents WHERE id = $1 ${organizationFilter}`,
-      beforeValues
+      `SELECT * FROM documents WHERE id = $1 AND organization_id = $2`,
+      [documentId, scopedOrganizationId]
     );
     const before = beforeResult.rows[0] || null;
     if (!before) {
@@ -1198,14 +2914,40 @@ export async function archiveDocumentRecord(documentId, { organizationId } = {})
       `UPDATE documents
        SET archived_at = COALESCE(archived_at, NOW()),
            updated_at = NOW()
-       WHERE id = $1
+       WHERE id = $1 AND organization_id = $2
        RETURNING *`,
-      [documentId]
+      [documentId, scopedOrganizationId]
+    );
+    const archived = result.rows[0];
+
+    await client.query(
+      `INSERT INTO archive_records (
+         id, organization_id, owner_user_id, entity_type, entity_id, title, summary,
+         customer_name, shipment_id, archived_by_id, archived_at, legacy_data
+       )
+       VALUES ($1, $2, $3, 'document', $4, $5, 'document archived', NULL, $6, $7, COALESCE($8, NOW()), $9::jsonb)
+       ON CONFLICT (entity_type, entity_id) DO UPDATE SET
+         organization_id = EXCLUDED.organization_id,
+         title = EXCLUDED.title,
+         archived_at = EXCLUDED.archived_at,
+         restored_at = NULL,
+         legacy_data = EXCLUDED.legacy_data`,
+      [
+        crypto.randomUUID(),
+        archived.organization_id || scopedOrganizationId,
+        archived.owner_user_id || actorUserId || null,
+        documentId,
+        archived.title || archived.file_name || "Document",
+        archived.shipment_id || null,
+        actorUserId || null,
+        archived.archived_at,
+        JSON.stringify(archived.legacy_data || {}),
+      ]
     );
 
-    await syncDocumentUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
+    await syncDocumentUserRecord(client, archived.owner_user_id, archived);
     await client.query("COMMIT");
-    return { before, after: result.rows[0] };
+    return { before, after: archived };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -1214,9 +2956,23 @@ export async function archiveDocumentRecord(documentId, { organizationId } = {})
   }
 }
 
-export async function listTasks({ ownerUserId, assignedToId, organizationId, includeAll = false } = {}) {
+export async function listTasks({
+  ownerUserId,
+  assignedToId,
+  assignedById,
+  participantUserId,
+  organizationId,
+  includeAll = false,
+  shipmentId,
+  status,
+  blocked = false,
+  overdue = false,
+} = {}) {
   const conditions = [];
   const values = [];
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listTasks");
+  values.push(scopedOrganizationId);
+  conditions.push(`t.organization_id = $${values.length}`);
 
   if (ownerUserId && !includeAll) {
     values.push(ownerUserId);
@@ -1226,9 +2982,28 @@ export async function listTasks({ ownerUserId, assignedToId, organizationId, inc
     values.push(assignedToId);
     conditions.push(`t.assigned_to_id = $${values.length}`);
   }
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`t.organization_id = $${values.length}`);
+  if (assignedById) {
+    values.push(assignedById);
+    conditions.push(`t.assigned_by_id = $${values.length}`);
+  }
+  if (participantUserId) {
+    values.push(participantUserId);
+    conditions.push(`(t.owner_user_id = $${values.length} OR t.assigned_to_id = $${values.length} OR t.assigned_by_id = $${values.length})`);
+  }
+  if (shipmentId) {
+    values.push(shipmentId);
+    conditions.push(`t.shipment_id = $${values.length}`);
+  }
+  if (status) {
+    values.push(normalizeTaskStatus(status));
+    conditions.push(`t.status = $${values.length}`);
+  }
+  if (blocked) {
+    conditions.push(`t.status = 'BLOCKED'`);
+  }
+  if (overdue) {
+    conditions.push(`t.due_at IS NOT NULL AND t.due_at <> '' AND t.status NOT IN ('DONE', 'CANCELLED')`);
+    conditions.push(`left(t.due_at, 10) < to_char(NOW(), 'YYYY/MM/DD')`);
   }
 
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -1243,7 +3018,7 @@ export async function listTasks({ ownerUserId, assignedToId, organizationId, inc
 
 export async function getTaskRecord(taskId, { organizationId } = {}) {
   const values = [taskId];
-  const organizationFilter = organizationId ? `AND t.organization_id = $${values.push(organizationId)}` : "";
+  const organizationFilter = organizationScopeClause(values, organizationId, "t.organization_id", "getTaskRecord");
   const result = await pool.query(
     `${taskSelect()}
      WHERE t.id = $1 ${organizationFilter}
@@ -1255,6 +3030,8 @@ export async function getTaskRecord(taskId, { organizationId } = {}) {
 
 export async function createTaskRecord({
   ownerUserId,
+  organizationId,
+  tenantContext,
   title,
   description,
   status,
@@ -1269,7 +3046,15 @@ export async function createTaskRecord({
   customerId,
   sourceType = "MANUAL",
   sourceId,
+  assignmentNote,
+  workflowInstanceId,
+  workflowStepCode,
+  workflowBlockerId,
+  blockerCode,
 }) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createTaskRecord")
+    : requireOrganizationScope(organizationId, "createTaskRecord");
   const client = await pool.connect();
   const id = crypto.randomUUID();
   const safeStatus = normalizeTaskStatus(status);
@@ -1277,6 +3062,14 @@ export async function createTaskRecord({
 
   try {
     await client.query("BEGIN");
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    if (owner.rows[0]?.organization_id !== scopedOrganizationId) {
+      await client.query("ROLLBACK");
+      const error = new Error("Task owner does not belong to the authenticated organization.");
+      error.code = "TENANT_SCOPE_REQUIRED";
+      error.statusCode = 403;
+      throw error;
+    }
     const legacy = {
       deadline: deadline || "",
       assignedToUserId: assignedToUserId || "",
@@ -1286,17 +3079,26 @@ export async function createTaskRecord({
       shipmentId: shipmentId || undefined,
       sourceType,
       sourceId: sourceId || undefined,
+      assignmentNote: assignmentNote || "",
+      workflowInstanceId: workflowInstanceId || undefined,
+      workflowStepCode: workflowStepCode || undefined,
+      workflowBlockerId: workflowBlockerId || undefined,
+      blockerCode: blockerCode || undefined,
     };
     const result = await client.query(
       `INSERT INTO tasks (
          id, organization_id, owner_user_id, title, description, status, priority, assigned_to_id,
-         assigned_to_name, assigned_by_id, assigned_by_name, due_at, source_type,
-         source_id, shipment_id, customer_id, legacy_data, completed_at
+         assigned_to_name, assigned_by_id, assigned_by_name, assigned_at, assignment_note, due_at, source_type,
+         source_id, shipment_id, customer_id, workflow_instance_id, workflow_step_code,
+         workflow_blocker_id, blocker_code, legacy_data, completed_at, completed_by_user_id
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+               CASE WHEN $8::text IS NULL THEN NULL ELSE NOW() END, $12, $13, $14, $15, $16, $17, $18, $19,
+               $20, $21, $22::jsonb, $23, $24)
        RETURNING *`,
       [
         id,
+        scopedOrganizationId,
         ownerUserId,
         String(title || "").trim(),
         description || null,
@@ -1306,17 +3108,50 @@ export async function createTaskRecord({
         assignedToName || null,
         assignedByUserId || null,
         assignedByName || null,
+        assignmentNote || null,
         dueDate || null,
         sourceType,
         sourceId || null,
         shipmentId || null,
         customerId || null,
+        workflowInstanceId || null,
+        workflowStepCode || null,
+        workflowBlockerId || null,
+        blockerCode || null,
         JSON.stringify(legacy),
         safeStatus === "DONE" ? new Date() : null,
+        safeStatus === "DONE" ? assignedByUserId || ownerUserId || null : null,
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO task_events (
+         id, organization_id, task_id, shipment_id, workflow_instance_id, workflow_step_code,
+         workflow_blocker_id, blocker_code, actor_user_id, event_type, to_assignee_user_id,
+         to_status, note, metadata
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'task.created', $10, $11, $12, $13::jsonb)`,
+      [
+        crypto.randomUUID(),
+        result.rows[0].organization_id,
+        result.rows[0].id,
+        result.rows[0].shipment_id || null,
+        result.rows[0].workflow_instance_id || null,
+        result.rows[0].workflow_step_code || null,
+        result.rows[0].workflow_blocker_id || null,
+        result.rows[0].blocker_code || null,
+        assignedByUserId || ownerUserId || null,
+        assignedToUserId || null,
+        safeStatus,
+        assignmentNote || null,
+        JSON.stringify({ sourceType, sourceId: sourceId || null }),
       ]
     );
 
     await syncTaskUserRecord(client, ownerUserId, result.rows[0]);
+    if (assignedToUserId && assignedToUserId !== ownerUserId) {
+      await syncTaskUserRecord(client, assignedToUserId, result.rows[0]);
+    }
     await createTaskNotification(client, {
       userId: assignedToUserId,
       task: result.rows[0],
@@ -1336,12 +3171,14 @@ export async function createTaskRecord({
 
 export async function updateTaskRecord(taskId, updates = {}, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateTaskRecord");
 
   try {
     await client.query("BEGIN");
-    const beforeValues = [taskId];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
-    const beforeResult = await client.query(`SELECT * FROM tasks WHERE id = $1 ${organizationFilter}`, beforeValues);
+    const beforeResult = await client.query(
+      "SELECT * FROM tasks WHERE id = $1 AND organization_id = $2",
+      [taskId, scopedOrganizationId]
+    );
     const before = beforeResult.rows[0] || null;
     if (!before) {
       await client.query("ROLLBACK");
@@ -1360,6 +3197,11 @@ export async function updateTaskRecord(taskId, updates = {}, { organizationId } 
       ...(updates.assignedToName !== undefined ? { assignedToName: updates.assignedToName || "" } : {}),
       ...(updates.assignedByName !== undefined ? { assignedByName: updates.assignedByName || "" } : {}),
       ...(updates.shipmentId !== undefined ? { shipmentId: updates.shipmentId || undefined } : {}),
+      ...(updates.assignmentNote !== undefined ? { assignmentNote: updates.assignmentNote || "" } : {}),
+      ...(updates.workflowInstanceId !== undefined ? { workflowInstanceId: updates.workflowInstanceId || undefined } : {}),
+      ...(updates.workflowStepCode !== undefined ? { workflowStepCode: updates.workflowStepCode || undefined } : {}),
+      ...(updates.workflowBlockerId !== undefined ? { workflowBlockerId: updates.workflowBlockerId || undefined } : {}),
+      ...(updates.blockerCode !== undefined ? { blockerCode: updates.blockerCode || undefined } : {}),
     };
 
     const result = await client.query(
@@ -1371,14 +3213,21 @@ export async function updateTaskRecord(taskId, updates = {}, { organizationId } 
            assigned_to_id = $6,
            assigned_to_name = $7,
            assigned_by_name = COALESCE($8, assigned_by_name),
-           due_at = $9,
-           shipment_id = $10,
-           customer_id = $11,
-           legacy_data = $12::jsonb,
+           assigned_at = CASE WHEN $6::text IS DISTINCT FROM assigned_to_id THEN NOW() ELSE assigned_at END,
+           assignment_note = $9,
+           due_at = $10,
+           shipment_id = $11,
+           customer_id = $12,
+           workflow_instance_id = $13,
+           workflow_step_code = $14,
+           workflow_blocker_id = $15,
+           blocker_code = $16,
+           legacy_data = $17::jsonb,
            completed_at = CASE WHEN $4 = 'DONE' THEN COALESCE(completed_at, NOW()) ELSE NULL END,
+           completed_by_user_id = CASE WHEN $4 = 'DONE' THEN COALESCE(completed_by_user_id, $18) ELSE NULL END,
            updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
+        WHERE id = $1 AND organization_id = $19
+        RETURNING *`,
       [
         taskId,
         updates.title === undefined ? null : String(updates.title || "").trim(),
@@ -1388,14 +3237,53 @@ export async function updateTaskRecord(taskId, updates = {}, { organizationId } 
         nextAssignedToId,
         updates.assignedToName === undefined ? before.assigned_to_name : updates.assignedToName || null,
         updates.assignedByName || null,
+        updates.assignmentNote === undefined ? before.assignment_note : updates.assignmentNote || null,
         updates.dueDate === undefined ? before.due_at : updates.dueDate || null,
         updates.shipmentId === undefined ? before.shipment_id : updates.shipmentId || null,
         updates.customerId === undefined ? before.customer_id : updates.customerId || null,
+        updates.workflowInstanceId === undefined ? before.workflow_instance_id : updates.workflowInstanceId || null,
+        updates.workflowStepCode === undefined ? before.workflow_step_code : updates.workflowStepCode || null,
+        updates.workflowBlockerId === undefined ? before.workflow_blocker_id : updates.workflowBlockerId || null,
+        updates.blockerCode === undefined ? before.blocker_code : updates.blockerCode || null,
         JSON.stringify(legacy),
+        updates.completedByUserId || updates.actorUserId || null,
+        scopedOrganizationId,
       ]
     );
 
+    if (nextAssignedToId !== before.assigned_to_id || nextStatus !== before.status) {
+      await client.query(
+        `INSERT INTO task_events (
+           id, organization_id, task_id, shipment_id, workflow_instance_id, workflow_step_code,
+           workflow_blocker_id, blocker_code, actor_user_id, event_type, from_assignee_user_id,
+           to_assignee_user_id, from_status, to_status, note, metadata
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)`,
+        [
+          crypto.randomUUID(),
+          result.rows[0].organization_id,
+          taskId,
+          result.rows[0].shipment_id || null,
+          result.rows[0].workflow_instance_id || null,
+          result.rows[0].workflow_step_code || null,
+          result.rows[0].workflow_blocker_id || null,
+          result.rows[0].blocker_code || null,
+          updates.actorUserId || null,
+          nextAssignedToId !== before.assigned_to_id ? "task.reassigned" : "task.status_changed",
+          before.assigned_to_id || null,
+          nextAssignedToId || null,
+          before.status || null,
+          nextStatus,
+          updates.assignmentNote || updates.note || null,
+          JSON.stringify({ source: "updateTaskRecord" }),
+        ]
+      );
+    }
+
     await syncTaskUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
+    if (result.rows[0].assigned_to_id && result.rows[0].assigned_to_id !== result.rows[0].owner_user_id) {
+      await syncTaskUserRecord(client, result.rows[0].assigned_to_id, result.rows[0]);
+    }
     if (nextAssignedToId && nextAssignedToId !== before.assigned_to_id) {
       await createTaskNotification(client, {
         userId: nextAssignedToId,
@@ -1430,18 +3318,312 @@ export async function setTaskStatus(taskId, status, { organizationId } = {}) {
   return updateTaskRecord(taskId, { status }, { organizationId });
 }
 
-export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, task }) {
+export async function assignTaskRecord(taskId, {
+  assignedToUserId,
+  actorUser,
+  dueAt,
+  dueDate,
+  priority,
+  assignmentNote,
+  status,
+  organizationId,
+} = {}) {
+  const scopedOrganizationId = requireOrganizationScope(
+    organizationId || actorUser?.organizationId || actorUser?.organization_id,
+    "assignTaskRecord"
+  );
   const client = await pool.connect();
-  const sourceType = stepId ? "SHIPMENT_STEP" : "SHIPMENT";
-  const sourceId = stepId || shipmentId;
-  const organizationId = actorUser?.organizationId || actorUser?.organization_id || null;
+
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query(
+      `SELECT *
+       FROM tasks
+       WHERE id = $1 AND organization_id = $2
+       LIMIT 1`,
+      [taskId, scopedOrganizationId]
+    );
+    const before = beforeResult.rows[0] || null;
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const assigneeResult = await client.query(
+      `SELECT id, name
+       FROM app_users
+       WHERE id = $1
+         AND organization_id = $2
+         AND COALESCE(status, 'active') = 'active'
+       LIMIT 1`,
+      [assignedToUserId, scopedOrganizationId]
+    );
+    const assignee = assigneeResult.rows[0] || null;
+    if (!assignee) {
+      await client.query("ROLLBACK");
+      return { invalidAssignee: true };
+    }
+
+    const nextStatus = status === undefined ? before.status || "ASSIGNED" : normalizeTaskStatus(status);
+    const nextPriority = priority === undefined ? before.priority : normalizeTaskPriority(priority);
+    const nextDueAt = dueAt === undefined && dueDate === undefined ? before.due_at : dueAt || dueDate || null;
+    const legacy = {
+      ...(before.legacy_data || {}),
+      assignedToUserId: assignee.id,
+      assignedToName: assignee.name,
+      assignedByUserId: actorUser?.id || "",
+      assignedByName: actorUser?.name || "",
+      assignedAt: new Date().toISOString(),
+      assignmentNote: assignmentNote || "",
+      dueDate: nextDueAt || "",
+    };
+    const result = await client.query(
+      `UPDATE tasks
+       SET assigned_to_id = $3,
+           assigned_to_name = $4,
+           assigned_by_id = $5,
+           assigned_by_name = $6,
+           assigned_at = NOW(),
+           assignment_note = $7,
+           due_at = $8,
+           priority = $9,
+           status = $10,
+           legacy_data = $11::jsonb,
+           completed_at = CASE WHEN $10 = 'DONE' THEN COALESCE(completed_at, NOW()) ELSE completed_at END,
+           completed_by_user_id = CASE WHEN $10 = 'DONE' THEN COALESCE(completed_by_user_id, $5) ELSE completed_by_user_id END,
+           updated_at = NOW()
+       WHERE id = $1 AND organization_id = $2
+       RETURNING *`,
+      [
+        taskId,
+        scopedOrganizationId,
+        assignee.id,
+        assignee.name,
+        actorUser?.id || null,
+        actorUser?.name || null,
+        assignmentNote || null,
+        nextDueAt,
+        nextPriority,
+        nextStatus,
+        JSON.stringify(legacy),
+      ]
+    );
+    const after = result.rows[0];
+    await client.query(
+      `INSERT INTO task_events (
+         id, organization_id, task_id, shipment_id, workflow_instance_id, workflow_step_code,
+         workflow_blocker_id, blocker_code, actor_user_id, event_type, from_assignee_user_id,
+         to_assignee_user_id, from_status, to_status, note, metadata
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'task.reassigned', $10, $11, $12, $13, $14, $15::jsonb)`,
+      [
+        crypto.randomUUID(),
+        scopedOrganizationId,
+        taskId,
+        after.shipment_id || null,
+        after.workflow_instance_id || null,
+        after.workflow_step_code || null,
+        after.workflow_blocker_id || null,
+        after.blocker_code || null,
+        actorUser?.id || null,
+        before.assigned_to_id || null,
+        assignee.id,
+        before.status || null,
+        after.status,
+        assignmentNote || null,
+        JSON.stringify({ priority: after.priority, dueAt: after.due_at || null }),
+      ]
+    );
+    await syncTaskUserRecord(client, after.owner_user_id, after);
+    if (after.assigned_to_id && after.assigned_to_id !== after.owner_user_id) {
+      await syncTaskUserRecord(client, after.assigned_to_id, after);
+    }
+    await createTaskNotification(client, {
+      userId: assignee.id,
+      task: after,
+      title: "ارجاع وظیفه",
+      body: after.title,
+    });
+    if (isHighPriority(after.priority)) {
+      await queueHighPriorityTaskSms(client, after, before.assigned_to_id === assignee.id ? "priority" : "reassigned");
+    }
+    await client.query("COMMIT");
+    return { before, after };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateTaskStatusRecord(taskId, {
+  status,
+  note,
+  actorUser,
+  organizationId,
+} = {}) {
+  const scopedOrganizationId = requireOrganizationScope(
+    organizationId || actorUser?.organizationId || actorUser?.organization_id,
+    "updateTaskStatusRecord"
+  );
+  const safeStatus = normalizeTaskStatus(status);
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query(
+      `SELECT *
+       FROM tasks
+       WHERE id = $1 AND organization_id = $2
+       LIMIT 1`,
+      [taskId, scopedOrganizationId]
+    );
+    const before = beforeResult.rows[0] || null;
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const legacy = {
+      ...(before.legacy_data || {}),
+      status: safeStatus,
+      ...(safeStatus === "DONE" ? { completedAt: new Date().toISOString(), completedByUserId: actorUser?.id || "" } : {}),
+    };
+    const result = await client.query(
+      `UPDATE tasks
+       SET status = $3,
+           completed_at = CASE WHEN $3 = 'DONE' THEN COALESCE(completed_at, NOW()) ELSE NULL END,
+           completed_by_user_id = CASE WHEN $3 = 'DONE' THEN COALESCE(completed_by_user_id, $4) ELSE NULL END,
+           legacy_data = $5::jsonb,
+           updated_at = NOW()
+       WHERE id = $1 AND organization_id = $2
+       RETURNING *`,
+      [taskId, scopedOrganizationId, safeStatus, actorUser?.id || null, JSON.stringify(legacy)]
+    );
+    const after = result.rows[0];
+    await client.query(
+      `INSERT INTO task_events (
+         id, organization_id, task_id, shipment_id, workflow_instance_id, workflow_step_code,
+         workflow_blocker_id, blocker_code, actor_user_id, event_type, from_status, to_status, note, metadata
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'task.status_changed', $10, $11, $12, '{}'::jsonb)`,
+      [
+        crypto.randomUUID(),
+        scopedOrganizationId,
+        taskId,
+        after.shipment_id || null,
+        after.workflow_instance_id || null,
+        after.workflow_step_code || null,
+        after.workflow_blocker_id || null,
+        after.blocker_code || null,
+        actorUser?.id || null,
+        before.status || null,
+        safeStatus,
+        note || null,
+      ]
+    );
+    await syncTaskUserRecord(client, after.owner_user_id, after);
+    if (after.assigned_to_id && after.assigned_to_id !== after.owner_user_id) {
+      await syncTaskUserRecord(client, after.assigned_to_id, after);
+    }
+    await client.query("COMMIT");
+    return { before, after };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function listTaskEvents(taskId, { organizationId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listTaskEvents");
+  const result = await pool.query(
+    `SELECT e.*,
+            actor.name AS actor_name,
+            from_user.name AS from_assignee_name,
+            to_user.name AS to_assignee_name
+     FROM task_events e
+     JOIN tasks t ON t.id = e.task_id AND t.organization_id = e.organization_id
+     LEFT JOIN app_users actor ON actor.id = e.actor_user_id
+     LEFT JOIN app_users from_user ON from_user.id = e.from_assignee_user_id
+     LEFT JOIN app_users to_user ON to_user.id = e.to_assignee_user_id
+     WHERE e.task_id = $1
+       AND e.organization_id = $2
+     ORDER BY e.created_at DESC`,
+    [taskId, scopedOrganizationId]
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    taskId: row.task_id,
+    eventType: row.event_type,
+    actorUserId: row.actor_user_id || null,
+    actorName: row.actor_name || "",
+    fromAssigneeUserId: row.from_assignee_user_id || null,
+    fromAssigneeName: row.from_assignee_name || "",
+    toAssigneeUserId: row.to_assignee_user_id || null,
+    toAssigneeName: row.to_assignee_name || "",
+    fromStatus: row.from_status || null,
+    toStatus: row.to_status || null,
+    note: row.note || "",
+    shipmentId: row.shipment_id || null,
+    workflowInstanceId: row.workflow_instance_id || null,
+    workflowStepCode: row.workflow_step_code || null,
+    workflowBlockerId: row.workflow_blocker_id || null,
+    blockerCode: row.blocker_code || null,
+    metadata: row.metadata || {},
+    createdAt: row.created_at,
+  }));
+}
+
+export async function listOrganizationMembers({ organizationId, includeInactive = false } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listOrganizationMembers");
+  const result = await pool.query(
+    `SELECT u.id, u.name, u.email, u.role, COALESCE(u.status, om.status, 'active') AS status
+     FROM organization_members om
+     JOIN app_users u ON u.id = om.user_id
+     WHERE om.organization_id = $1
+       AND ($2::boolean OR (COALESCE(u.status, 'active') = 'active' AND COALESCE(om.status, 'active') = 'active'))
+     ORDER BY u.name ASC`,
+    [scopedOrganizationId, Boolean(includeInactive)]
+  );
+  return result.rows.map((row) => ({
+    userId: row.id,
+    displayName: row.name,
+    email: row.email,
+    roleName: row.role,
+    active: row.status === "active",
+  }));
+}
+
+export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, organizationId, tenantContext, task }) {
+  const client = await pool.connect();
+  const sourceType = task.workflowBlockerId
+    ? "WORKFLOW_BLOCKER"
+    : task.workflowStepCode || task.workflowInstanceId
+      ? "WORKFLOW_STEP"
+      : stepId
+        ? "SHIPMENT_STEP"
+        : "SHIPMENT";
+  const sourceId = task.workflowBlockerId || task.workflowStepCode || task.workflowInstanceId || stepId || shipmentId;
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createShipmentTaskRecord")
+    : requireOrganizationScope(organizationId || actorUser?.organizationId || actorUser?.organization_id, "createShipmentTaskRecord");
+  const actorOrganizationId = actorUser?.organizationId || actorUser?.organization_id || null;
+  if (actorOrganizationId && actorOrganizationId !== scopedOrganizationId) {
+    const error = new Error("Task actor does not belong to the authenticated organization.");
+    error.code = "TENANT_SCOPE_REQUIRED";
+    error.statusCode = 403;
+    throw error;
+  }
 
   try {
     await client.query("BEGIN");
     const shipmentValues = [shipmentId];
-    const organizationFilter = organizationId ? `AND organization_id = $${shipmentValues.push(organizationId)}` : "";
+    const scopeFilter = shipmentScopeClause(shipmentValues, { organizationId: scopedOrganizationId, ownerUserId: actorUser?.id }, "");
     const shipmentResult = await client.query(
-      `SELECT * FROM shipments WHERE id = $1 ${organizationFilter}`,
+      `SELECT * FROM shipments WHERE id = $1 ${scopeFilter}`,
       shipmentValues
     );
     const shipment = shipmentResult.rows[0] || null;
@@ -1453,10 +3635,10 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
     const existingResult = await client.query(
       `SELECT * FROM tasks
        WHERE shipment_id = $1 AND source_type = $2 AND source_id = $3
-         AND ($4::text IS NULL OR organization_id = $4)
+          AND ($4::text IS NULL OR organization_id = $4)
        ORDER BY created_at DESC
        LIMIT 1`,
-      [shipmentId, sourceType, sourceId, organizationId]
+      [shipmentId, sourceType, sourceId, scopedOrganizationId]
     );
     const existing = existingResult.rows[0] || null;
     const assignedToId = task.assignedToUserId || actorUser.id;
@@ -1473,13 +3655,18 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
       sourceType,
       sourceId,
       stepName: task.stepName || existing?.legacy_data?.stepName || "",
+      assignmentNote: task.assignmentNote || existing?.assignment_note || "",
+      workflowInstanceId: task.workflowInstanceId || existing?.workflow_instance_id || undefined,
+      workflowStepCode: task.workflowStepCode || existing?.workflow_step_code || undefined,
+      workflowBlockerId: task.workflowBlockerId || existing?.workflow_blocker_id || undefined,
+      blockerCode: task.blockerCode || existing?.blocker_code || undefined,
     };
 
     const result = existing
       ? await client.query(
           `UPDATE tasks
            SET title = $2,
-               organization_id = COALESCE(organization_id, $11),
+               organization_id = COALESCE(organization_id, $16),
                description = $3,
                status = CASE WHEN status = 'DONE' THEN status ELSE 'IN_PROGRESS' END,
                priority = $4,
@@ -1487,10 +3674,17 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
                assigned_to_name = $6,
                assigned_by_id = $7,
                assigned_by_name = $8,
-               due_at = $9,
-               legacy_data = $10::jsonb,
+               assigned_at = NOW(),
+               assignment_note = $9,
+               due_at = $10,
+               workflow_instance_id = $11,
+               workflow_step_code = $12,
+               workflow_blocker_id = $13,
+               blocker_code = $14,
+               legacy_data = $15::jsonb,
                updated_at = NOW()
            WHERE id = $1
+             AND organization_id = $16
            RETURNING *`,
           [
             existing.id,
@@ -1501,22 +3695,28 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
             assignedToName,
             actorUser.id,
             actorUser.name,
+            task.assignmentNote || existing.assignment_note || null,
             task.dueDate || existing.due_at || null,
+            task.workflowInstanceId || existing.workflow_instance_id || null,
+            task.workflowStepCode || existing.workflow_step_code || null,
+            task.workflowBlockerId || existing.workflow_blocker_id || null,
+            task.blockerCode || existing.blocker_code || null,
             JSON.stringify(legacy),
-            shipment.organization_id || actorUser.organizationId || actorUser.organization_id || null,
+            scopedOrganizationId,
           ]
         )
       : await client.query(
           `INSERT INTO tasks (
              id, organization_id, owner_user_id, title, description, status, priority, assigned_to_id,
-             assigned_to_name, assigned_by_id, assigned_by_name, due_at, source_type,
-             source_id, shipment_id, customer_id, legacy_data
+             assigned_to_name, assigned_by_id, assigned_by_name, assigned_at, assignment_note, due_at, source_type,
+             source_id, shipment_id, customer_id, workflow_instance_id, workflow_step_code,
+             workflow_blocker_id, blocker_code, legacy_data
            )
-           VALUES ($1, $2, $3, $4, $5, 'IN_PROGRESS', $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)
+           VALUES ($1, $2, $3, $4, $5, 'IN_PROGRESS', $6, $7, $8, $9, $10, NOW(), $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb)
            RETURNING *`,
           [
             crypto.randomUUID(),
-            shipment.organization_id || actorUser.organizationId || actorUser.organization_id || null,
+            scopedOrganizationId,
             shipment.owner_user_id || actorUser.id,
             title,
             task.description || null,
@@ -1525,16 +3725,51 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
             assignedToName,
             actorUser.id,
             actorUser.name,
+            task.assignmentNote || null,
             task.dueDate || null,
             sourceType,
             sourceId,
             shipmentId,
             shipment.customer_id || null,
+            task.workflowInstanceId || null,
+            task.workflowStepCode || null,
+            task.workflowBlockerId || null,
+            task.blockerCode || null,
             JSON.stringify(legacy),
           ]
         );
 
+    await client.query(
+      `INSERT INTO task_events (
+         id, organization_id, task_id, shipment_id, workflow_instance_id, workflow_step_code,
+         workflow_blocker_id, blocker_code, actor_user_id, event_type, from_assignee_user_id,
+         to_assignee_user_id, from_status, to_status, note, metadata
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb)`,
+      [
+        crypto.randomUUID(),
+        result.rows[0].organization_id,
+        result.rows[0].id,
+        result.rows[0].shipment_id || null,
+        result.rows[0].workflow_instance_id || null,
+        result.rows[0].workflow_step_code || null,
+        result.rows[0].workflow_blocker_id || null,
+        result.rows[0].blocker_code || null,
+        actorUser.id,
+        existing ? "task.reassigned" : "task.created",
+        existing?.assigned_to_id || null,
+        assignedToId || null,
+        existing?.status || null,
+        result.rows[0].status,
+        task.assignmentNote || null,
+        JSON.stringify({ sourceType, sourceId }),
+      ]
+    );
+
     await syncTaskUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
+    if (result.rows[0].assigned_to_id && result.rows[0].assigned_to_id !== result.rows[0].owner_user_id) {
+      await syncTaskUserRecord(client, result.rows[0].assigned_to_id, result.rows[0]);
+    }
     await createTaskNotification(client, {
       userId: assignedToId,
       task: result.rows[0],
@@ -1561,11 +3796,11 @@ export async function updateShipmentStepRecord({ shipmentId, stepId, updates = {
   try {
     await client.query("BEGIN");
     const shipmentValues = [shipmentId];
-    const organizationFilter = organizationId ? `AND organization_id = $${shipmentValues.push(organizationId)}` : "";
+    const scopeFilter = shipmentScopeClause(shipmentValues, { organizationId, ownerUserId: actorUser?.id }, "");
     const shipmentResult = await client.query(
       `SELECT id, owner_user_id, organization_id
        FROM shipments
-       WHERE id = $1 ${organizationFilter}
+       WHERE id = $1 ${scopeFilter}
        LIMIT 1`,
       shipmentValues
     );
@@ -1684,13 +3919,12 @@ function normalizeAppointmentStatus(status) {
 export async function listCheques({ ownerUserId, organizationId, includeArchived = false } = {}) {
   const conditions = [];
   const values = [];
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listCheques");
+  values.push(scopedOrganizationId);
+  conditions.push(`organization_id = $${values.length}`);
   if (ownerUserId) {
     values.push(ownerUserId);
     conditions.push(`owner_user_id = $${values.length}`);
-  }
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`organization_id = $${values.length}`);
   }
   if (!includeArchived) conditions.push("archived_at IS NULL");
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -1706,25 +3940,37 @@ export async function listCheques({ ownerUserId, organizationId, includeArchived
 
 export async function getChequeRecord(id, { organizationId } = {}) {
   const values = [id];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
+  const organizationFilter = organizationScopeClause(values, organizationId, "organization_id", "getChequeRecord");
   const result = await pool.query(`SELECT * FROM cheques WHERE id = $1 ${organizationFilter} LIMIT 1`, values);
   return result.rows[0] || null;
 }
 
-export async function createChequeRecord({ ownerUserId, actorUserId, cheque }) {
+export async function createChequeRecord({ ownerUserId, actorUserId, organizationId, tenantContext, cheque }) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createChequeRecord")
+    : requireOrganizationScope(organizationId, "createChequeRecord");
   const client = await pool.connect();
   const id = crypto.randomUUID();
   try {
     await client.query("BEGIN");
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    if (owner.rows[0]?.organization_id !== scopedOrganizationId) {
+      await client.query("ROLLBACK");
+      const error = new Error("Cheque owner does not belong to the authenticated organization.");
+      error.code = "TENANT_SCOPE_REQUIRED";
+      error.statusCode = 403;
+      throw error;
+    }
     const result = await client.query(
       `INSERT INTO cheques (
          id, organization_id, owner_user_id, bank_name, cheque_number, amount, due_date, location,
          receiver, status, description, legacy_data, created_by_id, archived_at
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14)
        RETURNING *`,
       [
         id,
+        scopedOrganizationId,
         ownerUserId,
         String(cheque.bankName || "").trim(),
         String(cheque.chequeNumber || "").trim(),
@@ -1752,11 +3998,13 @@ export async function createChequeRecord({ ownerUserId, actorUserId, cheque }) {
 
 export async function updateChequeRecord(id, updates = {}, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateChequeRecord");
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
-    const beforeResult = await client.query(`SELECT * FROM cheques WHERE id = $1 ${organizationFilter}`, beforeValues);
+    const beforeResult = await client.query(
+      "SELECT * FROM cheques WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
+    );
     const before = beforeResult.rows[0] || null;
     if (!before) {
       await client.query("ROLLBACK");
@@ -1777,8 +4025,8 @@ export async function updateChequeRecord(id, updates = {}, { organizationId } = 
            legacy_data = $10::jsonb,
            archived_at = CASE WHEN $8 = 'ARCHIVED' THEN COALESCE(archived_at, NOW()) ELSE archived_at END,
            updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
+        WHERE id = $1 AND organization_id = $11
+        RETURNING *`,
       [
         id,
         updates.bankName === undefined ? null : String(updates.bankName || "").trim(),
@@ -1790,6 +4038,7 @@ export async function updateChequeRecord(id, updates = {}, { organizationId } = 
         status,
         updates.description === undefined ? before.description : updates.description || null,
         JSON.stringify(legacy),
+        scopedOrganizationId,
       ]
     );
     await syncChequeUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
@@ -1813,14 +4062,17 @@ export async function listDueSoonCheques({ ownerUserId, organizationId, days = 7
   const horizon = now + Number(days || 7) * 24 * 60 * 60 * 1000;
   return cheques.filter((cheque) => {
     if (!["ACTIVE", "RETURNED"].includes(cheque.status) || !cheque.dueDate) return false;
-    const parsed = Date.parse(String(cheque.dueDate).replace(/\//g, "-"));
-    return Number.isNaN(parsed) || parsed <= horizon;
+    const parsed = parseOperationalDate(cheque.dueDate);
+    return !parsed || parsed.getTime() <= horizon;
   });
 }
 
 export async function listComplianceMeetings({ ownerUserId, assignedToId, organizationId, includeArchived = false } = {}) {
   const conditions = [];
   const values = [];
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listComplianceMeetings");
+  values.push(scopedOrganizationId);
+  conditions.push(`organization_id = $${values.length}`);
   if (ownerUserId) {
     values.push(ownerUserId);
     conditions.push(`owner_user_id = $${values.length}`);
@@ -1828,10 +4080,6 @@ export async function listComplianceMeetings({ ownerUserId, assignedToId, organi
   if (assignedToId) {
     values.push(assignedToId);
     conditions.push(`assigned_to_id = $${values.length}`);
-  }
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`organization_id = $${values.length}`);
   }
   if (!includeArchived) conditions.push("archived_at IS NULL");
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -1845,8 +4093,8 @@ export async function listComplianceMeetings({ ownerUserId, assignedToId, organi
   const rows = [];
   for (const meeting of result.rows) {
     const docs = await pool.query(
-      "SELECT * FROM meeting_required_documents WHERE meeting_id = $1 ORDER BY created_at ASC",
-      [meeting.id]
+      "SELECT * FROM meeting_required_documents WHERE meeting_id = $1 AND organization_id = $2 ORDER BY created_at ASC",
+      [meeting.id, scopedOrganizationId]
     );
     rows.push(toUiAppointment(meeting, docs.rows));
   }
@@ -1855,7 +4103,7 @@ export async function listComplianceMeetings({ ownerUserId, assignedToId, organi
 
 export async function getComplianceMeetingRecord(id, { organizationId } = {}) {
   const values = [id];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
+  const organizationFilter = organizationScopeClause(values, organizationId, "organization_id", "getComplianceMeetingRecord");
   const result = await pool.query(
     `SELECT * FROM compliance_meetings WHERE id = $1 ${organizationFilter} LIMIT 1`,
     values
@@ -1863,17 +4111,19 @@ export async function getComplianceMeetingRecord(id, { organizationId } = {}) {
   return result.rows[0] || null;
 }
 
-async function replaceMeetingDocuments(client, meetingId, requiredDocuments = []) {
-  await client.query("DELETE FROM meeting_required_documents WHERE meeting_id = $1", [meetingId]);
+async function replaceMeetingDocuments(client, meetingId, requiredDocuments = [], organizationId) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "replaceMeetingDocuments");
+  await client.query("DELETE FROM meeting_required_documents WHERE meeting_id = $1 AND organization_id = $2", [meetingId, scopedOrganizationId]);
   for (const doc of requiredDocuments) {
     const documentId = doc.id ? `${meetingId}:${doc.id}` : crypto.randomUUID();
     await client.query(
       `INSERT INTO meeting_required_documents (
          id, organization_id, meeting_id, name, required, completed, file_name, legacy_data
-       )
-       VALUES ($1, (SELECT organization_id FROM compliance_meetings WHERE id = $2), $2, $3, $4, $5, $6, $7::jsonb)`,
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
       [
         documentId,
+        scopedOrganizationId,
         meetingId,
         doc.name || "Document",
         doc.required !== false,
@@ -1885,21 +4135,33 @@ async function replaceMeetingDocuments(client, meetingId, requiredDocuments = []
   }
 }
 
-export async function createComplianceMeetingRecord({ ownerUserId, actorUser, meeting }) {
+export async function createComplianceMeetingRecord({ ownerUserId, actorUser, organizationId, tenantContext, meeting }) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createComplianceMeetingRecord")
+    : requireOrganizationScope(organizationId, "createComplianceMeetingRecord");
   const client = await pool.connect();
   const id = crypto.randomUUID();
   try {
     await client.query("BEGIN");
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    if (owner.rows[0]?.organization_id !== scopedOrganizationId) {
+      await client.query("ROLLBACK");
+      const error = new Error("Compliance meeting owner does not belong to the authenticated organization.");
+      error.code = "TENANT_SCOPE_REQUIRED";
+      error.statusCode = 403;
+      throw error;
+    }
     const result = await client.query(
       `INSERT INTO compliance_meetings (
          id, organization_id, owner_user_id, title, organization_name, meeting_at, location, status,
          assigned_to_id, assigned_to_name, description, outcome, next_action_items,
          reminder_sent, legacy_data, created_by_id
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16)
        RETURNING *`,
       [
         id,
+        scopedOrganizationId,
         ownerUserId,
         meeting.purpose || meeting.title || "Compliance meeting",
         meeting.departmentName || meeting.organizationName || null,
@@ -1916,7 +4178,7 @@ export async function createComplianceMeetingRecord({ ownerUserId, actorUser, me
         actorUser?.id || ownerUserId,
       ]
     );
-    await replaceMeetingDocuments(client, id, meeting.requiredDocuments || []);
+    await replaceMeetingDocuments(client, id, meeting.requiredDocuments || [], scopedOrganizationId);
     await syncMeetingUserRecord(client, ownerUserId, result.rows[0]);
     await client.query("COMMIT");
     return result.rows[0];
@@ -1930,13 +4192,12 @@ export async function createComplianceMeetingRecord({ ownerUserId, actorUser, me
 
 export async function updateComplianceMeetingRecord(id, updates = {}, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateComplianceMeetingRecord");
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
     const beforeResult = await client.query(
-      `SELECT * FROM compliance_meetings WHERE id = $1 ${organizationFilter}`,
-      beforeValues
+      "SELECT * FROM compliance_meetings WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
     );
     const before = beforeResult.rows[0] || null;
     if (!before) {
@@ -1960,8 +4221,8 @@ export async function updateComplianceMeetingRecord(id, updates = {}, { organiza
            legacy_data = $13::jsonb,
            archived_at = CASE WHEN $6 = 'ARCHIVED' THEN COALESCE(archived_at, NOW()) ELSE archived_at END,
            updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
+        WHERE id = $1 AND organization_id = $14
+        RETURNING *`,
       [
         id,
         updates.purpose || updates.title || null,
@@ -1976,10 +4237,11 @@ export async function updateComplianceMeetingRecord(id, updates = {}, { organiza
         updates.nextActionItems === undefined ? before.next_action_items : updates.nextActionItems || null,
         updates.reminderSent === undefined ? before.reminder_sent : Boolean(updates.reminderSent),
         JSON.stringify(legacy),
+        scopedOrganizationId,
       ]
     );
     if (Array.isArray(updates.requiredDocuments)) {
-      await replaceMeetingDocuments(client, id, updates.requiredDocuments);
+      await replaceMeetingDocuments(client, id, updates.requiredDocuments, scopedOrganizationId);
     }
     await syncMeetingUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
     await client.query("COMMIT");
@@ -1994,13 +4256,12 @@ export async function updateComplianceMeetingRecord(id, updates = {}, { organiza
 
 export async function archiveComplianceMeetingRecord(id, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "archiveComplianceMeetingRecord");
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
     const beforeResult = await client.query(
-      `SELECT * FROM compliance_meetings WHERE id = $1 ${organizationFilter}`,
-      beforeValues
+      "SELECT * FROM compliance_meetings WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
     );
     const before = beforeResult.rows[0] || null;
     if (!before) {
@@ -2012,9 +4273,9 @@ export async function archiveComplianceMeetingRecord(id, { organizationId } = {}
        SET status = 'COMPLETED',
            archived_at = COALESCE(archived_at, NOW()),
            updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
-      [id]
+        WHERE id = $1 AND organization_id = $2
+        RETURNING *`,
+      [id, scopedOrganizationId]
     );
     await syncMeetingUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
     await client.query("COMMIT");
@@ -2029,9 +4290,10 @@ export async function archiveComplianceMeetingRecord(id, { organizationId } = {}
 
 export async function upsertMeetingRequiredDocument(meetingId, document = {}, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "upsertMeetingRequiredDocument");
   try {
     await client.query("BEGIN");
-    const meeting = await getComplianceMeetingRecord(meetingId, { organizationId });
+    const meeting = await getComplianceMeetingRecord(meetingId, { organizationId: scopedOrganizationId });
     if (!meeting) {
       await client.query("ROLLBACK");
       return null;
@@ -2053,7 +4315,7 @@ export async function upsertMeetingRequiredDocument(meetingId, document = {}, { 
        RETURNING *`,
       [
         id,
-        meeting.organization_id || organizationId || null,
+        scopedOrganizationId,
         meetingId,
         document.name || "Document",
         document.required !== false,
@@ -2075,13 +4337,12 @@ export async function upsertMeetingRequiredDocument(meetingId, document = {}, { 
 
 export async function updateMeetingRequiredDocument(meetingId, documentId, updates = {}, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateMeetingRequiredDocument");
   try {
     await client.query("BEGIN");
-    const meetingValues = [meetingId];
-    const organizationFilter = organizationId ? `AND organization_id = $${meetingValues.push(organizationId)}` : "";
     const meetingResult = await client.query(
-      `SELECT * FROM compliance_meetings WHERE id = $1 ${organizationFilter}`,
-      meetingValues
+      "SELECT * FROM compliance_meetings WHERE id = $1 AND organization_id = $2",
+      [meetingId, scopedOrganizationId]
     );
     const meeting = meetingResult.rows[0] || null;
     if (!meeting) {
@@ -2089,8 +4350,8 @@ export async function updateMeetingRequiredDocument(meetingId, documentId, updat
       return null;
     }
     const beforeResult = await client.query(
-      "SELECT * FROM meeting_required_documents WHERE id = $1 AND meeting_id = $2",
-      [documentId, meetingId]
+      "SELECT * FROM meeting_required_documents WHERE id = $1 AND meeting_id = $2 AND organization_id = $3",
+      [documentId, meetingId, scopedOrganizationId]
     );
     const before = beforeResult.rows[0] || null;
     if (!before) {
@@ -2106,8 +4367,8 @@ export async function updateMeetingRequiredDocument(meetingId, documentId, updat
            file_name = $6,
            legacy_data = $7::jsonb,
            updated_at = NOW()
-       WHERE id = $1 AND meeting_id = $2
-       RETURNING *`,
+        WHERE id = $1 AND meeting_id = $2 AND organization_id = $8
+        RETURNING *`,
       [
         documentId,
         meetingId,
@@ -2116,6 +4377,7 @@ export async function updateMeetingRequiredDocument(meetingId, documentId, updat
         updates.completed === undefined ? before.completed : Boolean(updates.completed),
         updates.fileName === undefined ? before.file_name : updates.fileName || null,
         JSON.stringify(legacy),
+        scopedOrganizationId,
       ]
     );
     await syncMeetingUserRecord(client, meeting.owner_user_id, meeting);
@@ -2130,69 +4392,164 @@ export async function updateMeetingRequiredDocument(meetingId, documentId, updat
 }
 
 export async function getDashboardData(user, permissions = []) {
-  const canSeeAll = permissions.includes("shipments.view_all") || user.role === "CEO" || user.role === "MANAGER";
+  const canViewAllTasks = permissions.includes("tasks.view_all");
+  const canViewCompliance = permissions.includes("compliance.manage");
+  const canViewQuotations = QUOTATIONS_UI_SURFACE_ENABLED && permissions.includes("quotations.manage");
+  const canUseCheques = permissions.includes("cheques.manage");
+  const canViewOrganizationCheques = canUseCheques && (user.role === "CEO" || user.role === "MANAGER");
   const organizationId = user.organizationId || user.organization_id;
-  const shipmentsResult = await pool.query(
-    `SELECT * FROM shipments
-     WHERE archived_at IS NULL AND ($1::text IS NULL OR organization_id = $1)
-     ORDER BY updated_at DESC`,
-    [organizationId || null]
-  );
-  const taskRows = await listTasks(
-    permissions.includes("tasks.view_all") ? { organizationId, includeAll: true } : { organizationId, assignedToId: user.id, includeAll: true }
-  );
-  const documentRows = await listDocuments({ organizationId, ownerUserId: user.id, includeArchived: false });
-  const chequeRows = await listCheques({ organizationId, ownerUserId: canSeeAll ? undefined : user.id });
-  const meetingRows = await listComplianceMeetings(canSeeAll ? { organizationId } : { organizationId, assignedToId: user.id });
-  const quotationRows = await listQuotations({ organizationId, ownerUserId: canSeeAll ? undefined : user.id });
-  const notificationResult = await pool.query(
-    `SELECT * FROM notifications
-     WHERE user_id = $1 AND ($2::text IS NULL OR organization_id = $2) AND read_at IS NULL
-     ORDER BY created_at DESC
-     LIMIT 20`,
-    [user.id, organizationId || null]
-  );
-  const changeResult = await pool.query(
-    `SELECT c.*, u.name AS actor_name
-     FROM change_logs c
-     LEFT JOIN app_users u ON u.id = c.actor_user_id
-     WHERE ($1::text IS NULL OR c.organization_id = $1)
-     ORDER BY c.created_at DESC
-     LIMIT 10`,
-    [organizationId || null]
-  );
-  const usersResult = await pool.query(
-    `SELECT id, name, email, role, is_online, department, last_seen_at
-     FROM app_users
-     WHERE ($1::text IS NULL OR organization_id = $1)
-     ORDER BY is_online DESC, name ASC`
-    ,
-    [organizationId || null]
-  );
 
-  const shipments = shipmentsResult.rows.map((row) => ({
+  const orgParam = organizationId || null;
+  const taskVisibilitySql = "AND ($3::boolean OR t.owner_user_id = $2 OR t.assigned_to_id = $2 OR t.assigned_by_id = $2)";
+  const chequeVisibilitySql = "AND ($3::boolean OR ($4::boolean AND owner_user_id = $2))";
+
+  const [
+    shipmentSummaryResult,
+    latestShipmentsResult,
+    priorityShipmentsResult,
+    taskSummaryResult,
+    myTasksResult,
+    documentCountResult,
+    chequeSummaryResult,
+    meetingRows,
+    quotationSummaryResult,
+    notificationResult,
+    changeResult,
+    usersResult,
+    dueSoonCheques,
+  ] = await Promise.all([
+    pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND exited_archived_at IS NULL AND status NOT IN ('DELIVERED', 'CLOSED'))::int AS active_shipments,
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND exited_archived_at IS NULL AND status = 'CUSTOMS')::int AS customs_shipments
+       FROM shipments
+       WHERE ($1::text IS NULL OR organization_id = $1)`,
+      [orgParam]
+    ),
+    pool.query(
+      `SELECT s.id, s.shipment_code, s.customer_id, c.customer_code, s.customer_name, s.status, s.destination, s.estimated_delivery_at, s.legacy_data
+       FROM shipments s
+       LEFT JOIN customers c
+         ON c.id = s.customer_id
+        AND c.organization_id = s.organization_id
+       WHERE s.archived_at IS NULL
+         AND s.exited_archived_at IS NULL
+         AND ($1::text IS NULL OR s.organization_id = $1)
+       ORDER BY s.updated_at DESC, s.created_at DESC
+       LIMIT 8`,
+      [orgParam]
+    ),
+    pool.query(
+      `SELECT s.id, s.shipment_code, s.customer_id, c.customer_code, s.customer_name, s.status, s.destination, s.estimated_delivery_at, s.legacy_data
+       FROM shipments s
+       LEFT JOIN customers c
+         ON c.id = s.customer_id
+        AND c.organization_id = s.organization_id
+       WHERE s.archived_at IS NULL
+         AND s.exited_archived_at IS NULL
+         AND s.status IN ('ARRIVED', 'CUSTOMS', 'IN_TRANSIT')
+         AND ($1::text IS NULL OR s.organization_id = $1)
+       ORDER BY s.updated_at DESC, s.created_at DESC
+       LIMIT 6`,
+      [orgParam]
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE t.status NOT IN ('DONE', 'CANCELLED'))::int AS open_tasks,
+         COUNT(*) FILTER (WHERE t.status = 'DONE')::int AS completed_tasks
+       FROM tasks t
+       WHERE ($1::text IS NULL OR t.organization_id = $1)
+       ${taskVisibilitySql}`,
+      [orgParam, user.id, canViewAllTasks]
+    ),
+    pool.query(
+      `${taskSelect()}
+       WHERE ($1::text IS NULL OR t.organization_id = $1)
+         AND t.assigned_to_id = $2
+         AND t.status NOT IN ('DONE', 'CANCELLED')
+       ORDER BY t.updated_at DESC, t.created_at DESC
+       LIMIT 8`,
+      [orgParam, user.id]
+    ),
+    pool.query(
+      `SELECT COUNT(*)::int AS documents
+       FROM documents
+       WHERE archived_at IS NULL
+          AND ($1::text IS NULL OR organization_id = $1)`,
+      [orgParam]
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND status = 'ACTIVE')::int AS active_cheques,
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND status = 'RETURNED')::int AS returned_cheques
+        FROM cheques
+        WHERE ($1::text IS NULL OR organization_id = $1)
+        ${chequeVisibilitySql}`,
+      [orgParam, user.id, canViewOrganizationCheques, canUseCheques]
+    ),
+    listComplianceMeetings(canViewCompliance ? { organizationId } : { organizationId, assignedToId: user.id }),
+    canViewQuotations
+      ? pool.query(
+          `SELECT COUNT(*) FILTER (WHERE archived_at IS NULL AND status = 'PENDING')::int AS active_quotations
+           FROM quotations
+           WHERE ($1::text IS NULL OR organization_id = $1)`,
+          [orgParam]
+        )
+      : Promise.resolve({ rows: [{ active_quotations: 0 }] }),
+    pool.query(
+      `SELECT * FROM notifications
+       WHERE user_id = $1 AND ($2::text IS NULL OR organization_id = $2) AND read_at IS NULL
+         AND id <> ALL($3::text[])
+       ORDER BY created_at DESC
+       LIMIT 20`,
+      [user.id, orgParam, ["n1", "n2", "n3", "n4"]]
+    ),
+    pool.query(
+      `SELECT c.*, u.name AS actor_name
+       FROM change_logs c
+       LEFT JOIN app_users u ON u.id = c.actor_user_id
+       WHERE ($1::text IS NULL OR c.organization_id = $1)
+       ORDER BY c.created_at DESC
+       LIMIT 10`,
+      [orgParam]
+    ),
+    pool.query(
+      `SELECT id, name, email, role, is_online, department, last_seen_at
+       FROM app_users
+       WHERE ($1::text IS NULL OR organization_id = $1)
+       ORDER BY is_online DESC, name ASC`,
+      [orgParam]
+    ),
+    canUseCheques
+      ? listDueSoonCheques({ organizationId, ownerUserId: canViewOrganizationCheques ? undefined : user.id })
+      : Promise.resolve([]),
+  ]);
+
+  const toDashboardShipment = (row) => ({
     id: row.id,
     trackingNumber: row.shipment_code,
-    customerName: row.customer_name,
+    customerId: row.customer_id || "",
+    customerCode: row.customer_code || row.customer_id || "",
+    customerName: row.customer_code || row.customer_id || "",
     status: row.status,
     destination: row.destination,
     estimatedDelivery: row.estimated_delivery_at,
     freeTimeDays: row.legacy_data?.freeTimeDays || 14,
-  }));
-  const activeShipments = shipments.filter((s) => !["DELIVERED", "CLOSED"].includes(s.status));
-  const customsShipments = shipments.filter((s) => s.status === "CUSTOMS");
-  const openTasks = taskRows.filter((task) => !["DONE", "CANCELLED"].includes(task.status));
-  const completedTasks = taskRows.filter((task) => task.status === "DONE");
-  const activeCheques = chequeRows.filter((cheque) => cheque.status === "ACTIVE");
-  const returnedCheques = chequeRows.filter((cheque) => cheque.status === "RETURNED");
+  });
+
+  const latestShipments = latestShipmentsResult.rows.map(toDashboardShipment);
+  const priorityShipments = priorityShipmentsResult.rows.map(toDashboardShipment);
+  const myTasks = myTasksResult.rows.map(toUiTask);
+  const shipmentSummary = shipmentSummaryResult.rows[0] || {};
+  const taskSummary = taskSummaryResult.rows[0] || {};
+  const chequeSummary = chequeSummaryResult.rows[0] || {};
+  const quotationSummary = quotationSummaryResult.rows[0] || {};
   const upcomingMeetings = meetingRows.filter((meeting) => !["COMPLETED", "CANCELLED"].includes(meeting.status));
   const missingMeetingDocs = meetingRows.flatMap((meeting) =>
     (meeting.requiredDocuments || [])
       .filter((doc) => doc.required && !doc.completed)
       .map((doc) => ({ meetingId: meeting.id, meetingTitle: meeting.purpose, documentName: doc.name }))
   );
-
-  const dueSoonCheques = await listDueSoonCheques({ organizationId, ownerUserId: canSeeAll ? undefined : user.id });
   const alerts = [
     ...notificationResult.rows.map((row) => ({
       id: row.id,
@@ -2215,36 +4572,34 @@ export async function getDashboardData(user, permissions = []) {
       title: "Missing compliance document",
       message: `${item.meetingTitle}: ${item.documentName}`,
       type: "WARNING",
-      link: "/compliance",
+      link: "/compliance-meetings",
       createdAt: new Date().toISOString(),
     })),
   ];
 
   return {
     summary: {
-      activeShipments: activeShipments.length,
-      customsShipments: customsShipments.length,
-      openTasks: openTasks.length,
-      completedTasks: completedTasks.length,
-      documents: documentRows.length,
-      activeCheques: activeCheques.length,
-      returnedCheques: returnedCheques.length,
+      activeShipments: Number(shipmentSummary.active_shipments || 0),
+      customsShipments: Number(shipmentSummary.customs_shipments || 0),
+      openTasks: Number(taskSummary.open_tasks || 0),
+      completedTasks: Number(taskSummary.completed_tasks || 0),
+      documents: Number(documentCountResult.rows[0]?.documents || 0),
+      activeCheques: Number(chequeSummary.active_cheques || 0),
+      returnedCheques: Number(chequeSummary.returned_cheques || 0),
       dueSoonCheques: dueSoonCheques.length,
       upcomingMeetings: upcomingMeetings.length,
       missingMeetingDocuments: missingMeetingDocs.length,
-      activeQuotations: quotationRows.filter((quote) => quote.status === "PENDING").length,
+      activeQuotations: Number(quotationSummary.active_quotations || 0),
     },
-    latestShipments: shipments.slice(0, 8),
-    priorityShipments: shipments
-      .filter((shipment) => ["ARRIVED", "CUSTOMS", "IN_TRANSIT"].includes(shipment.status))
-      .slice(0, 6),
-    myTasks: taskRows.filter((task) => task.assignedToUserId === user.id && task.status !== "DONE").slice(0, 8),
+    latestShipments,
+    priorityShipments,
+    myTasks,
     alerts,
     management: {
       recentChanges: changeResult.rows,
       users: usersResult.rows,
       onlineUsers: usersResult.rows.filter((row) => row.is_online).length,
-      recentlyCompletedTasks: completedTasks.slice(0, 8),
+      recentlyCompletedTasks: [],
     },
   };
 }
@@ -2281,6 +4636,9 @@ function toUiPlan(row) {
 
 function toUiSignupRequest(row) {
   if (!row) return null;
+  const hasPaidPayment = Boolean(row.has_paid_payment);
+  const hasReceipt = Boolean(row.has_receipt);
+  const abandonedCleanupEligible = isAbandonedSignupRow(row, { allowSuspendedUser: true });
   return {
     id: row.id,
     organizationId: row.organization_id,
@@ -2299,9 +4657,24 @@ function toUiSignupRequest(row) {
     paymentStatus: row.payment_status,
     paymentAmountIrr: Number(row.payment_amount_irr || 0),
     organizationStatus: row.organization_status,
+    subscriptionStatus: row.subscription_status,
+    userStatus: row.user_status,
+    hasPaidPayment,
+    hasReceipt,
+    abandonedCleanupEligible,
     createdAt: row.created_at,
     reviewedAt: row.reviewed_at,
   };
+}
+
+function isAbandonedSignupRow(row, { allowSuspendedUser = false } = {}) {
+  if (!row) return false;
+  if (row.has_paid_payment || row.has_receipt) return false;
+  if (["approved"].includes(row.status)) return false;
+  if (["active", "suspended", "cancelled"].includes(row.organization_status)) return false;
+  if (["active", "cancelled"].includes(row.subscription_status)) return false;
+  if (allowSuspendedUser) return !["active"].includes(row.user_status);
+  return ["pending"].includes(row.user_status || "pending");
 }
 
 function toUiContactRequest(row) {
@@ -2653,7 +5026,13 @@ function formatSmsDateTime(value) {
 }
 
 function formatSmsTaskTime(task) {
-  return formatSmsDateTime(task?.due_at || task?.legacy_data?.deadline || task?.legacy_data?.dueDate) || "در اولین فرصت";
+  const legacy = task?.legacy_data || {};
+  const dueDate = task?.due_at || legacy.dueDate || "";
+  const deadline = legacy.deadline || "";
+  const value = dueDate && deadline && !/[T\s]\d{1,2}:\d{2}/.test(String(dueDate))
+    ? `${dueDate} ${deadline}`
+    : dueDate || deadline;
+  return formatSmsDateTime(value) || "در اولین فرصت";
 }
 
 function meetingTemplateKey(windowName) {
@@ -2709,6 +5088,30 @@ async function enqueueSmsDelivery(queryable, {
   return result.rows[0] || null;
 }
 
+function sanitizeSmsProviderResponse(value) {
+  if (!value || typeof value !== "object") return value || {};
+  if (Array.isArray(value)) return value.map((item) => sanitizeSmsProviderResponse(item));
+
+  const sensitiveKeys = new Set([
+    "body",
+    "code",
+    "message",
+    "messages",
+    "messageText",
+    "otp",
+    "text",
+  ]);
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !sensitiveKeys.has(key))
+      .map(([key, nested]) => [key, sanitizeSmsProviderResponse(nested)])
+  );
+}
+
+function smsProviderResponse(providerResult = {}) {
+  return sanitizeSmsProviderResponse(providerResult.raw || providerResult || {});
+}
+
 export async function recordImmediateSmsDelivery({
   organizationId,
   userId,
@@ -2727,7 +5130,7 @@ export async function recordImmediateSmsDelivery({
   const normalizedPhone = normalizeSmsPhone(recipientPhone);
   const safeStatus = ["sent", "failed", "skipped", "queued"].includes(status) ? status : "sent";
   const finalStatus = normalizedPhone ? safeStatus : "skipped";
-  const providerResponse = providerResult.raw || providerResult || {};
+  const providerResponse = smsProviderResponse(providerResult);
   const result = await pool.query(
     `INSERT INTO sms_deliveries (
        id, organization_id, user_id, recipient_type, recipient_name, recipient_phone, message, status, source_type, source_id,
@@ -3022,7 +5425,7 @@ export async function markSmsDeliverySent(deliveryId, providerResult = {}) {
          updated_at = NOW()
      WHERE id = $1
      RETURNING *`,
-    [deliveryId, providerResult.messageId || null, JSON.stringify(providerResult.raw || providerResult)]
+    [deliveryId, providerResult.messageId || null, JSON.stringify(smsProviderResponse(providerResult))]
   );
   return toUiSmsDelivery(result.rows[0]);
 }
@@ -3037,7 +5440,7 @@ export async function markSmsDeliverySkipped(deliveryId, reason, providerResult 
          updated_at = NOW()
      WHERE id = $1
      RETURNING *`,
-    [deliveryId, reason || "skipped", JSON.stringify(providerResult.raw || providerResult || {})]
+    [deliveryId, reason || "skipped", JSON.stringify(smsProviderResponse(providerResult))]
   );
   return toUiSmsDelivery(result.rows[0]);
 }
@@ -3217,6 +5620,180 @@ export async function assertPlanAllowsUser(organizationId) {
   }
 }
 
+async function getRetryableSignupByOwnerEmail(email, userId) {
+  const result = await pool.query(
+    `SELECT sr.*, o.status AS organization_status, u.status AS user_status,
+            os.id AS subscription_id, os.status AS subscription_status,
+            bp.status AS payment_status,
+            EXISTS (
+              SELECT 1
+              FROM billing_payments paid
+              WHERE (paid.signup_request_id = sr.id OR paid.organization_id = sr.organization_id)
+                AND paid.status = 'paid'
+            ) AS has_paid_payment,
+            EXISTS (
+              SELECT 1
+              FROM billing_receipts receipt
+              LEFT JOIN billing_payments receipt_payment ON receipt_payment.id = receipt.payment_id
+              LEFT JOIN billing_invoices receipt_invoice ON receipt_invoice.id = receipt.invoice_id
+              WHERE receipt.organization_id = sr.organization_id
+                 OR receipt_payment.signup_request_id = sr.id
+                 OR receipt_invoice.signup_request_id = sr.id
+            ) AS has_receipt
+     FROM signup_requests sr
+     JOIN organizations o ON o.id = sr.organization_id
+     JOIN app_users u ON u.id = sr.owner_user_id
+     LEFT JOIN organization_subscriptions os ON os.organization_id = o.id
+     LEFT JOIN billing_payments bp ON bp.id = sr.payment_id
+     WHERE u.id = $2
+        OR lower(u.email) = lower($1)
+     ORDER BY sr.created_at DESC
+     LIMIT 1`,
+    [email, userId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const retryableSignup = ["payment_pending", "payment_failed", "pending_review"].includes(row.status);
+  const retryablePayment = !row.payment_status || ["pending", "failed", "superseded"].includes(row.payment_status);
+  return retryableSignup && retryablePayment && isAbandonedSignupRow(row) ? row : null;
+}
+
+async function retrySignupWithPayment(client, { signup, passwordHash, plan, retryable }) {
+  const paymentId = crypto.randomUUID();
+  const billingCycle = signup.billingCycle === "annual" ? "annual" : "monthly";
+  const amount = billingCycle === "annual" ? plan.annual_price_irr : plan.monthly_price_irr;
+  const ownerEmail = signup.ownerEmail || signup.contactEmail;
+  const ownerName = signup.ownerName || signup.contactName;
+
+  await client.query(
+    `UPDATE billing_payments
+     SET status = 'superseded',
+         updated_at = NOW(),
+         raw_verify = COALESCE(raw_verify, '{}'::jsonb) || $2::jsonb
+     WHERE (signup_request_id = $1 OR organization_id = $3)
+       AND status <> 'paid'`,
+    [retryable.id, JSON.stringify({ reason: "signup_retry", supersededAt: new Date().toISOString() }), retryable.organization_id]
+  );
+  await client.query(
+    `UPDATE billing_invoices
+     SET status = 'void',
+         updated_at = NOW(),
+         metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
+     WHERE (signup_request_id = $1 OR organization_id = $3)
+       AND status = 'issued'`,
+    [retryable.id, JSON.stringify({ voidReason: "signup_retry" }), retryable.organization_id]
+  );
+  await client.query(
+    `UPDATE organizations
+     SET name = $2,
+         plan_id = $3,
+         contact_name = $4,
+         contact_email = $5,
+         contact_phone = $6,
+         notes = $7,
+         status = 'pending_payment',
+         legacy_data = $8::jsonb,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [
+      retryable.organization_id,
+      signup.companyName,
+      plan.id,
+      ownerName,
+      ownerEmail,
+      signup.contactPhone || "",
+      signup.notes || null,
+      JSON.stringify({ companySize: signup.companySize, expectedVolume: signup.expectedVolume }),
+    ]
+  );
+  await client.query(
+    `UPDATE app_users
+     SET name = $2,
+         email = $3,
+         password_hash = $4,
+         status = 'pending',
+         updated_at = NOW()
+     WHERE id = $1`,
+    [retryable.owner_user_id, ownerName, ownerEmail, passwordHash]
+  );
+  await client.query(
+    `INSERT INTO organization_members (organization_id, user_id, role, status)
+     VALUES ($1, $2, 'owner', 'pending')
+     ON CONFLICT (organization_id, user_id) DO UPDATE SET status = 'pending'`,
+    [retryable.organization_id, retryable.owner_user_id]
+  );
+  await client.query(
+    `UPDATE organization_subscriptions
+     SET plan_id = $2,
+         status = 'pending_payment',
+         billing_cycle = $3,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [retryable.subscription_id, plan.id, billingCycle]
+  );
+  await client.query(
+    `INSERT INTO billing_payments (
+       id, organization_id, signup_request_id, subscription_id, provider, status,
+       amount_irr, currency, description
+     )
+     VALUES ($1, $2, $3, $4, 'zarinpal', 'pending', $5, 'IRR', $6)`,
+    [paymentId, retryable.organization_id, retryable.id, retryable.subscription_id, amount, `Subscription ${plan.name} Logistic Plus`]
+  );
+  await client.query(
+    `UPDATE signup_requests
+     SET plan_id = $2,
+         company_name = $3,
+         contact_name = $4,
+         contact_email = $5,
+         contact_phone = $6,
+         company_size = $7,
+         expected_volume = $8,
+         notes = $9,
+         status = 'payment_pending',
+         payment_id = $10,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [
+      retryable.id,
+      plan.id,
+      signup.companyName,
+      ownerName,
+      ownerEmail,
+      signup.contactPhone || "",
+      signup.companySize || "",
+      signup.expectedVolume || "",
+      signup.notes || "",
+      paymentId,
+    ]
+  );
+  const invoiceId = await createIssuedInvoiceForPayment(client, {
+    organizationId: retryable.organization_id,
+    subscriptionId: retryable.subscription_id,
+    signupRequestId: retryable.id,
+    paymentId,
+    plan,
+    billingCycle,
+    amount,
+  });
+  await insertSubscriptionEvent(client, {
+    organizationId: retryable.organization_id,
+    subscriptionId: retryable.subscription_id,
+    eventType: "signup.payment_retry",
+    summary: "Signup payment was retried.",
+    after: { invoiceId, paymentId, planId: plan.id, billingCycle, amountIrr: Number(amount) },
+  });
+  await syncUsersCollectionForOrganization(client, retryable.organization_id, retryable.owner_user_id);
+  return {
+    signupRequestId: retryable.id,
+    organizationId: retryable.organization_id,
+    ownerUserId: retryable.owner_user_id,
+    paymentId,
+    invoiceId,
+    amountIrr: Number(amount),
+    plan: toUiPlan(plan),
+  };
+}
+
 export async function createSignupWithPayment({ signup, passwordHash }) {
   const plan = await getSubscriptionPlan(signup.planId || "starter");
   if (!plan) {
@@ -3226,12 +5803,28 @@ export async function createSignupWithPayment({ signup, passwordHash }) {
     throw error;
   }
 
-  const existing = await getUserByEmail(signup.ownerEmail || signup.contactEmail);
+  const ownerEmail = signup.ownerEmail || signup.contactEmail;
+  const existing = await getUserByEmail(ownerEmail);
   if (existing) {
-    const error = new Error("A user with this email already exists.");
-    error.statusCode = 409;
-    error.code = "EMAIL_EXISTS";
-    throw error;
+    const retryable = await getRetryableSignupByOwnerEmail(ownerEmail, existing.id);
+    if (!retryable) {
+      const error = new Error("A user with this email already exists.");
+      error.statusCode = 409;
+      error.code = "EMAIL_EXISTS";
+      throw error;
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const data = await retrySignupWithPayment(client, { signup, passwordHash, plan, retryable });
+      await client.query("COMMIT");
+      return data;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   const organizationId = crypto.randomUUID();
@@ -3489,6 +6082,7 @@ export async function markPaymentRequested(paymentId, { authority, gatewayUrl, r
     `UPDATE billing_payments
      SET gateway_authority = $2,
          gateway_url = $3,
+         status = 'pending',
          raw_request = $4::jsonb,
          requested_at = NOW(),
          updated_at = NOW()
@@ -3499,61 +6093,13 @@ export async function markPaymentRequested(paymentId, { authority, gatewayUrl, r
   return result.rows[0] || null;
 }
 
+export async function markPaymentVerifiedByAuthorityWithResult(authority, { ok, refId, rawVerify }) {
+  return markPaymentVerifiedByAuthorityInRepository(pool, authority, { ok, refId, rawVerify });
+}
+
 export async function markPaymentVerifiedByAuthority(authority, { ok, refId, rawVerify }) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const paymentResult = await client.query(
-      `UPDATE billing_payments
-       SET status = $2,
-           gateway_ref_id = COALESCE($3, gateway_ref_id),
-           raw_verify = $4::jsonb,
-           verified_at = CASE WHEN $2 = 'paid' THEN NOW() ELSE verified_at END,
-           failed_at = CASE WHEN $2 = 'failed' THEN NOW() ELSE failed_at END,
-           updated_at = NOW()
-       WHERE gateway_authority = $1
-       RETURNING *`,
-      [authority, ok ? "paid" : "failed", refId || null, JSON.stringify(rawVerify || {})]
-    );
-    const payment = paymentResult.rows[0];
-    if (payment) {
-      if (ok) {
-        await closeInvoiceForPayment(client, payment);
-      }
-      await client.query(
-        `UPDATE signup_requests
-         SET status = $2, updated_at = NOW()
-         WHERE id = $1`,
-        [payment.signup_request_id, ok ? "pending_review" : "payment_failed"]
-      );
-      await client.query(
-        `UPDATE organizations
-         SET status = $2, updated_at = NOW()
-         WHERE id = $1`,
-        [payment.organization_id, ok ? "pending_review" : "payment_failed"]
-      );
-      await client.query(
-        `UPDATE organization_subscriptions
-         SET status = $2, updated_at = NOW()
-         WHERE id = $1`,
-        [payment.subscription_id, ok ? "pending_review" : "payment_failed"]
-      );
-      await insertSubscriptionEvent(client, {
-        organizationId: payment.organization_id,
-        subscriptionId: payment.subscription_id,
-        eventType: ok ? "payment.verified" : "payment.failed",
-        summary: ok ? "Payment was verified and invoice was paid." : "Payment verification failed.",
-        after: { paymentId: payment.id, status: ok ? "paid" : "failed", refId },
-      });
-    }
-    await client.query("COMMIT");
-    return payment || null;
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
+  const result = await markPaymentVerifiedByAuthorityWithResult(authority, { ok, refId, rawVerify });
+  return result.payment || null;
 }
 
 export async function listSignupRequests({ status } = {}) {
@@ -3562,16 +6108,165 @@ export async function listSignupRequests({ status } = {}) {
   if (status) values.push(status);
   const result = await pool.query(
     `SELECT sr.*, sp.name AS plan_name, bp.status AS payment_status, bp.amount_irr AS payment_amount_irr,
-            o.status AS organization_status
+            o.status AS organization_status,
+            u.status AS user_status,
+            os.status AS subscription_status,
+            EXISTS (
+              SELECT 1
+              FROM billing_payments paid
+              WHERE (paid.signup_request_id = sr.id OR paid.organization_id = sr.organization_id)
+                AND paid.status = 'paid'
+            ) AS has_paid_payment,
+            EXISTS (
+              SELECT 1
+              FROM billing_receipts receipt
+              LEFT JOIN billing_payments receipt_payment ON receipt_payment.id = receipt.payment_id
+              LEFT JOIN billing_invoices receipt_invoice ON receipt_invoice.id = receipt.invoice_id
+              WHERE receipt.organization_id = sr.organization_id
+                 OR receipt_payment.signup_request_id = sr.id
+                 OR receipt_invoice.signup_request_id = sr.id
+            ) AS has_receipt
      FROM signup_requests sr
      LEFT JOIN subscription_plans sp ON sp.id = sr.plan_id
      LEFT JOIN billing_payments bp ON bp.id = sr.payment_id
      LEFT JOIN organizations o ON o.id = sr.organization_id
+     LEFT JOIN app_users u ON u.id = sr.owner_user_id
+     LEFT JOIN organization_subscriptions os ON os.organization_id = sr.organization_id
      ${where}
      ORDER BY sr.created_at DESC`,
     values
   );
   return result.rows.map(toUiSignupRequest);
+}
+
+async function getSignupRequestLifecycle(client, requestId, { forUpdate = false } = {}) {
+  const result = await client.query(
+    `SELECT sr.*, sp.name AS plan_name, bp.status AS payment_status, bp.amount_irr AS payment_amount_irr,
+            o.status AS organization_status,
+            u.status AS user_status,
+            os.id AS subscription_id,
+            os.status AS subscription_status,
+            EXISTS (
+              SELECT 1
+              FROM billing_payments paid
+              WHERE (paid.signup_request_id = sr.id OR paid.organization_id = sr.organization_id)
+                AND paid.status = 'paid'
+            ) AS has_paid_payment,
+            EXISTS (
+              SELECT 1
+              FROM billing_receipts receipt
+              LEFT JOIN billing_payments receipt_payment ON receipt_payment.id = receipt.payment_id
+              LEFT JOIN billing_invoices receipt_invoice ON receipt_invoice.id = receipt.invoice_id
+              WHERE receipt.organization_id = sr.organization_id
+                 OR receipt_payment.signup_request_id = sr.id
+                 OR receipt_invoice.signup_request_id = sr.id
+            ) AS has_receipt
+     FROM signup_requests sr
+     LEFT JOIN subscription_plans sp ON sp.id = sr.plan_id
+     LEFT JOIN billing_payments bp ON bp.id = sr.payment_id
+     LEFT JOIN organizations o ON o.id = sr.organization_id
+     LEFT JOIN app_users u ON u.id = sr.owner_user_id
+     LEFT JOIN organization_subscriptions os ON os.organization_id = sr.organization_id
+     WHERE sr.id = $1
+     ${forUpdate ? "FOR UPDATE OF sr" : ""}`,
+    [requestId]
+  );
+  return result.rows[0] || null;
+}
+
+async function getAbandonedSignupDeleteBlockers(client, row) {
+  const blockers = [];
+  if (!row.organization_id || !row.owner_user_id) blockers.push("SIGNUP_GRAPH_INCOMPLETE");
+  if (row.has_paid_payment) blockers.push("PAID_PAYMENT_EXISTS");
+  if (row.has_receipt) blockers.push("RECEIPT_EXISTS");
+  if (row.status === "approved") blockers.push("SIGNUP_APPROVED");
+  if (row.organization_status === "active") blockers.push("ORGANIZATION_ACTIVE");
+  if (row.subscription_status === "active") blockers.push("SUBSCRIPTION_ACTIVE");
+  if (row.user_status === "active") blockers.push("OWNER_USER_ACTIVE");
+  if (!row.organization_id) return blockers;
+
+  const counts = await client.query(
+    `SELECT
+       (SELECT COUNT(*)::int FROM app_users WHERE organization_id = $1 AND id <> $2) AS other_users,
+       (SELECT COUNT(*)::int FROM customers WHERE organization_id = $1) AS customers,
+       (SELECT COUNT(*)::int FROM shipments WHERE organization_id = $1) AS shipments,
+       (SELECT COUNT(*)::int FROM tasks WHERE organization_id = $1) AS tasks,
+       (SELECT COUNT(*)::int FROM documents WHERE organization_id = $1) AS documents,
+       (SELECT COUNT(*)::int FROM cheques WHERE organization_id = $1) AS cheques,
+       (SELECT COUNT(*)::int FROM compliance_meetings WHERE organization_id = $1) AS compliance_meetings,
+       (SELECT COUNT(*)::int FROM quotations WHERE organization_id = $1) AS quotations,
+       (SELECT COUNT(*)::int FROM archive_records WHERE organization_id = $1) AS archive_records,
+       (SELECT COUNT(*)::int FROM chat_threads WHERE organization_id = $1) AS chat_threads`,
+    [row.organization_id, row.owner_user_id]
+  );
+  const recordCounts = counts.rows[0] || {};
+  if (Number(recordCounts.other_users || 0) > 0) blockers.push("ORGANIZATION_HAS_OTHER_USERS");
+  for (const [key, value] of Object.entries(recordCounts)) {
+    if (key !== "other_users" && Number(value || 0) > 0) blockers.push(`HAS_${key.toUpperCase()}`);
+  }
+  return blockers;
+}
+
+export async function deleteAbandonedSignupRequest(requestId, { actorUserId } = {}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const row = await getSignupRequestLifecycle(client, requestId, { forUpdate: true });
+    if (!row) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    const blockers = await getAbandonedSignupDeleteBlockers(client, row);
+    if (blockers.length || !isAbandonedSignupRow(row, { allowSuspendedUser: true })) {
+      const error = new Error("This signup is not an abandoned unpaid signup.");
+      error.statusCode = 409;
+      error.code = "ABANDONED_SIGNUP_DELETE_BLOCKED";
+      error.blockers = blockers.length ? blockers : ["NOT_ABANDONED_SIGNUP"];
+      throw error;
+    }
+
+    const organizationId = row.organization_id;
+    const ownerUserId = row.owner_user_id;
+    const releasedEmail = row.contact_email;
+
+    await client.query("DELETE FROM app_sessions WHERE user_id = $1", [ownerUserId]);
+    await client.query("DELETE FROM login_sms_challenges WHERE user_id = $1", [ownerUserId]);
+    await client.query(
+      `DELETE FROM billing_invoice_items
+       WHERE invoice_id IN (
+         SELECT id
+         FROM billing_invoices
+         WHERE signup_request_id = $1 OR organization_id = $2 OR payment_id IN (
+           SELECT id FROM billing_payments WHERE signup_request_id = $1 OR organization_id = $2
+         )
+       )`,
+      [requestId, organizationId]
+    );
+    await client.query(
+      "DELETE FROM billing_invoices WHERE signup_request_id = $1 OR organization_id = $2",
+      [requestId, organizationId]
+    );
+    await client.query(
+      "DELETE FROM billing_payments WHERE signup_request_id = $1 OR organization_id = $2",
+      [requestId, organizationId]
+    );
+    await client.query("DELETE FROM subscription_events WHERE organization_id = $1", [organizationId]);
+    await client.query("DELETE FROM user_records WHERE organization_id = $1 OR owner_user_id = $2", [organizationId, ownerUserId]);
+    await client.query("DELETE FROM notifications WHERE organization_id = $1 OR user_id = $2", [organizationId, ownerUserId]);
+    await client.query("DELETE FROM organization_members WHERE organization_id = $1 OR user_id = $2", [organizationId, ownerUserId]);
+    await client.query("DELETE FROM signup_requests WHERE id = $1", [requestId]);
+    await client.query("DELETE FROM organization_subscriptions WHERE organization_id = $1", [organizationId]);
+    await client.query("DELETE FROM app_users WHERE id = $1 AND organization_id = $2", [ownerUserId, organizationId]);
+    await client.query("DELETE FROM organizations WHERE id = $1", [organizationId]);
+    await client.query("COMMIT");
+    return { id: requestId, deleted: true, releasedEmail, organizationId, ownerUserId, actorUserId: actorUserId || null };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function createContactRequest(request = {}, requestContext = {}) {
@@ -4098,11 +6793,16 @@ export async function voidBillingInvoice(invoiceId, { actorUserId } = {}) {
   }
 }
 
-export async function markBillingPaymentManually(paymentId, { actorUserId, status, note }) {
+export async function markBillingPaymentManually(paymentId, { actorUserId, status, note, audit }) {
   const client = await pool.connect();
   const nextStatus = status === "failed" ? "failed" : "paid";
   try {
     await client.query("BEGIN");
+    const before = (await client.query("SELECT * FROM billing_payments WHERE id = $1 FOR UPDATE", [paymentId])).rows[0];
+    if (!before) {
+      await client.query("ROLLBACK");
+      return null;
+    }
     const result = await client.query(
       `UPDATE billing_payments
        SET status = $2,
@@ -4118,7 +6818,6 @@ export async function markBillingPaymentManually(paymentId, { actorUserId, statu
       [paymentId, nextStatus, note || null, actorUserId || null]
     );
     const payment = result.rows[0];
-    if (!payment) return null;
     if (nextStatus === "paid") {
       await closeInvoiceForPayment(client, payment);
       await client.query("UPDATE signup_requests SET status = 'pending_review', updated_at = NOW() WHERE id = $1", [payment.signup_request_id]);
@@ -4133,6 +6832,16 @@ export async function markBillingPaymentManually(paymentId, { actorUserId, statu
       summary: nextStatus === "paid" ? "Payment was manually marked paid." : "Payment was manually marked failed.",
       after: { paymentId, status: nextStatus, note: note || "" },
     });
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? payment.organization_id ?? null,
+        before,
+        after: payment,
+        queryable: client,
+        required: true,
+      });
+    }
     await client.query("COMMIT");
     return (await listBillingPayments({ organizationId: payment.organization_id })).find((item) => item.id === paymentId) || toUiPayment(payment);
   } catch (error) {
@@ -4404,11 +7113,13 @@ export async function createAppUserRecord({ actorUserId, user, passwordHash }) {
   }
 }
 
-export async function updateAppUserRecord(userId, updates, syncOwnerUserId) {
+export async function updateAppUserRecord(userId, updates, syncOwnerUserId, { organizationId, syncOrganizationId } = {}) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const before = await client.query("SELECT * FROM app_users WHERE id = $1", [userId]);
+    const beforeValues = [userId];
+    const beforeOrganizationFilter = organizationId ? ` AND organization_id = $${beforeValues.push(organizationId)}` : "";
+    const before = await client.query(`SELECT * FROM app_users WHERE id = $1 ${beforeOrganizationFilter}`, beforeValues);
     const result = await client.query(
       `UPDATE app_users
        SET name = COALESCE($2, name),
@@ -4422,6 +7133,7 @@ export async function updateAppUserRecord(userId, updates, syncOwnerUserId) {
            bio = COALESCE($10, bio),
            updated_at = NOW()
        WHERE id = $1
+         AND ($11::text IS NULL OR organization_id = $11)
        RETURNING id, name, email, role, avatar, is_online, department, status, last_seen_at,
                  phone, location, bio, two_factor_enabled, notification_preferences, organization_id`,
       [
@@ -4435,6 +7147,7 @@ export async function updateAppUserRecord(userId, updates, syncOwnerUserId) {
         updates.phone || null,
         updates.location || null,
         updates.bio || null,
+        organizationId || null,
       ]
     );
     if (result.rows[0]?.organization_id && updates.status) {
@@ -4443,7 +7156,11 @@ export async function updateAppUserRecord(userId, updates, syncOwnerUserId) {
         [result.rows[0].organization_id, userId, updates.status]
       );
     }
-    await syncUsersCollection(client, syncOwnerUserId);
+    if (syncOrganizationId || result.rows[0]?.organization_id) {
+      await syncUsersCollectionForOrganization(client, syncOrganizationId || result.rows[0]?.organization_id, syncOwnerUserId);
+    } else {
+      await syncUsersCollection(client, syncOwnerUserId);
+    }
     await client.query("COMMIT");
     return { before: before.rows[0] || null, after: result.rows[0] || null };
   } catch (error) {
@@ -4454,44 +7171,167 @@ export async function updateAppUserRecord(userId, updates, syncOwnerUserId) {
   }
 }
 
-export async function listCustomersDetailed({ includeArchived = false, search = "", organizationId } = {}) {
-  const values = [];
-  const conditions = [];
-  if (!includeArchived) conditions.push("c.archived_at IS NULL");
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`c.organization_id = $${values.length}`);
+export async function previewAppUserDeletion(userId, { organizationId, actorUserId } = {}) {
+  return previewUserDeletionFromRepository(pool, userId, { organizationId, actorUserId });
+}
+
+export async function deleteAppUserRecord(userId, { organizationId, actorUserId } = {}) {
+  const preview = await previewAppUserDeletion(userId, { organizationId, actorUserId });
+  if (!preview) return { before: null, deleted: false, preview: null };
+  if (!preview.canDelete) {
+    const error = new Error("User cannot be permanently deleted.");
+    error.statusCode = 409;
+    error.code = "USER_DELETE_BLOCKED";
+    error.blockers = preview.blockers;
+    throw error;
   }
-  if (search) {
-    values.push(`%${String(search).toLowerCase()}%`);
-    conditions.push(
-      `(lower(c.company_name) LIKE $${values.length} OR lower(COALESCE(c.contact_name, '')) LIKE $${values.length} OR lower(COALESCE(c.email, '')) LIKE $${values.length} OR lower(COALESCE(c.phone, '')) LIKE $${values.length})`
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const before = await client.query(
+      "SELECT * FROM app_users WHERE id = $1 AND organization_id = $2 FOR UPDATE",
+      [userId, organizationId]
     );
+    if (!before.rows[0]) {
+      await client.query("ROLLBACK");
+      return { before: null, deleted: false, preview: null };
+    }
+    await client.query(
+      "DELETE FROM user_records WHERE owner_user_id = $1 OR (collection = 'users' AND item_id = $1)",
+      [userId]
+    );
+    await client.query(
+      "DELETE FROM app_users WHERE id = $1 AND organization_id = $2",
+      [userId, organizationId]
+    );
+    await syncUsersCollectionForOrganization(client, organizationId, actorUserId);
+    await client.query("COMMIT");
+    return { before: before.rows[0], deleted: true, preview };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  const result = await pool.query(
-    `SELECT c.*, COUNT(s.id)::int AS shipment_count
-     FROM customers c
-     LEFT JOIN shipments s ON s.customer_id = c.id AND s.archived_at IS NULL
-     ${where}
-     GROUP BY c.id
-     ORDER BY c.updated_at DESC`,
-    values
-  );
-  return result.rows.map((row) => ({
-    ...toUiCustomer({ ...row, legacy_data: { ...(row.legacy_data || {}), shipmentsCount: row.shipment_count } }),
-    duplicateWarning: false,
+}
+
+export async function listCustomersDetailed({ includeArchived = false, search = "", organizationId, includePrivateDetails = true } = {}) {
+  return listCustomersDetailedFromRepository(pool, { includeArchived, search, organizationId, includePrivateDetails });
+}
+
+export async function getCustomerRecord(id, { organizationId, includePrivateDetails = true } = {}) {
+  return getCustomerRecordFromRepository(pool, id, { organizationId, includePrivateDetails });
+}
+
+function cleanCustomerCode(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .toUpperCase();
+}
+
+function generatedCustomerCode() {
+  return `CUS-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+}
+
+async function ensureUniqueCustomerCode(client, organizationId, requestedCode, currentCustomerId = null) {
+  let code = cleanCustomerCode(requestedCode);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (!code) code = generatedCustomerCode();
+    const duplicate = await client.query(
+      `SELECT id
+       FROM customers
+       WHERE organization_id = $1
+         AND lower(customer_code) = lower($2)
+         AND archived_at IS NULL
+         AND ($3::text IS NULL OR id <> $3)
+       LIMIT 1`,
+      [organizationId, code, currentCustomerId]
+    );
+    if (!duplicate.rows[0]) return code;
+    if (requestedCode) {
+      const error = new Error("A customer with this code already exists.");
+      error.code = "DUPLICATE_CUSTOMER_CODE";
+      error.statusCode = 409;
+      throw error;
+    }
+    code = generatedCustomerCode();
+  }
+  const error = new Error("Could not generate a unique customer code.");
+  error.code = "CUSTOMER_CODE_GENERATION_FAILED";
+  error.statusCode = 500;
+  throw error;
+}
+
+function normalizeCustomerPhoneValue(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^00/, "+")
+    .replace(/[()\s\-._]/g, "");
+}
+
+function normalizedCustomerPhoneRows(inputPhoneNumbers, fallbackPhone = "") {
+  const rawRows = Array.isArray(inputPhoneNumbers) ? inputPhoneNumbers : [];
+  const rows = rawRows
+    .map((row, index) => ({
+      id: String(row?.id || "").trim(),
+      phoneNumber: normalizeCustomerPhoneValue(row?.phoneNumber),
+      phoneLabel: String(row?.phoneLabel || "").trim(),
+      note: String(row?.note || "").trim(),
+      isPrimary: Boolean(row?.isPrimary),
+      sortOrder: Number.isFinite(Number(row?.sortOrder)) ? Math.trunc(Number(row.sortOrder)) : index * 10,
+    }))
+    .filter((row) => row.phoneNumber);
+  if (!rows.length && fallbackPhone) {
+    rows.push({
+      id: "",
+      phoneNumber: normalizeCustomerPhoneValue(fallbackPhone),
+      phoneLabel: "اصلی",
+      note: "",
+      isPrimary: true,
+      sortOrder: 0,
+    });
+  }
+  if (rows.length && !rows.some((row) => row.isPrimary)) rows[0].isPrimary = true;
+  return rows.map((row, index) => ({
+    ...row,
+    isPrimary: row.isPrimary && index === rows.findIndex((item) => item.isPrimary),
+    sortOrder: Number.isFinite(row.sortOrder) ? row.sortOrder : index * 10,
   }));
 }
 
-export async function getCustomerRecord(id, { organizationId } = {}) {
-  const values = [id];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `SELECT * FROM customers WHERE id = $1 ${organizationFilter} LIMIT 1`,
-    values
+async function replaceCustomerPhoneNumbers(client, { organizationId, customerId, phoneNumbers, actorUserId }) {
+  await client.query(
+    `UPDATE customer_phone_numbers
+     SET archived_at = COALESCE(archived_at, NOW()),
+         updated_at = NOW(),
+         updated_by_id = $3
+     WHERE organization_id = $1
+       AND customer_id = $2
+       AND archived_at IS NULL`,
+    [organizationId, customerId, actorUserId || null]
   );
-  return toUiCustomer(result.rows[0]);
+  for (const [index, phone] of phoneNumbers.entries()) {
+    await client.query(
+      `INSERT INTO customer_phone_numbers (
+         id, organization_id, customer_id, phone_number, phone_label, note,
+         is_primary, sort_order, created_by_id, updated_by_id, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, NOW())`,
+      [
+        crypto.randomUUID(),
+        organizationId,
+        customerId,
+        phone.phoneNumber,
+        phone.phoneLabel || null,
+        phone.note || null,
+        Boolean(phone.isPrimary),
+        Number.isFinite(Number(phone.sortOrder)) ? Number(phone.sortOrder) : index * 10,
+        actorUserId || null,
+      ]
+    );
+  }
 }
 
 export async function createCustomerRecord({ ownerUserId, actorUserId, customer }) {
@@ -4499,10 +7339,19 @@ export async function createCustomerRecord({ ownerUserId, actorUserId, customer 
   const id = customer.id || crypto.randomUUID();
   try {
     await client.query("BEGIN");
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    const scopedOrganizationId = requireOrganizationScope(owner.rows[0]?.organization_id, "createCustomerRecord");
+    const customerCode = await ensureUniqueCustomerCode(
+      client,
+      scopedOrganizationId,
+      customer.customerCode || customer.code || ""
+    );
+    const phoneRows = normalizedCustomerPhoneRows(customer.phoneNumbers, customer.phone);
+    const primaryPhone = phoneRows.find((phone) => phone.isPrimary)?.phoneNumber || phoneRows[0]?.phoneNumber || null;
     if (customer.email) {
       const duplicate = await client.query(
-        "SELECT id FROM customers WHERE lower(email) = lower($1) AND archived_at IS NULL LIMIT 1",
-        [customer.email]
+        "SELECT id FROM customers WHERE lower(email) = lower($1) AND organization_id = $2 AND archived_at IS NULL LIMIT 1",
+        [customer.email, scopedOrganizationId]
       );
       if (duplicate.rows[0]) {
         const error = new Error("A customer with this email already exists.");
@@ -4513,27 +7362,40 @@ export async function createCustomerRecord({ ownerUserId, actorUserId, customer 
     }
     const result = await client.query(
       `INSERT INTO customers (
-         id, organization_id, owner_user_id, company_name, contact_name, email, phone, address,
-         notes, status, legacy_data, created_by_id, updated_at
+         id, organization_id, owner_user_id, customer_code, company_name, contact_name, email, phone, address,
+         referrer, notes, status, legacy_data, created_by_id, updated_at
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, 'active', $9::jsonb, $10, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12::jsonb, $13, NOW())
        RETURNING *`,
       [
         id,
+        scopedOrganizationId,
         ownerUserId,
+        customerCode,
         customer.company || customer.companyName || customer.name,
         customer.name || customer.contactName || null,
         customer.email || null,
-        customer.phone || null,
+        primaryPhone,
         customer.address || null,
+        customer.referrer || null,
         customer.notes || null,
-        JSON.stringify(customer),
+        JSON.stringify({ ...customer, customerCode, phoneNumbers: phoneRows }),
         actorUserId || ownerUserId,
       ]
     );
+    await replaceCustomerPhoneNumbers(client, {
+      organizationId: scopedOrganizationId,
+      customerId: result.rows[0].id,
+      phoneNumbers: phoneRows,
+      actorUserId: actorUserId || ownerUserId,
+    });
+    const savedPhoneNumbers = await listCustomerPhoneNumbers(client, {
+      organizationId: scopedOrganizationId,
+      customerId: result.rows[0].id,
+    });
     await syncCustomerUserRecord(client, ownerUserId, result.rows[0]);
     await client.query("COMMIT");
-    return result.rows[0];
+    return toUiCustomer(result.rows[0], { phoneNumbers: savedPhoneNumbers });
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -4542,13 +7404,15 @@ export async function createCustomerRecord({ ownerUserId, actorUserId, customer 
   }
 }
 
-export async function updateCustomerRecord(id, updates, { organizationId } = {}) {
+export async function updateCustomerRecord(id, updates, { organizationId, actorUserId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateCustomerRecord");
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
-    const before = await client.query(`SELECT * FROM customers WHERE id = $1 ${organizationFilter}`, beforeValues);
+    const before = await client.query(
+      "SELECT * FROM customers WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
+    );
     const current = before.rows[0];
     if (!current) {
       await client.query("ROLLBACK");
@@ -4556,8 +7420,8 @@ export async function updateCustomerRecord(id, updates, { organizationId } = {})
     }
     if (updates.email && updates.email !== current.email) {
       const duplicate = await client.query(
-        "SELECT id FROM customers WHERE lower(email) = lower($1) AND id <> $2 AND archived_at IS NULL LIMIT 1",
-        [updates.email, id]
+        "SELECT id FROM customers WHERE lower(email) = lower($1) AND id <> $2 AND organization_id = $3 AND archived_at IS NULL LIMIT 1",
+        [updates.email, id, scopedOrganizationId]
       );
       if (duplicate.rows[0]) {
         const error = new Error("A customer with this email already exists.");
@@ -4566,34 +7430,71 @@ export async function updateCustomerRecord(id, updates, { organizationId } = {})
         throw error;
       }
     }
+    const shouldUpdateCode = updates.customerCode !== undefined || updates.code !== undefined;
+    const nextCustomerCode = shouldUpdateCode
+      ? await ensureUniqueCustomerCode(client, scopedOrganizationId, updates.customerCode || updates.code || "", id)
+      : null;
+    const shouldReplacePhones = updates.phoneNumbers !== undefined;
+    const phoneRows = shouldReplacePhones
+      ? normalizedCustomerPhoneRows(updates.phoneNumbers, updates.phone)
+      : null;
+    const nextPrimaryPhone = shouldReplacePhones
+      ? phoneRows.find((phone) => phone.isPrimary)?.phoneNumber || phoneRows[0]?.phoneNumber || null
+      : updates.phone || null;
+    const legacyUpdate = {
+      ...(updates || {}),
+      ...(nextCustomerCode ? { customerCode: nextCustomerCode } : {}),
+      ...(shouldReplacePhones ? { phoneNumbers: phoneRows } : {}),
+    };
     const result = await client.query(
       `UPDATE customers
        SET company_name = COALESCE($2, company_name),
            contact_name = COALESCE($3, contact_name),
            email = COALESCE($4, email),
-           phone = COALESCE($5, phone),
+           phone = CASE WHEN $12::boolean THEN $5 ELSE COALESCE($5, phone) END,
            address = COALESCE($6, address),
-           notes = COALESCE($7, notes),
-           status = COALESCE($8, status),
-           legacy_data = legacy_data || $9::jsonb,
+           referrer = COALESCE($7, referrer),
+           notes = COALESCE($8, notes),
+           status = COALESCE($9, status),
+           customer_code = COALESCE($10, customer_code),
+           legacy_data = legacy_data || $11::jsonb,
            updated_at = NOW()
-       WHERE id = $1
+       WHERE id = $1 AND organization_id = $13
        RETURNING *`,
       [
         id,
         updates.company || updates.companyName || null,
         updates.name || updates.contactName || null,
         updates.email || null,
-        updates.phone || null,
+        nextPrimaryPhone,
         updates.address || null,
+        updates.referrer || null,
         updates.notes || null,
         updates.status || null,
-        JSON.stringify(updates || {}),
+        nextCustomerCode,
+        JSON.stringify(legacyUpdate),
+        Boolean(shouldReplacePhones),
+        scopedOrganizationId,
       ]
     );
+    if (shouldReplacePhones) {
+      await replaceCustomerPhoneNumbers(client, {
+        organizationId: scopedOrganizationId,
+        customerId: id,
+        phoneNumbers: phoneRows,
+        actorUserId: actorUserId || result.rows[0]?.owner_user_id,
+      });
+    }
+    const savedPhoneNumbers = await listCustomerPhoneNumbers(client, {
+      organizationId: scopedOrganizationId,
+      customerId: id,
+    });
     await syncCustomerUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
     await client.query("COMMIT");
-    return { before: current, after: result.rows[0] || null };
+    return {
+      before: toUiCustomer(current),
+      after: toUiCustomer(result.rows[0], { phoneNumbers: savedPhoneNumbers }),
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -4604,11 +7505,13 @@ export async function updateCustomerRecord(id, updates, { organizationId } = {})
 
 export async function archiveCustomerRecord(id, { organizationId } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "archiveCustomerRecord");
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
-    const before = await client.query(`SELECT * FROM customers WHERE id = $1 ${organizationFilter}`, beforeValues);
+    const before = await client.query(
+      "SELECT * FROM customers WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
+    );
     if (!before.rows[0]) {
       await client.query("ROLLBACK");
       return { before: null, after: null };
@@ -4616,13 +7519,13 @@ export async function archiveCustomerRecord(id, { organizationId } = {}) {
     const result = await client.query(
       `UPDATE customers
        SET archived_at = COALESCE(archived_at, NOW()), status = 'archived', updated_at = NOW()
-       WHERE id = $1
+       WHERE id = $1 AND organization_id = $2
        RETURNING *`,
-      [id]
+      [id, scopedOrganizationId]
     );
     await syncCustomerUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
     await client.query("COMMIT");
-    return { before: before.rows[0] || null, after: result.rows[0] || null };
+    return { before: toUiCustomer(before.rows[0]), after: toUiCustomer(result.rows[0]) };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -4631,18 +7534,23 @@ export async function archiveCustomerRecord(id, { organizationId } = {}) {
   }
 }
 
-export async function listCustomerRelated(id, type, { organizationId } = {}) {
+export async function listCustomerRelated(id, type, { organizationId, includePrivateDetails = true } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listCustomerRelated");
   if (!(await getCustomerRecord(id, { organizationId }))) return null;
   if (type === "shipments") {
     const result = await pool.query(
       `SELECT * FROM shipments
-       WHERE customer_id = $1 AND ($2::text IS NULL OR organization_id = $2)
+       WHERE customer_id = $1 AND organization_id = $2
+         AND exited_archived_at IS NULL
        ORDER BY updated_at DESC`,
-      [id, organizationId || null]
+      [id, scopedOrganizationId]
     );
-    return result.rows.map((row) => ({
+    return result.rows.map((row) => {
+      const legacy = row.legacy_data || {};
+      return {
       id: row.id,
       trackingNumber: row.shipment_code,
+      containerNumber: legacy.containerNumber || "",
       customerId: row.customer_id,
       customerName: row.customer_name,
       status: row.status,
@@ -4651,30 +7559,42 @@ export async function listCustomerRelated(id, type, { organizationId } = {}) {
       estimatedDelivery: row.estimated_delivery_at,
       isArchived: Boolean(row.archived_at),
       createdAt: row.created_at,
-      ...(row.legacy_data || {}),
-    }));
+      };
+    });
   }
   if (type === "documents") return listDocuments({ customerId: id, organizationId, includeArchived: true });
-  if (type === "quotations") return listQuotations({ customerId: id, organizationId, includeArchived: true });
+  if (type === "quotations") {
+    return listQuotations({
+      customerId: id,
+      organizationId,
+      includeArchived: true,
+      includeCustomerPrivateDetails: includePrivateDetails,
+    });
+  }
   if (type === "cheques") {
     const result = await pool.query(
       `SELECT * FROM cheques
-       WHERE customer_id = $1 AND ($2::text IS NULL OR organization_id = $2)
+       WHERE customer_id = $1 AND organization_id = $2
        ORDER BY updated_at DESC`,
-      [id, organizationId || null]
+      [id, scopedOrganizationId]
     );
     return result.rows.map(toUiCheque);
   }
   return [];
 }
 
-export async function listQuotations({ ownerUserId, customerId, organizationId, includeArchived = false } = {}) {
+export async function listQuotations({
+  ownerUserId,
+  customerId,
+  organizationId,
+  includeArchived = false,
+  includeCustomerPrivateDetails = true,
+} = {}) {
   const conditions = [];
   const values = [];
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`organization_id = $${values.length}`);
-  }
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listQuotations");
+  values.push(scopedOrganizationId);
+  conditions.push(`organization_id = $${values.length}`);
   if (ownerUserId) {
     values.push(ownerUserId);
     conditions.push(`owner_user_id = $${values.length}`);
@@ -4686,21 +7606,44 @@ export async function listQuotations({ ownerUserId, customerId, organizationId, 
   if (!includeArchived) conditions.push("archived_at IS NULL");
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const result = await pool.query(`SELECT * FROM quotations ${where} ORDER BY updated_at DESC`, values);
-  return result.rows.map(toUiQuote);
+  return result.rows.map((row) => toUiQuote(row, { includeCustomerPrivateDetails }));
 }
 
-export async function getQuotationRecord(id, { organizationId } = {}) {
+export async function getQuotationRecord(id, { organizationId, includeCustomerPrivateDetails = true } = {}) {
   const values = [id];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
+  const organizationFilter = organizationScopeClause(values, organizationId, "organization_id", "getQuotationRecord");
   const result = await pool.query(`SELECT * FROM quotations WHERE id = $1 ${organizationFilter} LIMIT 1`, values);
-  return result.rows[0] || null;
+  return toUiQuote(result.rows[0], { includeCustomerPrivateDetails });
 }
 
-export async function createQuotationRecord({ ownerUserId, actorUserId, quote }) {
+export async function createQuotationRecord({
+  ownerUserId,
+  actorUserId,
+  organizationId,
+  tenantContext,
+  quote,
+  includeCustomerPrivateDetails = true,
+}) {
+  const scopedOrganizationId = tenantContext
+    ? organizationIdFromTenantContext(tenantContext, "createQuotationRecord")
+    : requireOrganizationScope(organizationId, "createQuotationRecord");
   const client = await pool.connect();
-  const id = quote.id || crypto.randomUUID();
+  const safeQuote = { ...(quote || {}) };
+  if (!includeCustomerPrivateDetails) {
+    delete safeQuote.customerPhone;
+    delete safeQuote.customer_phone;
+  }
+  const id = safeQuote.id || crypto.randomUUID();
   try {
     await client.query("BEGIN");
+    const owner = await client.query("SELECT organization_id FROM app_users WHERE id = $1", [ownerUserId]);
+    if (owner.rows[0]?.organization_id !== scopedOrganizationId) {
+      await client.query("ROLLBACK");
+      const error = new Error("Quotation owner does not belong to the authenticated organization.");
+      error.code = "TENANT_SCOPE_REQUIRED";
+      error.statusCode = 403;
+      throw error;
+    }
     const result = await client.query(
       `INSERT INTO quotations (
          id, organization_id, owner_user_id, quotation_number, customer_id, customer_name, customer_phone,
@@ -4709,42 +7652,43 @@ export async function createQuotationRecord({ ownerUserId, actorUserId, quote })
          toll_fees, insurance_percentage, profit_margin, total_price, valid_until,
          status, notes, legacy_data, created_by_id, archived_at, updated_at
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb,
-               $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25::jsonb, $26, $27, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb,
+               $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26::jsonb, $27, $28, NOW())
        RETURNING *`,
       [
         id,
+        scopedOrganizationId,
         ownerUserId,
-        quote.quotationNumber || quote.id || id,
-        quote.customerId || null,
-        quote.customerName || "Unknown customer",
-        quote.customerPhone || null,
-        quote.originCity || null,
-        quote.destinationCity || null,
-        quote.cargoType || "GENERAL",
-        quote.weight || 0,
-        quote.dimensions || null,
-        quote.pickupDate || null,
-        quote.deliveryDate || null,
-        JSON.stringify(Array.isArray(quote.requirements) ? quote.requirements : []),
-        quote.baseRate || 0,
-        quote.fuelSurcharge || 0,
-        quote.loadingFees || 0,
-        quote.tollFees || 0,
-        quote.insurancePercentage || 0,
-        quote.profitMargin || 0,
-        quote.totalPrice || 0,
-        quote.validUntil || null,
-        quote.status || "PENDING",
-        quote.notes || null,
-        JSON.stringify(quote),
+        safeQuote.quotationNumber || safeQuote.id || id,
+        safeQuote.customerId || null,
+        safeQuote.customerName || "Unknown customer",
+        safeQuote.customerPhone || null,
+        safeQuote.originCity || null,
+        safeQuote.destinationCity || null,
+        safeQuote.cargoType || "GENERAL",
+        safeQuote.weight || 0,
+        safeQuote.dimensions || null,
+        safeQuote.pickupDate || null,
+        safeQuote.deliveryDate || null,
+        JSON.stringify(Array.isArray(safeQuote.requirements) ? safeQuote.requirements : []),
+        safeQuote.baseRate || 0,
+        safeQuote.fuelSurcharge || 0,
+        safeQuote.loadingFees || 0,
+        safeQuote.tollFees || 0,
+        safeQuote.insurancePercentage || 0,
+        safeQuote.profitMargin || 0,
+        safeQuote.totalPrice || 0,
+        safeQuote.validUntil || null,
+        safeQuote.status || "PENDING",
+        safeQuote.notes || null,
+        JSON.stringify(safeQuote),
         actorUserId || ownerUserId,
-        quote.isArchived ? new Date() : null,
+        safeQuote.isArchived ? new Date() : null,
       ]
     );
     await syncQuoteUserRecord(client, ownerUserId, result.rows[0]);
     await client.query("COMMIT");
-    return result.rows[0];
+    return toUiQuote(result.rows[0], { includeCustomerPrivateDetails });
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -4753,13 +7697,20 @@ export async function createQuotationRecord({ ownerUserId, actorUserId, quote })
   }
 }
 
-export async function updateQuotationRecord(id, updates, { organizationId } = {}) {
+export async function updateQuotationRecord(id, updates, { organizationId, includeCustomerPrivateDetails = true } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "updateQuotationRecord");
+  updates = { ...(updates || {}) };
+  if (!includeCustomerPrivateDetails) {
+    delete updates.customerPhone;
+    delete updates.customer_phone;
+  }
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
-    const before = await client.query(`SELECT * FROM quotations WHERE id = $1 ${organizationFilter}`, beforeValues);
+    const before = await client.query(
+      "SELECT * FROM quotations WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
+    );
     if (!before.rows[0]) {
       await client.query("ROLLBACK");
       return { before: null, after: null };
@@ -4790,8 +7741,8 @@ export async function updateQuotationRecord(id, updates, { organizationId } = {}
            legacy_data = legacy_data || $23::jsonb,
            archived_at = CASE WHEN $24::boolean THEN COALESCE(archived_at, NOW()) ELSE archived_at END,
            updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
+        WHERE id = $1 AND organization_id = $25
+        RETURNING *`,
       [
         id,
         updates.customerId || null,
@@ -4817,11 +7768,15 @@ export async function updateQuotationRecord(id, updates, { organizationId } = {}
         updates.notes || null,
         JSON.stringify(updates || {}),
         Boolean(updates.isArchived || updates.status === "ARCHIVED"),
+        scopedOrganizationId,
       ]
     );
     await syncQuoteUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
     await client.query("COMMIT");
-    return { before: before.rows[0] || null, after: result.rows[0] || null };
+    return {
+      before: toUiQuote(before.rows[0], { includeCustomerPrivateDetails }),
+      after: toUiQuote(result.rows[0], { includeCustomerPrivateDetails }),
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -4830,15 +7785,17 @@ export async function updateQuotationRecord(id, updates, { organizationId } = {}
   }
 }
 
-export async function setQuotationStatus(id, status, extra = {}, { organizationId } = {}) {
+export async function setQuotationStatus(id, status, extra = {}, { organizationId, includeCustomerPrivateDetails = true } = {}) {
   const timestampColumn =
     status === "ACCEPTED" ? "accepted_at" : status === "REJECTED" ? "rejected_at" : status === "EXPIRED" ? "expired_at" : null;
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "setQuotationStatus");
   try {
     await client.query("BEGIN");
-    const beforeValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${beforeValues.push(organizationId)}` : "";
-    const before = await client.query(`SELECT * FROM quotations WHERE id = $1 ${organizationFilter}`, beforeValues);
+    const before = await client.query(
+      "SELECT * FROM quotations WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
+    );
     if (!before.rows[0]) {
       await client.query("ROLLBACK");
       return { before: null, after: null };
@@ -4850,13 +7807,16 @@ export async function setQuotationStatus(id, status, extra = {}, { organizationI
            ${timestampColumn ? `${timestampColumn} = COALESCE(${timestampColumn}, NOW()),` : ""}
            archived_at = CASE WHEN $2 = 'ARCHIVED' THEN COALESCE(archived_at, NOW()) ELSE archived_at END,
            updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
-      [id, status, extra.notes || extra.reason || null]
+        WHERE id = $1 AND organization_id = $4
+        RETURNING *`,
+      [id, status, extra.notes || extra.reason || null, scopedOrganizationId]
     );
     await syncQuoteUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
     await client.query("COMMIT");
-    return { before: before.rows[0] || null, after: result.rows[0] || null };
+    return {
+      before: toUiQuote(before.rows[0], { includeCustomerPrivateDetails }),
+      after: toUiQuote(result.rows[0], { includeCustomerPrivateDetails }),
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -4865,13 +7825,15 @@ export async function setQuotationStatus(id, status, extra = {}, { organizationI
   }
 }
 
-export async function convertQuotationToShipment(id, actorUserId, { organizationId } = {}) {
+export async function convertQuotationToShipment(id, actorUserId, { organizationId, includeCustomerPrivateDetails = true } = {}) {
   const client = await pool.connect();
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "convertQuotationToShipment");
   try {
     await client.query("BEGIN");
-    const quoteValues = [id];
-    const organizationFilter = organizationId ? `AND organization_id = $${quoteValues.push(organizationId)}` : "";
-    const quoteResult = await client.query(`SELECT * FROM quotations WHERE id = $1 ${organizationFilter}`, quoteValues);
+    const quoteResult = await client.query(
+      "SELECT * FROM quotations WHERE id = $1 AND organization_id = $2",
+      [id, scopedOrganizationId]
+    );
     const quote = quoteResult.rows[0];
     if (!quote) {
       await client.query("ROLLBACK");
@@ -4884,10 +7846,11 @@ export async function convertQuotationToShipment(id, actorUserId, { organization
          id, organization_id, owner_user_id, shipment_code, customer_id, customer_name, status,
          origin, destination, estimated_delivery_at, legacy_data, created_by_id, updated_at
        )
-       VALUES ($1, (SELECT organization_id FROM app_users WHERE id = $2), $2, $3, $4, $5, 'PENDING', $6, $7, $8, $9::jsonb, $10, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, $8, $9, $10::jsonb, $11, NOW())
        RETURNING *`,
       [
         shipmentId,
+        scopedOrganizationId,
         quote.owner_user_id,
         shipmentCode,
         quote.customer_id,
@@ -4895,7 +7858,7 @@ export async function convertQuotationToShipment(id, actorUserId, { organization
         quote.origin_city,
         quote.destination_city,
         quote.delivery_date,
-        JSON.stringify({ sourceQuotationId: quote.id, quote: toUiQuote(quote) }),
+        JSON.stringify({ sourceQuotationId: quote.id, quote: toUiQuote(quote, { includeCustomerPrivateDetails }) }),
         actorUserId || quote.owner_user_id,
       ]
     );
@@ -4903,13 +7866,16 @@ export async function convertQuotationToShipment(id, actorUserId, { organization
       `UPDATE quotations
        SET status = 'ACCEPTED', accepted_at = COALESCE(accepted_at, NOW()),
            converted_shipment_id = $2, updated_at = NOW()
-       WHERE id = $1
-       RETURNING *`,
-      [id, shipmentId]
+        WHERE id = $1 AND organization_id = $3
+        RETURNING *`,
+      [id, shipmentId, scopedOrganizationId]
     );
     await syncQuoteUserRecord(client, quote.owner_user_id, updated.rows[0]);
     await client.query("COMMIT");
-    return { quote: updated.rows[0], shipment: shipment.rows[0] };
+    return {
+      quote: toUiQuote(updated.rows[0], { includeCustomerPrivateDetails }),
+      shipment: shipment.rows[0],
+    };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -4939,14 +7905,12 @@ const archiveTables = {
 };
 
 export async function listArchiveRecords({ search = "", organizationId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listArchiveRecords");
   const records = [];
   for (const [entityType, config] of Object.entries(archiveTables)) {
-    const values = [];
-    const conditions = ["archived_at IS NOT NULL"];
-    if (organizationId) {
-      values.push(organizationId);
-      conditions.push(`organization_id = $${values.length}`);
-    }
+    if (!QUOTATIONS_UI_SURFACE_ENABLED && entityType === "quotation") continue;
+    const values = [scopedOrganizationId];
+    const conditions = ["archived_at IS NOT NULL", "organization_id = $1"];
     const result = await pool.query(
       `SELECT * FROM ${config.table} WHERE ${conditions.join(" AND ")} ORDER BY archived_at DESC`,
       values
@@ -4960,7 +7924,7 @@ export async function listArchiveRecords({ search = "", organizationId } = {}) {
         type: entityType.toUpperCase(),
         title,
         name: title,
-        customerName: row.customer_name || row.company_name || row.legacy_data?.customerName || "",
+        customerName: row.customer_code || row.customer_id || row.legacy_data?.customerCode || (entityType === "customer" ? row.id : ""),
         shipmentId: row.shipment_id || row.id,
         archivedAt: row.archived_at,
         createdAt: row.created_at,
@@ -4981,116 +7945,150 @@ export async function listArchiveRecords({ search = "", organizationId } = {}) {
     .sort((a, b) => new Date(b.archivedAt || b.createdAt).getTime() - new Date(a.archivedAt || a.createdAt).getTime());
 }
 
-export async function archiveEntityRecord(entityType, entityId, actorUserId, { organizationId } = {}) {
+export async function archiveEntityRecord(entityType, entityId, actorUserId, { organizationId, audit } = {}) {
   const config = archiveTables[entityType];
   if (!config) return null;
-  const values = [entityId];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `UPDATE ${config.table}
-     SET archived_at = COALESCE(archived_at, NOW()), updated_at = NOW()
-     WHERE ${config.id} = $1 ${organizationFilter}
-     RETURNING *`,
-    values
-  );
-  const row = result.rows[0];
-  if (!row) return null;
-  await pool.query(
-    `INSERT INTO archive_records (
-       id, organization_id, owner_user_id, entity_type, entity_id, title, summary,
-       customer_name, shipment_id, archived_by_id, archived_at, legacy_data
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()), $12::jsonb)
-     ON CONFLICT (entity_type, entity_id) DO UPDATE SET
-       organization_id = EXCLUDED.organization_id,
-       title = EXCLUDED.title,
-       archived_at = EXCLUDED.archived_at,
-       restored_at = NULL,
-       legacy_data = EXCLUDED.legacy_data`,
-    [
-      crypto.randomUUID(),
-      row.organization_id || organizationId || null,
-      row.owner_user_id || actorUserId || null,
-      entityType,
-      entityId,
-      archiveTitle(entityType, row),
-      `${entityType} archived`,
-      row.customer_name || row.company_name || null,
-      row.shipment_id || (entityType === "shipment" ? row.id : null),
-      actorUserId || null,
-      row.archived_at,
-      JSON.stringify(row.legacy_data || {}),
-    ]
-  );
-  return row;
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "archiveEntityRecord");
+
+  return withTransaction(pool, async (client) => {
+    const result = await client.query(
+      `UPDATE ${config.table}
+       SET archived_at = COALESCE(archived_at, NOW()), updated_at = NOW()
+       WHERE ${config.id} = $1 AND organization_id = $2
+       RETURNING *`,
+      [entityId, scopedOrganizationId]
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    await client.query(
+      `INSERT INTO archive_records (
+         id, organization_id, owner_user_id, entity_type, entity_id, title, summary,
+         customer_name, shipment_id, archived_by_id, archived_at, legacy_data
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()), $12::jsonb)
+       ON CONFLICT (entity_type, entity_id) DO UPDATE SET
+         organization_id = EXCLUDED.organization_id,
+         title = EXCLUDED.title,
+         archived_at = EXCLUDED.archived_at,
+         restored_at = NULL,
+         legacy_data = EXCLUDED.legacy_data`,
+      [
+        crypto.randomUUID(),
+        row.organization_id || scopedOrganizationId,
+        row.owner_user_id || actorUserId || null,
+        entityType,
+        entityId,
+        archiveTitle(entityType, row),
+        `${entityType} archived`,
+        row.customer_code || row.customer_id || (entityType === "customer" ? row.id : null),
+        row.shipment_id || (entityType === "shipment" ? row.id : null),
+        actorUserId || null,
+        row.archived_at,
+        JSON.stringify(row.legacy_data || {}),
+      ]
+    );
+    if (entityType === "document") {
+      await syncDocumentUserRecord(client, row.owner_user_id, row);
+    }
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? scopedOrganizationId,
+        after: entityType === "document" ? sanitizeDocumentAuditSnapshot(row) : row,
+        queryable: client,
+        required: true,
+      });
+    }
+    return row;
+  });
 }
 
-export async function restoreEntityRecord(entityType, entityId, { organizationId } = {}) {
+export async function restoreEntityRecord(entityType, entityId, { organizationId, audit } = {}) {
   const config = archiveTables[entityType];
   if (!config) return null;
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "restoreEntityRecord");
   const statusReset = {
     customer: ", status = 'active'",
     quotation: ", status = 'PENDING'",
     cheque: ", status = 'CLEARED'",
     compliance_meeting: ", status = 'SCHEDULED'",
   }[entityType] || "";
-  const values = [entityId];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `UPDATE ${config.table}
-     SET archived_at = NULL, updated_at = NOW()${statusReset}
-     WHERE ${config.id} = $1 ${organizationFilter}
-     RETURNING *`,
-    values
-  );
-  const row = result.rows[0] || null;
-  if (!row) return null;
-  await pool.query(
-    `UPDATE archive_records
-     SET restored_at = NOW()
-     WHERE entity_type = $1
-       AND entity_id = $2
-       AND ($3::text IS NULL OR organization_id = $3)`,
-    [entityType, entityId, organizationId || null]
-  );
-  if (entityType === "document") {
-    await syncDocumentUserRecord(pool, row.owner_user_id, row);
-  }
-  return row;
+
+  return withTransaction(pool, async (client) => {
+    const result = await client.query(
+      `UPDATE ${config.table}
+       SET archived_at = NULL, updated_at = NOW()${statusReset}
+       WHERE ${config.id} = $1 AND organization_id = $2
+       RETURNING *`,
+      [entityId, scopedOrganizationId]
+    );
+    const row = result.rows[0] || null;
+    if (!row) return null;
+    await client.query(
+      `UPDATE archive_records
+       SET restored_at = NOW()
+       WHERE entity_type = $1
+         AND entity_id = $2
+         AND organization_id = $3`,
+      [entityType, entityId, scopedOrganizationId]
+    );
+    if (entityType === "document") {
+      await syncDocumentUserRecord(client, row.owner_user_id, row);
+    }
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? scopedOrganizationId,
+        after: entityType === "document" ? sanitizeDocumentAuditSnapshot(row) : row,
+        queryable: client,
+        required: true,
+      });
+    }
+    return row;
+  });
 }
 
-export async function deleteArchivedEntityRecord(entityType, entityId, { organizationId } = {}) {
+export async function deleteArchivedEntityRecord(entityType, entityId, { organizationId, audit } = {}) {
   const config = archiveTables[entityType];
   if (!config) return null;
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "deleteArchivedEntityRecord");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const values = [entityId];
-    const conditions = [`${config.id} = $1`, "archived_at IS NOT NULL"];
-    if (organizationId) {
-      values.push(organizationId);
-      conditions.push(`organization_id = $${values.length}`);
-    }
     const result = await client.query(
       `DELETE FROM ${config.table}
-       WHERE ${conditions.join(" AND ")}
+       WHERE ${config.id} = $1
+         AND organization_id = $2
+         AND archived_at IS NOT NULL
        RETURNING *`,
-      values
+      [entityId, scopedOrganizationId]
     );
     const row = result.rows[0];
     if (!row) {
       await client.query("ROLLBACK");
       return null;
     }
-    await client.query("DELETE FROM archive_records WHERE entity_type = $1 AND entity_id = $2", [entityType, entityId]);
+    await client.query(
+      "DELETE FROM archive_records WHERE entity_type = $1 AND entity_id = $2 AND organization_id = $3",
+      [entityType, entityId, scopedOrganizationId]
+    );
     if (entityType === "document") {
       await client.query(
         `DELETE FROM user_records
          WHERE collection = 'documents'
            AND item_id = $1
-           AND ($2::text IS NULL OR organization_id = $2)`,
-        [entityId, organizationId || null]
+           AND organization_id = $2`,
+        [entityId, scopedOrganizationId]
       );
+    }
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? scopedOrganizationId,
+        before: entityType === "document" ? sanitizeDocumentAuditSnapshot(row) : row,
+        queryable: client,
+        required: true,
+      });
     }
     await client.query("COMMIT");
     return row;
@@ -5102,15 +8100,178 @@ export async function deleteArchivedEntityRecord(entityType, entityId, { organiz
   }
 }
 
-function toUiChatThread(row, members = [], lastMessage = null) {
+const CHAT_MESSAGE_MAX_LENGTH = 3000;
+
+function chatAccessError(message = "Thread access denied.", statusCode = 403, code = "FORBIDDEN") {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
+}
+
+function normalizeChatMessageBody(value) {
+  const body = String(value || "").trim();
+  if (!body) throw chatAccessError("Message cannot be empty.", 400, "CHAT_MESSAGE_EMPTY");
+  if (body.length > CHAT_MESSAGE_MAX_LENGTH) {
+    throw chatAccessError("Message is too long.", 400, "CHAT_MESSAGE_TOO_LONG");
+  }
+  return body;
+}
+
+function directChatKey(organizationId, userAId, userBId) {
+  const ids = [String(userAId), String(userBId)].sort();
+  return crypto
+    .createHash("sha256")
+    .update(`${organizationId}:${ids[0]}:${ids[1]}`)
+    .digest("hex");
+}
+
+function directChatId(organizationId, userAId, userBId) {
+  return `dm-${crypto.createHash("sha256").update(directChatKey(organizationId, userAId, userBId)).digest("hex").slice(0, 32)}`;
+}
+
+function shipmentChatId(organizationId, shipmentId) {
+  return `shipment-${crypto
+    .createHash("sha256")
+    .update(`${organizationId}:${shipmentId}`)
+    .digest("hex")
+    .slice(0, 32)}`;
+}
+
+function permissionsAllowShipmentChat(permissions = [], shipment = {}, userId = "") {
+  if (!permissions.includes("chat.use")) return false;
+  if (permissions.includes("shipments.view_all")) return true;
+  if (!permissions.includes("shipments.view_assigned")) return false;
+  return shipment.owner_user_id === userId || shipment.assigned_manager_id === userId;
+}
+
+async function userHasShipmentChatAccess(queryable, { userId, organizationId, shipmentId }) {
+  if (!userId || !shipmentId) return false;
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "userHasShipmentChatAccess");
+  const shipmentResult = await queryable.query(
+    `SELECT id, organization_id, owner_user_id, assigned_manager_id
+     FROM shipments
+     WHERE id = $1
+       AND organization_id = $2
+     LIMIT 1`,
+    [shipmentId, scopedOrganizationId]
+  );
+  const shipment = shipmentResult.rows[0];
+  if (!shipment) return false;
+  const permissions = await getUserPermissionsWithClient(queryable, userId);
+  return permissionsAllowShipmentChat(permissions, shipment, userId);
+}
+
+async function chatThreadAccessAllowed(queryable, row, userId, organizationId) {
+  if (!row) return false;
+  if (row.type !== "SHIPMENT") return true;
+  return userHasShipmentChatAccess(queryable, {
+    userId,
+    organizationId,
+    shipmentId: row.shipment_id,
+  });
+}
+
+async function filterShipmentChatMemberRows(queryable, rows, { organizationId }) {
+  const first = rows[0];
+  if (!first || first.thread_type !== "SHIPMENT") return rows;
+  const scopedOrganizationId = organizationId || first.organization_id;
+  const filtered = [];
+  for (const row of rows) {
+    if (await userHasShipmentChatAccess(queryable, {
+      userId: row.id || row.user_id,
+      organizationId: scopedOrganizationId,
+      shipmentId: row.shipment_id,
+    })) {
+      filtered.push(row);
+    }
+  }
+  return filtered;
+}
+
+async function ensureAccessibleShipmentThreadMembershipsForUser(userId, { organizationId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "ensureAccessibleShipmentThreadMembershipsForUser");
+  const result = await pool.query(
+    `SELECT t.id, t.shipment_id
+     FROM chat_threads t
+     WHERE t.organization_id = $1
+       AND t.type = 'SHIPMENT'
+       AND t.shipment_id IS NOT NULL
+       AND t.archived_at IS NULL
+       AND NOT EXISTS (
+         SELECT 1
+         FROM chat_thread_members m
+         WHERE m.thread_id = t.id
+           AND m.organization_id = t.organization_id
+           AND m.user_id = $2
+           AND m.status = 'active'
+       )`,
+    [scopedOrganizationId, userId]
+  );
+  for (const row of result.rows) {
+    if (!(await userHasShipmentChatAccess(pool, {
+      userId,
+      organizationId: scopedOrganizationId,
+      shipmentId: row.shipment_id,
+    }))) {
+      continue;
+    }
+    await upsertChatMember(pool, {
+      threadId: row.id,
+      userId,
+      organizationId: scopedOrganizationId,
+      role: "member",
+      actorUserId: userId,
+    });
+  }
+}
+
+function toUiChatMember(row) {
   return {
     id: row.id,
-    type: row.type,
-    name: row.name || "",
+    userId: row.id,
+    name: row.name || row.email || "User",
+    displayName: row.name || row.email || "User",
+    email: row.email || "",
+    role: row.role || "",
+    roleName: row.role || "",
+    avatar: row.avatar || "",
+    isOnline: Boolean(row.is_online),
+    active: (row.status || "active") === "active",
+    memberRole: row.member_role || "member",
+  };
+}
+
+function toUiChatThread(row, members = [], lastMessage = null) {
+  const type = row.type === "DM" ? "DM" : row.type === "SHIPMENT" ? "SHIPMENT" : "GROUP";
+  const shipmentCode = row.shipment_code || row.shipment_reference || row.shipment_id || "";
+  const shipmentDetailUrl = row.shipment_id ? `/shipments/${encodeURIComponent(row.shipment_id)}` : undefined;
+  return {
+    id: row.id,
+    type,
+    threadType: type.toLowerCase(),
+    name: type === "SHIPMENT" ? row.name || `Shipment ${shipmentCode}` : row.name || "",
     description: row.description || "",
     roleLimit: row.role_limit || undefined,
     icon: row.icon || undefined,
     legacyChannelId: row.legacy_channel_id || undefined,
+    shipmentId: row.shipment_id || undefined,
+    shipmentCode: shipmentCode || undefined,
+    shipmentStatus: row.shipment_status || undefined,
+    customerName: row.shipment_customer_name || undefined,
+    shipmentDetailUrl,
+    shipment: row.shipment_id
+      ? {
+        id: row.shipment_id,
+        code: shipmentCode,
+        status: row.shipment_status || "",
+        customerName: row.shipment_customer_name || "",
+        detailUrl: shipmentDetailUrl,
+      }
+      : undefined,
+    unreadCount: Number(row.unread_count || 0),
+    lastReadAt: row.last_read_at || null,
+    participantCount: members.length,
     members,
     lastMessage,
     createdAt: row.created_at,
@@ -5118,8 +8279,80 @@ function toUiChatThread(row, members = [], lastMessage = null) {
   };
 }
 
-function toUiChatMessage(row) {
+function formatAttachmentSize(bytes = 0) {
+  const size = Number(bytes) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function toUiChatAttachment(row) {
+  if (!row) return null;
+  const deletedAt = row.deleted_at || null;
+  const baseUrl = `/api/chat/messages/${encodeURIComponent(row.message_id)}/attachments/${encodeURIComponent(row.id)}`;
+  return {
+    id: row.id,
+    messageId: row.message_id,
+    threadId: row.thread_id,
+    filename: row.original_filename || row.file_name || row.id,
+    contentType: row.content_type || "application/octet-stream",
+    sizeBytes: Number(row.size_bytes || 0),
+    fileSize: formatAttachmentSize(row.size_bytes),
+    attachmentType: row.attachment_type === "image" ? "image" : "document",
+    createdAt: row.created_at,
+    deletedAt,
+    deletedReason: row.deleted_reason || null,
+    ...(deletedAt ? {} : {
+      downloadUrl: `${baseUrl}/download`,
+      ...(row.attachment_type === "image" ? { previewUrl: `${baseUrl}/preview` } : {}),
+    }),
+  };
+}
+
+function toUiChatMediaAttachment(row) {
+  const attachment = toUiChatAttachment(row);
+  if (!attachment) return null;
+  return {
+    ...attachment,
+    uploadedBy: row.uploaded_by_name || row.uploaded_by_email || "",
+    uploadedById: row.uploaded_by_id || null,
+    threadType: row.thread_type === "SHIPMENT" ? "SHIPMENT" : row.thread_type === "DM" ? "DM" : "GROUP",
+    threadName: row.thread_name || "",
+    shipment: row.shipment_id
+      ? {
+        id: row.shipment_id,
+        code: row.shipment_code || row.shipment_id,
+        status: row.shipment_status || "",
+        customerName: row.shipment_customer_name || "",
+        detailUrl: `/shipments/${encodeURIComponent(row.shipment_id)}`,
+      }
+      : null,
+  };
+}
+
+async function listChatAttachmentsForMessages(queryable, messageIds = [], organizationId) {
+  const ids = [...new Set(messageIds.filter(Boolean))];
+  if (!ids.length) return new Map();
+  const result = await queryable.query(
+    `SELECT *
+     FROM chat_message_attachments
+     WHERE organization_id = $1
+       AND message_id = ANY($2::text[])
+     ORDER BY created_at ASC`,
+    [organizationId, ids]
+  );
+  const attachmentsByMessage = new Map();
+  for (const row of result.rows) {
+    const list = attachmentsByMessage.get(row.message_id) || [];
+    list.push(toUiChatAttachment(row));
+    attachmentsByMessage.set(row.message_id, list);
+  }
+  return attachmentsByMessage;
+}
+
+function toUiChatMessage(row, attachments = []) {
   const legacy = row.legacy_data || {};
+  const body = row.body || row.content || "";
   return {
     id: row.id,
     threadId: row.thread_id,
@@ -5129,260 +8362,1361 @@ function toUiChatMessage(row) {
     receiverName: legacy.receiverName,
     groupId: legacy.groupId || row.thread_id,
     isGroup: legacy.isGroup ?? true,
-    content: row.content,
+    body,
+    content: body,
+    clientMessageId: row.client_message_id || undefined,
+    status: row.status || "sent",
     read: legacy.read ?? false,
+    attachments,
     createdAt: row.created_at,
   };
 }
 
 export async function seedDefaultChatThreads(ownerUserId = "u1", organizationId) {
-  const records = await getRecordsForUser(ownerUserId);
-  const channels = records.channels || [];
-  const owner = organizationId ? null : await getUserById(ownerUserId);
-  const orgId = organizationId || owner?.organization_id || owner?.organizationId || null;
-  const users = await pool.query(
-    "SELECT id, role FROM app_users WHERE status = 'active' AND ($1::text IS NULL OR organization_id = $1)",
-    [orgId]
-  );
-  for (const channel of channels) {
-    const threadId = orgId ? `${orgId}-${channel.id}` : channel.id;
-    await pool.query(
-      `INSERT INTO chat_threads (id, organization_id, owner_user_id, type, name, description, role_limit, icon, legacy_channel_id, updated_at)
-       VALUES ($1, $2, $3, 'CHANNEL', $4, $5, $6, $7, $8, NOW())
-       ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name,
-         description = EXCLUDED.description,
-         role_limit = EXCLUDED.role_limit,
-         icon = EXCLUDED.icon,
-         updated_at = NOW()`,
-      [threadId, orgId, ownerUserId, channel.name, channel.description || null, channel.roleLimit || null, channel.icon || null, channel.id]
-    );
-    for (const user of users.rows) {
-      if (!channel.roleLimit || user.role === "CEO" || user.role === channel.roleLimit) {
-        await pool.query(
-          `INSERT INTO chat_thread_members (id, thread_id, user_id)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (thread_id, user_id) DO NOTHING`,
-          [crypto.randomUUID(), threadId, user.id]
-        );
-      }
-    }
-  }
+  // Legacy channels are no longer seeded into live chat. The function remains
+  // as a compatibility no-op for old bootstrap code paths.
+  return [];
 }
 
-export async function listChatThreads(userId) {
-  const user = await getUserById(userId);
-  await seedDefaultChatThreads(userId, user?.organization_id || user?.organizationId);
-  const result = await pool.query(
-    `SELECT t.*
+async function assertChatParticipant(queryable, { threadId, userId, organizationId, lock = false }) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "assertChatParticipant");
+  const result = await queryable.query(
+    `SELECT t.*, m.role AS member_role, m.unread_count, m.last_read_at
      FROM chat_threads t
      JOIN chat_thread_members m ON m.thread_id = t.id
-     WHERE m.user_id = $1
+     WHERE t.id = $1
+       AND t.organization_id = $2
+       AND t.archived_at IS NULL
+       AND m.organization_id = $2
+       AND m.user_id = $3
+       AND m.status = 'active'
+     LIMIT 1
+     ${lock ? "FOR UPDATE" : ""}`,
+    [threadId, scopedOrganizationId, userId]
+  );
+  const row = result.rows[0];
+  if (!row) throw chatAccessError();
+  if (!(await chatThreadAccessAllowed(queryable, row, userId, scopedOrganizationId))) {
+    throw chatAccessError();
+  }
+  return row;
+}
+
+async function activeChatMembers(queryable, { threadId, organizationId }) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "activeChatMembers");
+  const result = await queryable.query(
+    `SELECT u.id, u.name, u.email, u.role, u.avatar, u.is_online, u.status, m.role AS member_role,
+            t.type AS thread_type, t.shipment_id
+     FROM chat_thread_members m
+     JOIN chat_threads t ON t.id = m.thread_id
+     JOIN app_users u ON u.id = m.user_id
+     WHERE m.thread_id = $1
+       AND m.organization_id = $2
+       AND m.status = 'active'
+       AND t.organization_id = $2
+       AND t.archived_at IS NULL
+       AND u.organization_id = $2
+       AND u.status = 'active'
+     ORDER BY u.name ASC`,
+    [threadId, scopedOrganizationId]
+  );
+  const rows = await filterShipmentChatMemberRows(queryable, result.rows, { organizationId: scopedOrganizationId });
+  return rows.map(toUiChatMember);
+}
+
+async function upsertChatMember(queryable, { threadId, userId, organizationId, role = "member", actorUserId = null }) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "upsertChatMember");
+  const result = await queryable.query(
+    `INSERT INTO chat_thread_members (
+       id, organization_id, thread_id, user_id, role, status, added_by_id, removed_by_id, removed_at, unread_count, created_at
+     )
+     SELECT $1, $2, $3, u.id, $5, 'active', $6, NULL, NULL, 0, NOW()
+     FROM app_users u
+     WHERE u.id = $4
+       AND u.organization_id = $2
+       AND u.status = 'active'
+     ON CONFLICT (thread_id, user_id) DO UPDATE SET
+       organization_id = EXCLUDED.organization_id,
+       role = CASE
+         WHEN chat_thread_members.role = 'owner' THEN 'owner'
+         ELSE EXCLUDED.role
+       END,
+       status = 'active',
+       added_by_id = EXCLUDED.added_by_id,
+       removed_by_id = NULL,
+       removed_at = NULL
+     RETURNING user_id`,
+    [crypto.randomUUID(), scopedOrganizationId, threadId, userId, role, actorUserId]
+  );
+  if (!result.rows[0]) {
+    throw chatAccessError("Chat participant must be an active member of your organization.");
+  }
+  return result.rows[0].user_id;
+}
+
+async function insertChatEvent(queryable, { organizationId, threadId, messageId = null, actorUserId = null, eventType, metadata = {} }) {
+  await queryable.query(
+    `INSERT INTO chat_message_events (id, organization_id, thread_id, message_id, actor_user_id, event_type, metadata, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW())`,
+    [crypto.randomUUID(), organizationId, threadId, messageId, actorUserId, eventType, JSON.stringify(metadata)]
+  );
+}
+
+export async function listChatParticipants({ organizationId, search = "", limit = 100, excludeUserId = "" } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listChatParticipants");
+  const trimmedSearch = String(search || "").trim();
+  const values = [scopedOrganizationId, Math.min(Number(limit) || 100, 100)];
+  const searchClause = trimmedSearch
+    ? `AND (u.name ILIKE $${values.push(`%${trimmedSearch}%`)} OR u.email ILIKE $${values.length})`
+    : "";
+  const excludeClause = excludeUserId
+    ? `AND u.id <> $${values.push(excludeUserId)}`
+    : "";
+  const result = await pool.query(
+    `SELECT u.id, u.name, u.email, u.role, u.avatar, u.is_online, u.status
+     FROM app_users u
+     WHERE u.organization_id = $1
+       AND u.status = 'active'
+       ${excludeClause}
+       ${searchClause}
+     ORDER BY u.name ASC
+     LIMIT $2`,
+    values
+  );
+  return result.rows.map(toUiChatMember);
+}
+
+export async function listChatThreads(userId, { organizationId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listChatThreads");
+  await ensureAccessibleShipmentThreadMembershipsForUser(userId, { organizationId: scopedOrganizationId });
+  const result = await pool.query(
+    `SELECT t.*, m.unread_count, m.last_read_at,
+            s.shipment_code,
+            s.status AS shipment_status,
+            COALESCE(c.customer_code, s.customer_id) AS shipment_customer_name
+     FROM chat_threads t
+     JOIN chat_thread_members m ON m.thread_id = t.id
+     LEFT JOIN shipments s
+       ON s.id = t.shipment_id
+      AND s.organization_id = t.organization_id
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
+     WHERE t.organization_id = $1
+       AND t.archived_at IS NULL
+       AND m.organization_id = $1
+       AND m.user_id = $2
+       AND m.status = 'active'
      ORDER BY t.updated_at DESC`,
-    [userId]
+    [scopedOrganizationId, userId]
   );
   const threads = [];
   for (const row of result.rows) {
-    const members = await pool.query(
-      `SELECT u.id, u.name, u.email, u.role, u.avatar, u.is_online, u.status
-       FROM chat_thread_members m
-       JOIN app_users u ON u.id = m.user_id
-       WHERE m.thread_id = $1
-       ORDER BY u.name ASC`,
-      [row.id]
-    );
+    if (!(await chatThreadAccessAllowed(pool, row, userId, scopedOrganizationId))) continue;
+    const members = await activeChatMembers(pool, { threadId: row.id, organizationId: scopedOrganizationId });
     const last = await pool.query(
-      "SELECT * FROM chat_messages WHERE thread_id = $1 ORDER BY created_at DESC LIMIT 1",
-      [row.id]
+      `SELECT * FROM chat_messages
+       WHERE organization_id = $1
+         AND thread_id = $2
+         AND status = 'sent'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [scopedOrganizationId, row.id]
     );
-    threads.push(toUiChatThread(row, members.rows.map(toUiUser), last.rows[0] ? toUiChatMessage(last.rows[0]) : null));
+    const thread = toUiChatThread(row, members, last.rows[0] ? toUiChatMessage(last.rows[0]) : null);
+    if (thread.type === "DM" && !thread.name) {
+      const other = members.find((member) => member.userId !== userId);
+      thread.name = other?.displayName || "Direct chat";
+    }
+    threads.push(thread);
   }
   return threads;
 }
 
-export async function ensureDirectChat(userAId, userBId) {
+export async function getChatThreadForUser(threadId, userId, { organizationId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "getChatThreadForUser");
+  const result = await pool.query(
+    `SELECT t.*, m.unread_count, m.last_read_at,
+            s.shipment_code,
+            s.status AS shipment_status,
+            COALESCE(c.customer_code, s.customer_id) AS shipment_customer_name
+     FROM chat_threads t
+     JOIN chat_thread_members m ON m.thread_id = t.id
+     LEFT JOIN shipments s
+       ON s.id = t.shipment_id
+      AND s.organization_id = t.organization_id
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
+     WHERE t.id = $1
+       AND t.organization_id = $2
+       AND t.archived_at IS NULL
+       AND m.organization_id = $2
+       AND m.user_id = $3
+       AND m.status = 'active'
+     LIMIT 1`,
+    [threadId, scopedOrganizationId, userId]
+  );
+  const row = result.rows[0];
+  if (!row || !(await chatThreadAccessAllowed(pool, row, userId, scopedOrganizationId))) return null;
+  const members = await activeChatMembers(pool, { threadId: row.id, organizationId: scopedOrganizationId });
+  const last = await pool.query(
+    `SELECT * FROM chat_messages
+     WHERE organization_id = $1
+       AND thread_id = $2
+       AND status = 'sent'
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [scopedOrganizationId, row.id]
+  );
+  const thread = toUiChatThread(row, members, last.rows[0] ? toUiChatMessage(last.rows[0]) : null);
+  if (thread.type === "DM" && !thread.name) {
+    const other = members.find((member) => member.userId !== userId);
+    thread.name = other?.displayName || "Direct chat";
+  }
+  return thread;
+}
+
+export async function ensureDirectChat(userAId, userBId, { organizationId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "ensureDirectChat");
+  if (!userAId || !userBId || userAId === userBId) {
+    throw chatAccessError("Direct chat requires another active user.", 400, "CHAT_DIRECT_TARGET_REQUIRED");
+  }
   const ids = [userAId, userBId].sort();
-  const threadId = `dm-${ids[0]}-${ids[1]}`;
-  const user = await getUserById(userAId);
-  const organizationId = user?.organization_id || user?.organizationId || null;
-  const otherUser = await getUserById(userBId);
-  const otherOrganizationId = otherUser?.organization_id || otherUser?.organizationId || null;
-  if (!otherUser || otherOrganizationId !== organizationId) {
-    const error = new Error("Chat member must belong to your organization.");
-    error.statusCode = 403;
-    throw error;
-  }
-  await pool.query(
-    `INSERT INTO chat_threads (id, organization_id, type, name, updated_at)
-     VALUES ($1, $2, 'DM', $3, NOW())
-     ON CONFLICT (id) DO NOTHING`,
-    [threadId, organizationId, "Direct chat"]
-  );
-  for (const userId of ids) {
-    await pool.query(
-      `INSERT INTO chat_thread_members (id, thread_id, user_id)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (thread_id, user_id) DO NOTHING`,
-      [crypto.randomUUID(), threadId, userId]
+  const key = directChatKey(scopedOrganizationId, ids[0], ids[1]);
+  const threadId = directChatId(scopedOrganizationId, ids[0], ids[1]);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const users = await client.query(
+      `SELECT id
+       FROM app_users
+       WHERE id = ANY($1::text[])
+         AND organization_id = $2
+         AND status = 'active'`,
+      [ids, scopedOrganizationId]
     );
+    if (users.rows.length !== 2) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Chat participant must be an active member of your organization.");
+    }
+    const inserted = await client.query(
+      `INSERT INTO chat_threads (
+         id, organization_id, type, name, direct_key, owner_user_id, created_by_id, updated_at
+       )
+       VALUES ($1, $2, 'DM', 'Direct chat', $3, $4, $4, NOW())
+       ON CONFLICT (organization_id, direct_key) WHERE direct_key IS NOT NULL AND archived_at IS NULL
+       DO UPDATE SET updated_at = chat_threads.updated_at
+       RETURNING id`,
+      [threadId, scopedOrganizationId, key, userAId]
+    );
+    const id = inserted.rows[0]?.id || threadId;
+    for (const userId of ids) {
+      await upsertChatMember(client, {
+        threadId: id,
+        userId,
+        organizationId: scopedOrganizationId,
+        role: "member",
+        actorUserId: userAId,
+      });
+    }
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId: id,
+      actorUserId: userAId,
+      eventType: "thread.direct.ensure",
+      metadata: { participantCount: 2 },
+    });
+    await client.query("COMMIT");
+    return id;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
   }
-  return threadId;
 }
 
-export async function createChatThread({ actorUserId, type = "GROUP", name, description, memberIds = [] }) {
+export async function ensureShipmentChatThread({ actorUserId, organizationId, shipmentId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "ensureShipmentChatThread");
+  if (!actorUserId || !shipmentId) {
+    throw chatAccessError("Shipment chat requires an active user and shipment.", 400, "SHIPMENT_CHAT_REQUIRED");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const shipmentResult = await client.query(
+      `SELECT id, organization_id, owner_user_id, assigned_manager_id, shipment_code, customer_name, status
+       FROM shipments
+       WHERE id = $1
+         AND organization_id = $2
+       LIMIT 1
+       FOR SHARE`,
+      [shipmentId, scopedOrganizationId]
+    );
+    const shipment = shipmentResult.rows[0];
+    if (!shipment) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Shipment was not found.", 404, "SHIPMENT_NOT_FOUND");
+    }
+    if (!(await userHasShipmentChatAccess(client, {
+      userId: actorUserId,
+      organizationId: scopedOrganizationId,
+      shipmentId,
+    }))) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Shipment chat access denied.");
+    }
+
+    const threadId = shipmentChatId(scopedOrganizationId, shipmentId);
+    const shipmentCode = shipment.shipment_code || shipment.id;
+    const inserted = await client.query(
+      `INSERT INTO chat_threads (
+         id, organization_id, owner_user_id, type, name, description, shipment_id, created_by_id, updated_at
+       )
+       VALUES ($1, $2, $3, 'SHIPMENT', $4, $5, $6, $3, NOW())
+       ON CONFLICT (organization_id, shipment_id)
+       WHERE shipment_id IS NOT NULL
+         AND type = 'SHIPMENT'
+         AND archived_at IS NULL
+       DO UPDATE SET
+         name = COALESCE(NULLIF(chat_threads.name, ''), EXCLUDED.name),
+         updated_at = chat_threads.updated_at
+       RETURNING id, (xmax = 0) AS inserted`,
+      [
+        threadId,
+        scopedOrganizationId,
+        actorUserId,
+        `Shipment ${shipmentCode}`,
+        `Internal shipment chat for ${shipmentCode}`,
+        shipmentId,
+      ]
+    );
+    const id = inserted.rows[0]?.id || threadId;
+    const created = inserted.rows[0]?.inserted === true || inserted.rows[0]?.inserted === "t";
+
+    const users = await client.query(
+      `SELECT id
+       FROM app_users
+       WHERE organization_id = $1
+         AND status = 'active'`,
+      [scopedOrganizationId]
+    );
+    let participantCount = 0;
+    for (const row of users.rows) {
+      if (!(await userHasShipmentChatAccess(client, {
+        userId: row.id,
+        organizationId: scopedOrganizationId,
+        shipmentId,
+      }))) {
+        continue;
+      }
+      await upsertChatMember(client, {
+        threadId: id,
+        userId: row.id,
+        organizationId: scopedOrganizationId,
+        role: row.id === actorUserId ? "owner" : "member",
+        actorUserId,
+      });
+      participantCount += 1;
+    }
+
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId: id,
+      actorUserId,
+      eventType: created ? "thread.shipment.create" : "thread.shipment.ensure",
+      metadata: { shipmentId, participantCount },
+    });
+    await client.query("COMMIT");
+    return { id, created, participantCount };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function createChatThread({ actorUserId, organizationId, type = "GROUP", name, description, memberIds = [], participantUserIds = [] }) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "createChatThread");
+  if (type !== "GROUP") throw chatAccessError("Only group threads can be created here.", 400, "CHAT_THREAD_TYPE_INVALID");
   const id = crypto.randomUUID();
-  const actor = await getUserById(actorUserId);
-  const organizationId = actor?.organization_id || actor?.organizationId || null;
-  const uniqueRequestedMemberIds = [...new Set([actorUserId, ...memberIds])].filter(Boolean);
-  const allowedMembers = await pool.query(
-    `SELECT id
-     FROM app_users
-     WHERE id = ANY($1::text[])
-       AND ($2::text IS NULL OR organization_id = $2)`,
-    [uniqueRequestedMemberIds, organizationId]
-  );
-  const allowedMemberIds = allowedMembers.rows.map((row) => row.id);
-  await pool.query(
-    `INSERT INTO chat_threads (id, organization_id, type, name, description, created_by_id, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-    [id, organizationId, type, name || "Group", description || null, actorUserId]
-  );
-  for (const userId of allowedMemberIds) {
-    await pool.query(
-      `INSERT INTO chat_thread_members (id, thread_id, user_id)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (thread_id, user_id) DO NOTHING`,
-      [crypto.randomUUID(), id, userId]
+  const requestedIds = [...memberIds, ...participantUserIds];
+  const uniqueRequestedMemberIds = [...new Set([actorUserId, ...requestedIds])].filter(Boolean);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const allowedMembers = await client.query(
+      `SELECT id
+       FROM app_users
+       WHERE id = ANY($1::text[])
+         AND organization_id = $2
+         AND status = 'active'`,
+      [uniqueRequestedMemberIds, scopedOrganizationId]
     );
-  }
-  return id;
-}
-
-export async function userCanAccessThread(userId, threadId) {
-  const result = await pool.query(
-    "SELECT 1 FROM chat_thread_members WHERE user_id = $1 AND thread_id = $2 LIMIT 1",
-    [userId, threadId]
-  );
-  return Boolean(result.rows[0]);
-}
-
-export async function listChatThreadMemberIds(threadId) {
-  const result = await pool.query(
-    "SELECT user_id FROM chat_thread_members WHERE thread_id = $1",
-    [threadId]
-  );
-  return result.rows.map(row => row.user_id);
-}
-
-export async function listChatMessages(threadId, userId, limit = 100) {
-  if (!(await userCanAccessThread(userId, threadId))) {
-    const error = new Error("Thread access denied.");
-    error.statusCode = 403;
+    const allowedMemberIds = allowedMembers.rows.map((row) => row.id);
+    if (allowedMemberIds.length !== uniqueRequestedMemberIds.length) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("All chat participants must be active members of your organization.");
+    }
+    await client.query(
+      `INSERT INTO chat_threads (
+         id, organization_id, owner_user_id, type, name, description, created_by_id, updated_at
+       )
+       VALUES ($1, $2, $3, 'GROUP', $4, $5, $3, NOW())`,
+      [id, scopedOrganizationId, actorUserId, name || "Group", description || null]
+    );
+    for (const userId of allowedMemberIds) {
+      await upsertChatMember(client, {
+        threadId: id,
+        userId,
+        organizationId: scopedOrganizationId,
+        role: userId === actorUserId ? "owner" : "member",
+        actorUserId,
+      });
+    }
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId: id,
+      actorUserId,
+      eventType: "thread.create",
+      metadata: { type: "GROUP", participantCount: allowedMemberIds.length },
+    });
+    await client.query("COMMIT");
+    return id;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
     throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function userCanAccessThread(userId, threadId, { organizationId } = {}) {
+  const values = [userId, threadId];
+  const organizationClause = organizationId ? `AND m.organization_id = $${values.push(organizationId)} AND t.organization_id = $${values.length}` : "";
+  const result = await pool.query(
+    `SELECT t.*
+     FROM chat_thread_members m
+     JOIN chat_threads t ON t.id = m.thread_id
+     WHERE m.user_id = $1
+       AND m.thread_id = $2
+       AND m.status = 'active'
+       AND t.archived_at IS NULL
+       ${organizationClause}
+     LIMIT 1`,
+    values
+  );
+  const row = result.rows[0];
+  if (!row) return false;
+  return chatThreadAccessAllowed(pool, row, userId, organizationId || row.organization_id);
+}
+
+export async function listChatThreadMemberIds(threadId, { organizationId } = {}) {
+  const values = [threadId];
+  const organizationClause = organizationId ? `AND m.organization_id = $${values.push(organizationId)} AND t.organization_id = $${values.length}` : "";
+  const result = await pool.query(
+    `SELECT m.user_id, t.type AS thread_type, t.shipment_id, t.organization_id
+     FROM chat_thread_members m
+     JOIN chat_threads t ON t.id = m.thread_id
+     WHERE m.thread_id = $1
+       AND m.status = 'active'
+       AND t.archived_at IS NULL
+       ${organizationClause}`,
+    values
+  );
+  const rows = await filterShipmentChatMemberRows(pool, result.rows.map((row) => ({ ...row, id: row.user_id })), {
+    organizationId: organizationId || result.rows[0]?.organization_id,
+  });
+  return rows.map(row => row.user_id);
+}
+
+export async function listChatMessages(threadId, userId, { organizationId, limit = 50, before = null } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listChatMessages");
+  await assertChatParticipant(pool, { threadId, userId, organizationId: scopedOrganizationId });
+  const values = [scopedOrganizationId, threadId, Math.min(Number(limit) || 50, 100)];
+  let beforeClause = "";
+  if (before) {
+    beforeClause = `AND created_at < COALESCE(
+      (SELECT created_at FROM chat_messages WHERE id = $${values.push(before)} AND organization_id = $1 AND thread_id = $2),
+      'infinity'::timestamptz
+    )`;
   }
   const result = await pool.query(
     `SELECT * FROM chat_messages
-     WHERE thread_id = $1
-     ORDER BY created_at ASC
+     WHERE organization_id = $1
+       AND thread_id = $2
+       AND status = 'sent'
+       ${beforeClause}
+     ORDER BY created_at DESC
+     LIMIT $3`,
+    values
+  );
+  const rows = result.rows.reverse();
+  const attachments = await listChatAttachmentsForMessages(pool, rows.map((row) => row.id), scopedOrganizationId);
+  return rows.map((row) => toUiChatMessage(row, attachments.get(row.id) || []));
+}
+
+export async function createChatMessage({ threadId, sender, organizationId, body, content, clientMessageId = null, legacyData = {} }) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "createChatMessage");
+  const messageBody = normalizeChatMessageBody(body ?? content);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await assertChatParticipant(client, {
+      threadId,
+      userId: sender.id,
+      organizationId: scopedOrganizationId,
+      lock: true,
+    });
+    const messageId = crypto.randomUUID();
+    const result = await client.query(
+      `INSERT INTO chat_messages (
+         id, organization_id, thread_id, sender_id, sender_name, content, body, body_format,
+         client_message_id, status, legacy_data, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $6, 'plain_text', $7, 'sent', $8::jsonb, NOW())
+       RETURNING *`,
+      [
+        messageId,
+        scopedOrganizationId,
+        threadId,
+        sender.id,
+        sender.name || sender.email || "User",
+        messageBody,
+        clientMessageId || null,
+        JSON.stringify({ ...legacyData, bodyFormat: "plain_text" }),
+      ]
+    );
+    await client.query(
+      "UPDATE chat_threads SET updated_at = NOW(), last_message_id = $1 WHERE id = $2 AND organization_id = $3",
+      [messageId, threadId, scopedOrganizationId]
+    );
+    await client.query(
+      `UPDATE chat_thread_members
+       SET unread_count = unread_count + 1
+       WHERE thread_id = $1
+         AND organization_id = $2
+         AND status = 'active'
+         AND user_id <> $3`,
+      [threadId, scopedOrganizationId, sender.id]
+    );
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId,
+      messageId,
+      actorUserId: sender.id,
+      eventType: "message.create",
+      metadata: { bodyLength: messageBody.length },
+    });
+    await client.query("COMMIT");
+    return toUiChatMessage(result.rows[0], []);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function createChatAttachmentMessage({
+  threadId,
+  sender,
+  organizationId,
+  caption = "",
+  clientMessageId = null,
+  attachment,
+  legacyData = {},
+}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "createChatAttachmentMessage");
+  if (!attachment) {
+    throw chatAccessError("Attachment is required.", 400, "CHAT_ATTACHMENT_REQUIRED");
+  }
+  const fallbackBody = attachment.originalFileName || attachment.sanitizedName || "Attachment";
+  const messageBody = normalizeChatMessageBody(caption || fallbackBody);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await assertChatParticipant(client, {
+      threadId,
+      userId: sender.id,
+      organizationId: scopedOrganizationId,
+      lock: true,
+    });
+    const messageId = crypto.randomUUID();
+    const messageResult = await client.query(
+      `INSERT INTO chat_messages (
+         id, organization_id, thread_id, sender_id, sender_name, content, body, body_format,
+         client_message_id, status, legacy_data, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $6, 'plain_text', $7, 'sent', $8::jsonb, NOW())
+       RETURNING *`,
+      [
+        messageId,
+        scopedOrganizationId,
+        threadId,
+        sender.id,
+        sender.name || sender.email || "User",
+        messageBody,
+        clientMessageId || null,
+        JSON.stringify({
+          ...legacyData,
+          bodyFormat: "plain_text",
+          hasAttachment: true,
+          attachmentType: attachment.attachmentType,
+        }),
+      ]
+    );
+    const attachmentId = crypto.randomUUID();
+    const attachmentResult = await client.query(
+      `INSERT INTO chat_message_attachments (
+         id, organization_id, thread_id, message_id, uploaded_by_id,
+         storage_provider, storage_bucket, storage_region, storage_key, object_key, local_path,
+         checksum_sha256, original_filename, file_name, content_type, size_bytes, attachment_type,
+         created_at
+       )
+       VALUES (
+         $1, $2, $3, $4, $5,
+         $6, $7, $8, $9, $10, $11,
+         $12, $13, $14, $15, $16, $17,
+         NOW()
+       )
+       RETURNING *`,
+      [
+        attachmentId,
+        scopedOrganizationId,
+        threadId,
+        messageId,
+        sender.id,
+        attachment.storageProvider || "local",
+        attachment.storageBucket || null,
+        attachment.storageRegion || null,
+        attachment.storageKey || null,
+        attachment.objectKey || null,
+        attachment.localPath || attachment.storageKey || null,
+        attachment.checksumSha256 || attachment.checksum || null,
+        attachment.originalFileName || attachment.sanitizedName || "attachment",
+        attachment.sanitizedName || attachment.originalFileName || null,
+        attachment.contentType || attachment.mimeType || "application/octet-stream",
+        Number(attachment.sizeBytes || 0),
+        attachment.attachmentType === "image" ? "image" : "document",
+      ]
+    );
+    await client.query(
+      "UPDATE chat_threads SET updated_at = NOW(), last_message_id = $1 WHERE id = $2 AND organization_id = $3",
+      [messageId, threadId, scopedOrganizationId]
+    );
+    await client.query(
+      `UPDATE chat_thread_members
+       SET unread_count = unread_count + 1
+       WHERE thread_id = $1
+         AND organization_id = $2
+         AND status = 'active'
+         AND user_id <> $3`,
+      [threadId, scopedOrganizationId, sender.id]
+    );
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId,
+      messageId,
+      actorUserId: sender.id,
+      eventType: "message.create",
+      metadata: { bodyLength: messageBody.length, hasAttachment: true },
+    });
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId,
+      messageId,
+      actorUserId: sender.id,
+      eventType: "chat.attachment.upload",
+      metadata: {
+        attachmentId,
+        attachmentType: attachment.attachmentType,
+        sizeBytes: Number(attachment.sizeBytes || 0),
+        contentType: attachment.contentType || attachment.mimeType || "application/octet-stream",
+        fileName: attachment.originalFileName || attachment.sanitizedName || "attachment",
+      },
+    });
+    await client.query("COMMIT");
+    return toUiChatMessage(messageResult.rows[0], [toUiChatAttachment(attachmentResult.rows[0])]);
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function markChatThreadRead(threadId, userId, { organizationId, messageId = null } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "markChatThreadRead");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await assertChatParticipant(client, { threadId, userId, organizationId: scopedOrganizationId, lock: true });
+    const messageResult = messageId
+      ? await client.query(
+        `SELECT id
+         FROM chat_messages
+         WHERE id = $1
+           AND organization_id = $2
+           AND thread_id = $3
+           AND status = 'sent'
+         LIMIT 1`,
+        [messageId, scopedOrganizationId, threadId]
+      )
+      : await client.query(
+        `SELECT id
+         FROM chat_messages
+         WHERE organization_id = $1
+           AND thread_id = $2
+           AND status = 'sent'
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [scopedOrganizationId, threadId]
+      );
+    if (messageId && !messageResult.rows[0]) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Message was not found.", 404, "CHAT_MESSAGE_NOT_FOUND");
+    }
+    const readAt = new Date();
+    await client.query(
+      `UPDATE chat_thread_members
+       SET unread_count = 0, last_read_at = $4
+       WHERE thread_id = $1
+         AND organization_id = $2
+         AND user_id = $3
+         AND status = 'active'`,
+      [threadId, scopedOrganizationId, userId, readAt]
+    );
+    const readMessageId = messageResult.rows[0]?.id || null;
+    if (readMessageId) {
+      await client.query(
+        `INSERT INTO chat_message_read_receipts (id, organization_id, thread_id, message_id, user_id, read_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW())
+         ON CONFLICT (message_id, user_id) DO UPDATE SET read_at = EXCLUDED.read_at`,
+        [crypto.randomUUID(), scopedOrganizationId, threadId, readMessageId, userId, readAt]
+      );
+      await insertChatEvent(client, {
+        organizationId: scopedOrganizationId,
+        threadId,
+        messageId: readMessageId,
+        actorUserId: userId,
+        eventType: "message.read",
+        metadata: {},
+      });
+    }
+    await client.query("COMMIT");
+    return { threadId, userId, messageId: readMessageId, readAt };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function addChatThreadMember(threadId, userId, { organizationId, actorUserId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "addChatThreadMember");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const thread = await assertChatParticipant(client, {
+      threadId,
+      userId: actorUserId,
+      organizationId: scopedOrganizationId,
+      lock: true,
+    });
+    if (thread.type === "DM" || thread.type === "SHIPMENT") {
+      await client.query("ROLLBACK");
+      throw chatAccessError("This chat's participants are managed by its source record.", 400, "CHAT_MEMBERS_IMMUTABLE");
+    }
+    await upsertChatMember(client, {
+      threadId,
+      userId,
+      organizationId: scopedOrganizationId,
+      role: "member",
+      actorUserId,
+    });
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId,
+      actorUserId,
+      eventType: "participant.add",
+      metadata: { userId },
+    });
+    await client.query("COMMIT");
+    return { threadId, userId };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function removeChatThreadMember(threadId, userId, { organizationId, actorUserId } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "removeChatThreadMember");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const thread = await assertChatParticipant(client, {
+      threadId,
+      userId: actorUserId,
+      organizationId: scopedOrganizationId,
+      lock: true,
+    });
+    if (thread.type === "DM" || thread.type === "SHIPMENT") {
+      await client.query("ROLLBACK");
+      throw chatAccessError("This chat's participants are managed by its source record.", 400, "CHAT_MEMBERS_IMMUTABLE");
+    }
+    const target = await client.query(
+      `SELECT role
+       FROM chat_thread_members
+       WHERE thread_id = $1
+         AND organization_id = $2
+         AND user_id = $3
+         AND status = 'active'
+       LIMIT 1`,
+      [threadId, scopedOrganizationId, userId]
+    );
+    if (!target.rows[0]) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Chat participant was not found.", 404, "CHAT_PARTICIPANT_NOT_FOUND");
+    }
+    if (target.rows[0].role === "owner") {
+      const owners = await client.query(
+        `SELECT COUNT(*)::int AS count
+         FROM chat_thread_members
+         WHERE thread_id = $1
+           AND organization_id = $2
+           AND status = 'active'
+           AND role = 'owner'
+           AND user_id <> $3`,
+        [threadId, scopedOrganizationId, userId]
+      );
+      if (Number(owners.rows[0]?.count || 0) < 1) {
+        await client.query("ROLLBACK");
+        throw chatAccessError("At least one owner must remain in the group.", 400, "CHAT_LAST_OWNER_BLOCKED");
+      }
+    }
+    await client.query(
+      `UPDATE chat_thread_members
+       SET status = 'removed',
+           removed_by_id = $4,
+           removed_at = NOW(),
+           unread_count = 0
+       WHERE thread_id = $1
+         AND organization_id = $2
+         AND user_id = $3`,
+      [threadId, scopedOrganizationId, userId, actorUserId]
+    );
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId,
+      actorUserId,
+      eventType: "participant.remove",
+      metadata: { userId },
+    });
+    await client.query("COMMIT");
+    return { threadId, userId };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getChatAttachmentForDelivery(messageId, attachmentId, userId, { organizationId, previewOnly = false } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "getChatAttachmentForDelivery");
+  const result = await pool.query(
+    `SELECT a.*, m.sender_id, t.type AS thread_type, t.shipment_id
+     FROM chat_message_attachments a
+     JOIN chat_messages m
+       ON m.id = a.message_id
+      AND m.organization_id = a.organization_id
+      AND m.thread_id = a.thread_id
+     JOIN chat_threads t
+       ON t.id = a.thread_id
+      AND t.organization_id = a.organization_id
+     WHERE a.id = $1
+       AND a.message_id = $2
+       AND a.organization_id = $3
+       AND m.status = 'sent'
+       AND t.archived_at IS NULL
+     LIMIT 1`,
+    [attachmentId, messageId, scopedOrganizationId]
+  );
+  const attachment = result.rows[0];
+  if (!attachment) throw chatAccessError("Attachment was not found.", 404, "CHAT_ATTACHMENT_NOT_FOUND");
+  await assertChatParticipant(pool, {
+    threadId: attachment.thread_id,
+    userId,
+    organizationId: scopedOrganizationId,
+  });
+  if (attachment.deleted_at) {
+    throw chatAccessError("Attachment was deleted.", 404, "CHAT_ATTACHMENT_DELETED");
+  }
+  if (previewOnly && attachment.attachment_type !== "image") {
+    throw chatAccessError("Attachment preview is available for images only.", 415, "CHAT_ATTACHMENT_PREVIEW_UNSUPPORTED");
+  }
+  return attachment;
+}
+
+export async function listChatMediaAttachments({ organizationId, search = "", type, includeDeleted = false, limit = 100 } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "listChatMediaAttachments");
+  const values = [scopedOrganizationId, Math.min(Math.max(Number(limit) || 100, 1), 100)];
+  const filters = ["a.organization_id = $1"];
+  if (!includeDeleted) filters.push("a.deleted_at IS NULL");
+  if (type) {
+    values.push(type);
+    filters.push(`a.attachment_type = $${values.length}`);
+  }
+  const trimmedSearch = String(search || "").trim();
+  if (trimmedSearch) {
+    values.push(`%${trimmedSearch}%`);
+    filters.push(`(a.original_filename ILIKE $${values.length} OR t.name ILIKE $${values.length} OR s.shipment_code ILIKE $${values.length})`);
+  }
+
+  const result = await pool.query(
+    `SELECT
+       a.*,
+       u.name AS uploaded_by_name,
+       u.email AS uploaded_by_email,
+       t.type AS thread_type,
+       t.name AS thread_name,
+       t.shipment_id,
+       s.shipment_code,
+       s.status AS shipment_status,
+       COALESCE(c.customer_code, s.customer_id) AS shipment_customer_name
+     FROM chat_message_attachments a
+     JOIN chat_threads t
+       ON t.id = a.thread_id
+      AND t.organization_id = a.organization_id
+     LEFT JOIN app_users u
+       ON u.id = a.uploaded_by_id
+      AND u.organization_id = a.organization_id
+     LEFT JOIN shipments s
+       ON s.id = t.shipment_id
+      AND s.organization_id = a.organization_id
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
+     WHERE ${filters.join(" AND ")}
+     ORDER BY a.created_at DESC
      LIMIT $2`,
-    [threadId, Math.min(Number(limit) || 100, 250)]
+    values
   );
-  return result.rows.map(toUiChatMessage);
+  return result.rows.map(toUiChatMediaAttachment);
 }
 
-export async function createChatMessage({ threadId, sender, content, legacyData = {} }) {
-  if (!(await userCanAccessThread(sender.id, threadId))) {
-    const error = new Error("Thread access denied.");
-    error.statusCode = 403;
+export async function deleteChatAttachment({ messageId, attachmentId, actorUserId, organizationId, reason = "", allowAny = false } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "deleteChatAttachment");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `SELECT a.*, m.sender_id, t.type AS thread_type, t.shipment_id
+       FROM chat_message_attachments a
+       JOIN chat_messages m
+         ON m.id = a.message_id
+        AND m.organization_id = a.organization_id
+        AND m.thread_id = a.thread_id
+       JOIN chat_threads t
+         ON t.id = a.thread_id
+        AND t.organization_id = a.organization_id
+       WHERE a.id = $1
+         AND a.message_id = $2
+         AND a.organization_id = $3
+         AND m.status = 'sent'
+         AND t.archived_at IS NULL
+       LIMIT 1
+       FOR UPDATE OF a`,
+      [attachmentId, messageId, scopedOrganizationId]
+    );
+    const before = result.rows[0];
+    if (!before) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Attachment was not found.", 404, "CHAT_ATTACHMENT_NOT_FOUND");
+    }
+    await assertChatParticipant(client, {
+      threadId: before.thread_id,
+      userId: actorUserId,
+      organizationId: scopedOrganizationId,
+    });
+    if (!allowAny && before.uploaded_by_id !== actorUserId) {
+      await client.query("ROLLBACK");
+      throw chatAccessError("Only the sender or a media manager can delete this attachment.");
+    }
+    if (before.deleted_at) {
+      await client.query("COMMIT");
+      return { before, after: before, ui: toUiChatAttachment(before), alreadyDeleted: true };
+    }
+
+    const updated = await client.query(
+      `UPDATE chat_message_attachments
+       SET deleted_at = NOW(),
+           deleted_by_id = $4,
+           deleted_reason = COALESCE(NULLIF($5, ''), 'deleted_by_manager')
+       WHERE id = $1
+         AND message_id = $2
+         AND organization_id = $3
+       RETURNING *`,
+      [attachmentId, messageId, scopedOrganizationId, actorUserId, reason || ""]
+    );
+    const after = updated.rows[0];
+    await insertChatEvent(client, {
+      organizationId: scopedOrganizationId,
+      threadId: before.thread_id,
+      messageId: before.message_id,
+      actorUserId,
+      eventType: "chat.attachment.delete",
+      metadata: {
+        attachmentId: before.id,
+        attachmentType: before.attachment_type,
+        sizeBytes: Number(before.size_bytes || 0),
+        contentType: before.content_type,
+        fileName: before.original_filename,
+        managerDelete: Boolean(allowAny),
+      },
+    });
+    await client.query("COMMIT");
+    return { before, after, ui: toUiChatAttachment(after), alreadyDeleted: false };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
     throw error;
+  } finally {
+    client.release();
   }
-  const result = await pool.query(
-    `INSERT INTO chat_messages (id, organization_id, thread_id, sender_id, sender_name, content, legacy_data)
-     VALUES ($1, (SELECT organization_id FROM chat_threads WHERE id = $2), $2, $3, $4, $5, $6::jsonb)
-     RETURNING *`,
-    [crypto.randomUUID(), threadId, sender.id, sender.name, content, JSON.stringify(legacyData)]
-  );
-  await pool.query("UPDATE chat_threads SET updated_at = NOW() WHERE id = $1", [threadId]);
+}
+
+export async function markChatAttachmentStorageCleanup(attachmentId, { organizationId, error = null } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "markChatAttachmentStorageCleanup");
   await pool.query(
-    `UPDATE chat_thread_members
-     SET unread_count = unread_count + 1
-     WHERE thread_id = $1 AND user_id <> $2`,
-    [threadId, sender.id]
+    `UPDATE chat_message_attachments
+     SET storage_deleted_at = CASE WHEN $3::text IS NULL THEN NOW() ELSE storage_deleted_at END,
+         storage_delete_error = $3
+     WHERE id = $1
+       AND organization_id = $2`,
+    [attachmentId, scopedOrganizationId, error ? String(error).slice(0, 500) : null]
   );
-  return toUiChatMessage(result.rows[0]);
 }
 
-export async function markChatThreadRead(threadId, userId) {
-  if (!(await userCanAccessThread(userId, threadId))) {
-    const error = new Error("Thread access denied.");
-    error.statusCode = 403;
+export async function createChatMessageNotifications({ organizationId, threadId, messageId, senderId, senderName, recipientUserIds = [] } = {}) {
+  const scopedOrganizationId = requireOrganizationScope(organizationId, "createChatMessageNotifications");
+  const uniqueRecipientIds = [...new Set(recipientUserIds)].filter((id) => id && id !== senderId);
+  if (!uniqueRecipientIds.length) return [];
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const recipients = await client.query(
+      `SELECT id
+       FROM app_users
+       WHERE organization_id = $1
+         AND status = 'active'
+         AND id = ANY($2::text[])
+         AND COALESCE(notification_preferences->>'chatMessages', 'true') <> 'false'`,
+      [scopedOrganizationId, uniqueRecipientIds]
+    );
+    const created = [];
+    for (const row of recipients.rows) {
+      const notificationId = crypto.randomUUID();
+      const result = await client.query(
+        `INSERT INTO notifications (
+           id, organization_id, user_id, title, body, type, source_type, source_id, legacy_data, created_at
+         )
+         VALUES ($1, $2, $3, $4, $5, 'INFO', 'CHAT', $6, $7::jsonb, NOW())
+         RETURNING *`,
+        [
+          notificationId,
+          scopedOrganizationId,
+          row.id,
+          "New chat message",
+          `${senderName || "A teammate"} sent you a message.`,
+          messageId || threadId,
+          JSON.stringify({ link: `/chat?threadId=${encodeURIComponent(threadId)}`, threadId }),
+        ]
+      );
+      await syncNotificationUserRecord(client, row.id, result.rows[0]);
+      created.push(result.rows[0]);
+    }
+    await client.query("COMMIT");
+    return created;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
     throw error;
-  }
-  await pool.query(
-    `UPDATE chat_thread_members
-     SET unread_count = 0, last_read_at = NOW()
-     WHERE thread_id = $1 AND user_id = $2`,
-    [threadId, userId]
-  );
-  return { threadId, userId };
-}
-
-export async function addChatThreadMember(threadId, userId) {
-  const result = await pool.query(
-    `INSERT INTO chat_thread_members (id, thread_id, user_id)
-     SELECT $1, $2, $3
-     FROM chat_threads t
-     JOIN app_users u ON u.id = $3
-     WHERE t.id = $2
-       AND (t.organization_id IS NULL OR u.organization_id = t.organization_id)
-     ON CONFLICT (thread_id, user_id) DO NOTHING`,
-    [crypto.randomUUID(), threadId, userId]
-  );
-  if (result.rowCount === 0) {
-    const error = new Error("Chat member must belong to the thread organization.");
-    error.statusCode = 403;
-    throw error;
+  } finally {
+    client.release();
   }
 }
 
-export async function removeChatThreadMember(threadId, userId) {
-  await pool.query("DELETE FROM chat_thread_members WHERE thread_id = $1 AND user_id = $2", [threadId, userId]);
+const AUDIT_REDACTED = "[redacted]";
+const AUDIT_MAX_DEPTH = 8;
+const AUDIT_MAX_ARRAY_ITEMS = 50;
+const AUDIT_MAX_OBJECT_KEYS = 80;
+const AUDIT_MAX_STRING_LENGTH = 1200;
+const AUDIT_MAX_JSON_LENGTH = 40000;
+
+function normalizeAuditKey(key = "") {
+  return String(key).replace(/[_\-\s]/g, "").toLowerCase();
+}
+
+function isAuthCodeKey(key, path = []) {
+  const normalized = normalizeAuditKey(key);
+  if (["smscode", "otpcode", "debugcode", "codehash", "codesalt"].includes(normalized)) return true;
+  if (normalized !== "code") return false;
+  return /auth|sms|otp|login|challenge|verification/i.test(path.join("."));
+}
+
+function isSensitiveAuditKey(key, path = []) {
+  const normalized = normalizeAuditKey(key);
+  if (isAuthCodeKey(key, path)) return true;
+  if (normalized === "path") return true;
+  return (
+    normalized.includes("password") ||
+    normalized.includes("token") ||
+    normalized.includes("tokenhash") ||
+    normalized.includes("session") ||
+    normalized.includes("cookie") ||
+    normalized.includes("authorization") ||
+    normalized.includes("authority") ||
+    normalized.includes("otp") ||
+    normalized.includes("secret") ||
+    normalized.includes("merchant") ||
+    normalized.includes("apikey") ||
+    normalized.includes("providerresponse") ||
+    normalized.includes("providerresult") ||
+    normalized.includes("storagekey") ||
+    normalized.includes("objectkey") ||
+    normalized.includes("storagebucket") ||
+    normalized.includes("storageregion") ||
+    normalized.includes("localpath") ||
+    normalized.includes("filepath") ||
+    normalized.includes("signedurl") ||
+    normalized.includes("signature") ||
+    normalized.includes("customeraccesstoken") ||
+    normalized.includes("trackingtoken")
+  );
+}
+
+function sanitizeAuditString(value) {
+  if (
+    /signature=|customer_access_token=|trackingToken=|logisticplus_session=|authorization:/i.test(value) ||
+    /\/api\/public\/track\/[A-Za-z0-9_-]{24,}/.test(value) ||
+    /\/track\/[A-Za-z0-9_-]{24,}/.test(value)
+  ) {
+    return AUDIT_REDACTED;
+  }
+  if (value.length > AUDIT_MAX_STRING_LENGTH) {
+    return `${value.slice(0, AUDIT_MAX_STRING_LENGTH)}...[truncated ${value.length - AUDIT_MAX_STRING_LENGTH} chars]`;
+  }
+  return value;
+}
+
+export function sanitizeAuditPayload(value, { depth = AUDIT_MAX_DEPTH, path = [], seen = new WeakSet() } = {}) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (Buffer.isBuffer(value)) return "[binary]";
+  if (value instanceof Error) {
+    return sanitizeAuditPayload({
+      name: value.name,
+      message: value.message,
+      code: value.code,
+      statusCode: value.statusCode,
+    }, { depth: depth - 1, path, seen });
+  }
+  if (typeof value === "string") return sanitizeAuditString(value);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value !== "object") return String(value);
+  if (depth <= 0) return "[max-depth]";
+  if (seen.has(value)) return "[circular]";
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    const result = value
+      .slice(0, AUDIT_MAX_ARRAY_ITEMS)
+      .map((item, index) => sanitizeAuditPayload(item, { depth: depth - 1, path: [...path, String(index)], seen }));
+    if (value.length > AUDIT_MAX_ARRAY_ITEMS) {
+      result.push(`[truncated ${value.length - AUDIT_MAX_ARRAY_ITEMS} items]`);
+    }
+    return result;
+  }
+
+  const entries = Object.entries(value).slice(0, AUDIT_MAX_OBJECT_KEYS);
+  const sanitized = {};
+  for (const [key, nestedValue] of entries) {
+    const nextPath = [...path, key];
+    sanitized[key] = isSensitiveAuditKey(key, path)
+      ? AUDIT_REDACTED
+      : sanitizeAuditPayload(nestedValue, { depth: depth - 1, path: nextPath, seen });
+  }
+  const entryCount = Object.keys(value).length;
+  if (entryCount > AUDIT_MAX_OBJECT_KEYS) {
+    sanitized.__truncatedKeys = entryCount - AUDIT_MAX_OBJECT_KEYS;
+  }
+  return sanitized;
+}
+
+function boundedAuditPayload(value, fallback = undefined) {
+  if (value === undefined) return fallback;
+  const sanitized = sanitizeAuditPayload(value);
+  const serialized = JSON.stringify(sanitized);
+  if (serialized.length <= AUDIT_MAX_JSON_LENGTH) return sanitized;
+  return {
+    truncated: true,
+    approximateBytes: serialized.length,
+    preview: serialized.slice(0, AUDIT_MAX_JSON_LENGTH),
+  };
+}
+
+function auditActorType({ actorType, actorUserId, action }) {
+  if (actorType) return actorType;
+  if (!actorUserId) return String(action || "").startsWith("public_") ? "public" : "system";
+  return String(action || "").startsWith("admin.") ? "platform_admin" : "user";
+}
+
+function auditRowToDto(row = {}) {
+  return {
+    id: row.id,
+    organizationId: row.organization_id || null,
+    actorUserId: row.actor_user_id || null,
+    actorType: row.actor_type,
+    eventType: row.event_type,
+    resourceType: row.resource_type,
+    resourceId: row.resource_id || null,
+    requestId: row.request_id || null,
+    ip: row.ip || null,
+    userAgent: row.user_agent || null,
+    before: boundedAuditPayload(row.before_json, null),
+    after: boundedAuditPayload(row.after_json, null),
+    metadata: boundedAuditPayload(row.metadata_json || {}, {}),
+    createdAt: row.created_at,
+  };
 }
 
 export async function auditLog({
   actorUserId,
   organizationId,
+  actorType,
   action,
+  eventType,
   entityType,
+  resourceType,
   entityId,
+  resourceId,
   summary,
   before,
   after,
+  metadata,
   requestContext,
+  queryable = pool,
+  required = false,
 }) {
-  const actorOrg = !organizationId && actorUserId ? await getOrganizationForUser(actorUserId) : null;
+  try {
+    const resolvedEventType = eventType || action;
+    const resolvedResourceType = resourceType || entityType || "unknown";
+    const resolvedResourceId = resourceId || entityId || null;
+    const actorOrg = !organizationId && actorUserId ? await getOrganizationForUser(actorUserId) : null;
+    const resolvedOrganizationId = organizationId || actorOrg?.id || null;
+    const safeBefore = boundedAuditPayload(before, null);
+    const safeAfter = boundedAuditPayload(after, null);
+    const safeMetadata = boundedAuditPayload({
+      ...(metadata || {}),
+      ...(summary ? { summary } : {}),
+    }, {});
+
+    const changeResult = await queryable.query(
+      `INSERT INTO change_logs (
+         id, organization_id, actor_user_id, action, entity_type, entity_id, summary,
+         before_json, after_json, ip_address, user_agent
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11)
+       RETURNING *`,
+      [
+        crypto.randomUUID(),
+        resolvedOrganizationId,
+        actorUserId || null,
+        resolvedEventType,
+        resolvedResourceType,
+        resolvedResourceId,
+        summary || resolvedEventType,
+        safeBefore === null ? null : JSON.stringify(safeBefore),
+        safeAfter === null ? null : JSON.stringify(safeAfter),
+        requestContext?.ip || null,
+        requestContext?.userAgent || null,
+      ]
+    );
+
+    await queryable.query(
+      `INSERT INTO audit_logs (
+         id, organization_id, actor_user_id, actor_type, event_type, resource_type,
+         resource_id, request_id, ip, user_agent, before_json, after_json, metadata_json
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb)`,
+      [
+        crypto.randomUUID(),
+        resolvedOrganizationId,
+        actorUserId || null,
+        auditActorType({ actorType, actorUserId, action: resolvedEventType }),
+        resolvedEventType,
+        resolvedResourceType,
+        resolvedResourceId,
+        requestContext?.requestId || null,
+        requestContext?.ip || null,
+        requestContext?.userAgent || null,
+        safeBefore === null ? null : JSON.stringify(safeBefore),
+        safeAfter === null ? null : JSON.stringify(safeAfter),
+        JSON.stringify(safeMetadata || {}),
+      ]
+    );
+
+    return changeResult.rows[0];
+  } catch (error) {
+    console.error("Audit log write failed:", error);
+    if (required) throw error;
+    // TODO(phase-5-audit): Migrate remaining route-level best-effort audit calls into transaction helpers where the mutation is high risk.
+    return null;
+  }
+}
+
+export async function listAuditLogs({ limit = 100, organizationId, actorUserId, eventType, resourceType, resourceId } = {}) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 250);
+  const values = [];
+  const where = [];
+  if (organizationId !== undefined) {
+    values.push(organizationId);
+    where.push(`a.organization_id = $${values.length}`);
+  }
+  if (actorUserId) {
+    values.push(actorUserId);
+    where.push(`a.actor_user_id = $${values.length}`);
+  }
+  if (eventType) {
+    values.push(eventType);
+    where.push(`a.event_type = $${values.length}`);
+  }
+  if (resourceType) {
+    values.push(resourceType);
+    where.push(`a.resource_type = $${values.length}`);
+  }
+  if (resourceId) {
+    values.push(resourceId);
+    where.push(`a.resource_id = $${values.length}`);
+  }
+  values.push(safeLimit);
   const result = await pool.query(
-    `INSERT INTO change_logs (
-       id, organization_id, actor_user_id, action, entity_type, entity_id, summary,
-       before_json, after_json, ip_address, user_agent
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11)
-     RETURNING *`,
-    [
-      crypto.randomUUID(),
-      organizationId || actorOrg?.id || null,
-      actorUserId || null,
-      action,
-      entityType,
-      entityId || null,
-      summary,
-      before === undefined ? null : JSON.stringify(maskSensitive(before)),
-      after === undefined ? null : JSON.stringify(maskSensitive(after)),
-      requestContext?.ip || null,
-      requestContext?.userAgent || null,
-    ]
+    `SELECT a.*
+     FROM audit_logs a
+     ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+     ORDER BY a.created_at DESC
+     LIMIT $${values.length}`,
+    values
   );
-  return result.rows[0];
+  return result.rows.map(auditRowToDto);
 }
 
 export async function listChangeLogs({ limit = 100, organizationId } = {}) {
@@ -5434,126 +9768,26 @@ export function hashCustomerAccessToken(token) {
   return crypto.createHash("sha256").update(String(token || "")).digest("hex");
 }
 
-function publicStatusFromShipment(row) {
-  const labels = {
-    PENDING: "Shipment is being prepared",
-    BOOKED: "Shipment is booked",
-    IN_TRANSIT: "Shipment is in transit",
-    ARRIVED: "Shipment has arrived",
-    CUSTOMS: "Shipment is in customs review",
-    CLEARED: "Shipment is cleared",
-    DELIVERED: "Shipment is delivered",
-    CLOSED: "Shipment is closed",
-  };
-
-  return {
-    label: row.public_label || labels[row.status] || "Shipment status updated",
-    description:
-      row.public_description ||
-      "Your shipment is being handled by our operations team.",
-    lastUpdate: row.public_status_created_at || row.updated_at || row.created_at,
-  };
+function shipmentScopeClause(values, { organizationId, ownerUserId } = {}, alias = "s") {
+  const prefix = alias ? `${alias}.` : "";
+  if (organizationId && ownerUserId) {
+    const organizationParam = values.push(organizationId);
+    const ownerParam = values.push(ownerUserId);
+    return `AND (${prefix}organization_id = $${organizationParam} OR (${prefix}owner_user_id = $${ownerParam} AND ${prefix}organization_id IS NULL))`;
+  }
+  if (organizationId) {
+    return `AND ${prefix}organization_id = $${values.push(organizationId)}`;
+  }
+  if (ownerUserId) {
+    return `AND ${prefix}owner_user_id = $${values.push(ownerUserId)}`;
+  }
+  return "";
 }
 
-function toPublicDocument(row, token) {
-  return {
-    id: row.id,
-    title: row.title,
-    fileName: row.file_name,
-    fileSize: row.file_size,
-    downloadUrl: token
-      ? `/api/public/track/${encodeURIComponent(token)}/documents/${encodeURIComponent(row.id)}`
-      : `/api/public/documents/${encodeURIComponent(row.id)}`,
-    createdAt: row.created_at,
-  };
-}
-
-function toPublicStep(row) {
-  const data = row.data || {};
-  return {
-    id: data.id,
-    label: data.name,
-    status: data.status || "PENDING",
-    order: Number(data.order) || 0,
-    completedAt: data.completedAt || null,
-  };
-}
-
-async function buildPublicShipmentPayload(shipmentId, token) {
-  const shipmentResult = await pool.query(
-    `SELECT
-       s.id,
-       s.owner_user_id,
-       s.shipment_code,
-       s.status,
-       s.origin,
-       s.destination,
-       s.estimated_delivery_at,
-       s.updated_at,
-       s.created_at,
-       e.public_label,
-       e.public_description,
-       e.created_at AS public_status_created_at
-     FROM shipments s
-     LEFT JOIN LATERAL (
-       SELECT public_label, public_description, created_at
-       FROM shipment_status_events
-       WHERE shipment_id = s.id AND is_customer_visible = TRUE
-       ORDER BY created_at DESC
-       LIMIT 1
-     ) e ON TRUE
-     WHERE s.id = $1
-     LIMIT 1`,
-    [shipmentId]
-  );
-
-  const shipment = shipmentResult.rows[0];
-  if (!shipment) return null;
-
-  const docsResult = await pool.query(
-    `SELECT id, title, file_name, file_size, created_at
-     FROM documents
-     WHERE shipment_id = $1
-       AND visibility = 'customer_visible'
-       AND archived_at IS NULL
-     ORDER BY created_at DESC`,
-    [shipmentId]
-  );
-
-  const stepsResult = await pool.query(
-    `SELECT data
-     FROM user_records
-     WHERE owner_user_id = $1
-       AND collection = 'shipmentSteps'
-       AND data->>'shipmentId' = $2
-     ORDER BY COALESCE((data->>'order')::int, 0) ASC`,
-    [shipment.owner_user_id, shipmentId]
-  );
-
-  const publicStatus = publicStatusFromShipment(shipment);
-  return {
-    shipment: {
-      code: shipment.shipment_code,
-      publicStatusLabel: publicStatus.label,
-      publicStatusDescription: publicStatus.description,
-      origin: shipment.origin,
-      destination: shipment.destination,
-      estimatedDelivery: shipment.estimated_delivery_at,
-      lastPublicUpdate: publicStatus.lastUpdate,
-    },
-    steps: stepsResult.rows.map(toPublicStep),
-    documents: docsResult.rows.map((row) => toPublicDocument(row, token)),
-    company: {
-      name: "Logisharp",
-      contactText: "For questions about this shipment, please contact your operations representative.",
-    },
-  };
-}
-
-export async function getShipmentCustomerAccess(shipmentId, { organizationId } = {}) {
+async function getShipmentCustomerAccessWithQueryable(queryable, shipmentId, { organizationId, ownerUserId } = {}) {
   const values = [shipmentId];
-  const organizationFilter = organizationId ? `AND s.organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
+  const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "s");
+  const result = await queryable.query(
     `SELECT
        s.id,
        s.shipment_code,
@@ -5573,7 +9807,7 @@ export async function getShipmentCustomerAccess(shipmentId, { organizationId } =
        LIMIT 1
      ) e ON TRUE
      WHERE s.id = $1
-       ${organizationFilter}
+       ${scopeFilter}
      LIMIT 1`,
     values
   );
@@ -5595,77 +9829,113 @@ export async function getShipmentCustomerAccess(shipmentId, { organizationId } =
   };
 }
 
-export async function generateShipmentCustomerAccess(shipmentId, { organizationId, rotate = true } = {}) {
-  const before = await getShipmentCustomerAccess(shipmentId, { organizationId });
-  if (!before) return null;
+export async function getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId } = {}) {
+  return getShipmentCustomerAccessWithQueryable(pool, shipmentId, { organizationId, ownerUserId });
+}
 
-  if (!rotate && before.token) {
-    const values = [shipmentId];
-    const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
-    const result = await pool.query(
+export async function generateShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId, rotate = true, audit } = {}) {
+  return withTransaction(pool, async (client) => {
+    const before = await getShipmentCustomerAccessWithQueryable(client, shipmentId, { organizationId, ownerUserId });
+    if (!before) return null;
+
+    if (!rotate && before.token) {
+      const values = [shipmentId];
+      const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "");
+      const result = await client.query(
+        `UPDATE shipments
+         SET customer_access_enabled = TRUE,
+             updated_at = NOW()
+         WHERE id = $1
+           ${scopeFilter}
+         RETURNING id`,
+        values
+      );
+      if (!result.rowCount) return null;
+      const after = await getShipmentCustomerAccessWithQueryable(client, shipmentId, { organizationId, ownerUserId });
+      if (audit) {
+        await auditLog({
+          ...audit,
+          organizationId: audit.organizationId ?? organizationId ?? null,
+          before,
+          after,
+          queryable: client,
+          required: true,
+        });
+      }
+      return { token: before.token, before, after };
+    }
+
+    const token = createCustomerAccessToken();
+    const tokenHash = hashCustomerAccessToken(token);
+    const values = [shipmentId, token, tokenHash];
+    const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "");
+    const result = await client.query(
       `UPDATE shipments
-       SET customer_access_enabled = TRUE,
+       SET customer_access_token = $2,
+           customer_access_token_hash = $3,
+           customer_access_enabled = TRUE,
            updated_at = NOW()
        WHERE id = $1
-         ${organizationFilter}
+         ${scopeFilter}
        RETURNING id`,
       values
     );
     if (!result.rowCount) return null;
-    return {
-      token: before.token,
-      before,
-      after: await getShipmentCustomerAccess(shipmentId, { organizationId }),
-    };
-  }
 
-  const token = createCustomerAccessToken();
-  const tokenHash = hashCustomerAccessToken(token);
-  const values = [shipmentId, token, tokenHash];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
-  const result = await pool.query(
-    `UPDATE shipments
-     SET customer_access_token = $2,
-         customer_access_token_hash = $3,
-         customer_access_enabled = TRUE,
-         updated_at = NOW()
-     WHERE id = $1
-       ${organizationFilter}
-     RETURNING id`,
-    values
-  );
-  if (!result.rowCount) return null;
-
-  return {
-    token,
-    before,
-    after: await getShipmentCustomerAccess(shipmentId, { organizationId }),
-  };
+    const after = await getShipmentCustomerAccessWithQueryable(client, shipmentId, { organizationId, ownerUserId });
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? organizationId ?? null,
+        before,
+        after,
+        queryable: client,
+        required: true,
+      });
+    }
+    return { token, before, after };
+  });
 }
 
-export async function disableShipmentCustomerAccess(shipmentId, { organizationId } = {}) {
-  const before = await getShipmentCustomerAccess(shipmentId, { organizationId });
-  if (!before) return null;
+export async function disableShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId, audit } = {}) {
+  return withTransaction(pool, async (client) => {
+    const before = await getShipmentCustomerAccessWithQueryable(client, shipmentId, { organizationId, ownerUserId });
+    if (!before) return null;
 
-  const values = [shipmentId];
-  const organizationFilter = organizationId ? `AND organization_id = $${values.push(organizationId)}` : "";
-  await pool.query(
-    `UPDATE shipments
-     SET customer_access_enabled = FALSE,
-         updated_at = NOW()
-     WHERE id = $1
-       ${organizationFilter}`,
-    values
-  );
+    const values = [shipmentId];
+    const scopeFilter = shipmentScopeClause(values, { organizationId, ownerUserId }, "");
+    const result = await client.query(
+      `UPDATE shipments
+       SET customer_access_enabled = FALSE,
+           updated_at = NOW()
+       WHERE id = $1
+         ${scopeFilter}
+       RETURNING id`,
+      values
+    );
+    if (!result.rowCount) return null;
 
-  return {
-    before,
-    after: await getShipmentCustomerAccess(shipmentId, { organizationId }),
-  };
+    const after = await getShipmentCustomerAccessWithQueryable(client, shipmentId, { organizationId, ownerUserId });
+    if (audit) {
+      await auditLog({
+        ...audit,
+        organizationId: audit.organizationId ?? organizationId ?? null,
+        before,
+        after,
+        queryable: client,
+        required: true,
+      });
+    }
+    return { before, after };
+  });
 }
 
-async function queueCustomerShipmentUpdateSms(queryable, shipmentId, event) {
+async function queueCustomerShipmentUpdateSms(queryable, shipmentId, event, { organizationId } = {}) {
   if (!event?.is_customer_visible) return null;
+  const scopedOrganizationId = requireOrganizationScope(
+    organizationId || event.organization_id,
+    "queueCustomerShipmentUpdateSms"
+  );
   const shipmentResult = await queryable.query(
     `SELECT
        s.id,
@@ -5677,10 +9947,11 @@ async function queueCustomerShipmentUpdateSms(queryable, shipmentId, event) {
        c.company_name AS customer_company_name,
        c.phone AS customer_phone
      FROM shipments s
-     LEFT JOIN customers c ON c.id = s.customer_id
+     LEFT JOIN customers c ON c.id = s.customer_id AND c.organization_id = s.organization_id
      WHERE s.id = $1
+       AND s.organization_id = $2
      LIMIT 1`,
-    [shipmentId]
+    [shipmentId, scopedOrganizationId]
   );
   const shipment = shipmentResult.rows[0];
   if (!shipment?.organization_id) return null;
@@ -5716,8 +9987,9 @@ export async function updateShipmentPublicStatus({
   isCustomerVisible = true,
   createdById,
   organizationId,
+  ownerUserId,
 }) {
-  const shipment = await getShipmentCustomerAccess(shipmentId, { organizationId });
+  const shipment = await getShipmentCustomerAccess(shipmentId, { organizationId, ownerUserId });
   if (!shipment) return null;
 
   const result = await pool.query(
@@ -5737,85 +10009,33 @@ export async function updateShipmentPublicStatus({
     ]
   );
   const event = result.rows[0];
-  await queueCustomerShipmentUpdateSms(pool, shipmentId, event);
+  await queueCustomerShipmentUpdateSms(pool, shipmentId, event, { organizationId });
   return event;
 }
 
 export async function getPublicTrackingByToken(token) {
-  if (!token || String(token).length < 24) return null;
-  const tokenHash = hashCustomerAccessToken(token);
-  const result = await pool.query(
-    `SELECT id
-     FROM shipments
-     WHERE customer_access_token_hash = $1
-       AND customer_access_enabled = TRUE
-     LIMIT 1`,
-    [tokenHash]
-  );
-  const shipment = result.rows[0];
-  if (!shipment) return null;
-  return buildPublicShipmentPayload(shipment.id, token);
+  return getPublicTrackingByTokenFromRepository(pool, token);
+}
+
+export async function getPublicTrackingTokenAuditState(token) {
+  return getPublicTrackingTokenAuditStateFromRepository(pool, token);
 }
 
 export async function searchPublicTracking({ shipmentCode, verification }) {
-  if (!shipmentCode || !verification) return null;
-  const normalizedVerification = String(verification).trim().toLowerCase();
-  const result = await pool.query(
-    `SELECT s.id
-     FROM shipments s
-     LEFT JOIN customers c ON c.id = s.customer_id
-     WHERE lower(s.shipment_code) = lower($1)
-       AND s.customer_access_enabled = TRUE
-       AND (
-         lower(COALESCE(c.email, '')) = $2
-         OR regexp_replace(COALESCE(c.phone, ''), '\\D', '', 'g') = regexp_replace($2, '\\D', '', 'g')
-         OR lower(COALESCE(s.legacy_data->>'customerEmail', '')) = $2
-         OR regexp_replace(COALESCE(s.legacy_data->>'customerPhone', ''), '\\D', '', 'g') = regexp_replace($2, '\\D', '', 'g')
-       )
-     LIMIT 1`,
-    [shipmentCode, normalizedVerification]
-  );
-  const shipment = result.rows[0];
-  if (!shipment) return null;
-  return buildPublicShipmentPayload(shipment.id);
+  return searchPublicTrackingFromRepository(pool, { shipmentCode, verification });
 }
 
-export async function getPublicDocument(documentId) {
-  const result = await pool.query(
-    `SELECT d.id, d.title, d.file_name, d.mime_type, d.file_size, d.storage_key, d.legacy_data
-     FROM documents d
-     JOIN shipments s ON s.id = d.shipment_id
-     WHERE d.id = $1
-       AND d.visibility = 'customer_visible'
-       AND d.archived_at IS NULL
-       AND s.customer_access_enabled = TRUE
-     LIMIT 1`,
-    [documentId]
-  );
-  return result.rows[0] || null;
+export async function getPublicDocument(documentId, access = {}) {
+  return getPublicDocumentFromRepository(pool, documentId, access);
 }
 
 export async function getPublicDocumentByTrackingToken(token, documentId) {
-  if (!token || String(token).length < 24) return null;
-  const tokenHash = hashCustomerAccessToken(token);
-  const result = await pool.query(
-    `SELECT d.id, d.title, d.file_name, d.mime_type, d.file_size, d.storage_key, d.legacy_data
-     FROM documents d
-     JOIN shipments s ON s.id = d.shipment_id
-     WHERE d.id = $1
-       AND d.visibility = 'customer_visible'
-       AND d.archived_at IS NULL
-       AND s.customer_access_token_hash = $2
-       AND s.customer_access_enabled = TRUE
-     LIMIT 1`,
-    [documentId, tokenHash]
-  );
-  return result.rows[0] || null;
+  return getPublicDocumentByTrackingTokenFromRepository(pool, token, documentId);
 }
 
-export async function updateDocumentVisibility(documentId, visibility, { organizationId } = {}) {
+export async function updateDocumentVisibility(documentId, visibility, { organizationId, audit } = {}) {
   const safeVisibility = visibility === "customer_visible" ? "customer_visible" : "internal";
-  return updateDocumentMetadata(documentId, { visibility: safeVisibility }, { organizationId });
+  return updateDocumentMetadata(documentId, { visibility: safeVisibility }, { organizationId, audit });
 }
 
 function maskSensitive(value) {
@@ -5881,39 +10101,7 @@ async function insertBridgeChangeLog(client, {
 }
 
 async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId, collection, records) {
-  if (collection === "customers") {
-    await client.query("DELETE FROM customers WHERE owner_user_id = $1", [ownerUserId]);
-    for (const customer of records) {
-      await client.query(
-        `INSERT INTO customers (
-           id, organization_id, owner_user_id, company_name, contact_name, email, phone, address, legacy_data, created_by_id, archived_at, updated_at
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $3, $10, NOW())
-         ON CONFLICT (id) DO UPDATE SET
-           organization_id = EXCLUDED.organization_id,
-           company_name = EXCLUDED.company_name,
-           contact_name = EXCLUDED.contact_name,
-           email = EXCLUDED.email,
-           phone = EXCLUDED.phone,
-           address = EXCLUDED.address,
-           archived_at = EXCLUDED.archived_at,
-           legacy_data = EXCLUDED.legacy_data,
-           updated_at = NOW()`,
-        [
-          customer.id,
-          ownerOrganizationId,
-          ownerUserId,
-          customer.company || customer.name || "Unknown customer",
-          customer.name || null,
-          customer.email || null,
-          customer.phone || null,
-          customer.address || null,
-          JSON.stringify(customer),
-          customer.isArchived ? new Date() : null,
-        ]
-      );
-    }
-  }
+  if (collection === "customers") return;
 
   if (collection === "shipments") {
     const existingAccessResult = await client.query(
@@ -5934,7 +10122,6 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
     );
     const existingShipments = new Map(existingAccessResult.rows.map((row) => [row.id, row]));
 
-    await client.query("DELETE FROM shipments WHERE owner_user_id = $1", [ownerUserId]);
     for (const shipment of records) {
       const preservedAccess = existingAccess.get(shipment.id) || {};
       const before = existingShipments.get(shipment.id) || null;
@@ -6032,17 +10219,102 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
 
   if (collection === "tasks") {
     const existingTasksResult = await client.query(
-      `SELECT id, source_type, source_id, customer_id, completed_at, legacy_data
+      `SELECT id, source_type, source_id, customer_id, assigned_by_id, assigned_at, assignment_note,
+              workflow_instance_id, workflow_step_code, workflow_blocker_id, blocker_code,
+              completed_at, completed_by_user_id, legacy_data
        FROM tasks
        WHERE owner_user_id = $1`,
       [ownerUserId]
     );
     const existingTasks = new Map(existingTasksResult.rows.map((row) => [row.id, row]));
-    await client.query("DELETE FROM tasks WHERE owner_user_id = $1", [ownerUserId]);
+    const referencedTaskUserIds = Array.from(
+      new Set(
+        records
+          .flatMap((task) => [task.assignedToUserId, task.assignedByUserId, task.completedByUserId])
+          .filter(Boolean)
+      )
+    );
+    const validTaskUserIds = new Set();
+    if (referencedTaskUserIds.length) {
+      const usersResult = await client.query(
+        `SELECT id
+         FROM app_users
+         WHERE organization_id = $1
+           AND id = ANY($2::text[])
+           AND status <> 'suspended'`,
+        [ownerOrganizationId, referencedTaskUserIds]
+      );
+      usersResult.rows.forEach((row) => validTaskUserIds.add(row.id));
+    }
+    const workflowInstanceIds = Array.from(new Set(records.map((task) => task.workflowInstanceId).filter(Boolean)));
+    const validWorkflowInstanceIds = new Set();
+    if (workflowInstanceIds.length) {
+      const workflowResult = await client.query(
+        `SELECT id
+         FROM shipment_workflow_instances
+         WHERE organization_id = $1
+           AND id = ANY($2::text[])`,
+        [ownerOrganizationId, workflowInstanceIds]
+      );
+      workflowResult.rows.forEach((row) => validWorkflowInstanceIds.add(row.id));
+    }
+    const workflowBlockerIds = Array.from(new Set(records.map((task) => task.workflowBlockerId).filter(Boolean)));
+    const validWorkflowBlockerIds = new Set();
+    if (workflowBlockerIds.length) {
+      const blockerResult = await client.query(
+        `SELECT id
+         FROM shipment_workflow_blockers
+         WHERE organization_id = $1
+           AND id = ANY($2::text[])`,
+        [ownerOrganizationId, workflowBlockerIds]
+      );
+      blockerResult.rows.forEach((row) => validWorkflowBlockerIds.add(row.id));
+    }
+    const payloadTaskIds = records.map((task) => task.id).filter(Boolean);
+    if (payloadTaskIds.length) {
+      await client.query(
+        `DELETE FROM tasks
+         WHERE owner_user_id = $1
+           AND NOT (id = ANY($2::text[]))
+           AND workflow_instance_id IS NULL
+           AND workflow_step_code IS NULL
+           AND workflow_blocker_id IS NULL
+           AND blocker_code IS NULL`,
+        [ownerUserId, payloadTaskIds]
+      );
+    } else {
+      await client.query(
+        `DELETE FROM tasks
+         WHERE owner_user_id = $1
+           AND workflow_instance_id IS NULL
+           AND workflow_step_code IS NULL
+           AND workflow_blocker_id IS NULL
+           AND blocker_code IS NULL`,
+        [ownerUserId]
+      );
+    }
     for (const task of records) {
       const existingTask = existingTasks.get(task.id) || {};
       const sourceType = task.sourceType || existingTask.source_type || "MANUAL";
       const sourceId = task.sourceId || existingTask.source_id || null;
+      const assignedToUserId =
+        task.assignedToUserId && validTaskUserIds.has(task.assignedToUserId) ? task.assignedToUserId : null;
+      const assignedByUserId =
+        task.assignedByUserId && validTaskUserIds.has(task.assignedByUserId)
+          ? task.assignedByUserId
+          : existingTask.assigned_by_id || null;
+      const completedByUserId =
+        task.completedByUserId && validTaskUserIds.has(task.completedByUserId)
+          ? task.completedByUserId
+          : existingTask.completed_by_user_id || null;
+      const workflowInstanceId =
+        task.workflowInstanceId && validWorkflowInstanceIds.has(task.workflowInstanceId)
+          ? task.workflowInstanceId
+          : existingTask.workflow_instance_id || null;
+      const workflowBlockerId =
+        task.workflowBlockerId && validWorkflowBlockerIds.has(task.workflowBlockerId)
+          ? task.workflowBlockerId
+          : existingTask.workflow_blocker_id || null;
       const legacy = {
         ...(existingTask.legacy_data || {}),
         ...task,
@@ -6052,10 +10324,12 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
       await client.query(
         `INSERT INTO tasks (
            id, organization_id, owner_user_id, title, description, status, priority, assigned_to_id,
-           assigned_to_name, assigned_by_name, due_at, source_type, source_id,
-           shipment_id, customer_id, legacy_data, completed_at, updated_at
+           assigned_to_name, assigned_by_id, assigned_by_name, assigned_at, assignment_note, due_at, source_type,
+           source_id, shipment_id, customer_id, workflow_instance_id, workflow_step_code,
+           workflow_blocker_id, blocker_code, legacy_data, completed_at, completed_by_user_id, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, NOW())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                 $17, $18, $19, $20, $21, $22, $23::jsonb, $24, $25, NOW())
          ON CONFLICT (id) DO UPDATE SET
            organization_id = EXCLUDED.organization_id,
            title = EXCLUDED.title,
@@ -6064,14 +10338,22 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
            priority = EXCLUDED.priority,
            assigned_to_id = EXCLUDED.assigned_to_id,
            assigned_to_name = EXCLUDED.assigned_to_name,
+           assigned_by_id = EXCLUDED.assigned_by_id,
            assigned_by_name = EXCLUDED.assigned_by_name,
+           assigned_at = EXCLUDED.assigned_at,
+           assignment_note = EXCLUDED.assignment_note,
            due_at = EXCLUDED.due_at,
            source_type = EXCLUDED.source_type,
            source_id = EXCLUDED.source_id,
            shipment_id = EXCLUDED.shipment_id,
            customer_id = EXCLUDED.customer_id,
+           workflow_instance_id = EXCLUDED.workflow_instance_id,
+           workflow_step_code = EXCLUDED.workflow_step_code,
+           workflow_blocker_id = EXCLUDED.workflow_blocker_id,
+           blocker_code = EXCLUDED.blocker_code,
            legacy_data = EXCLUDED.legacy_data,
            completed_at = EXCLUDED.completed_at,
+           completed_by_user_id = EXCLUDED.completed_by_user_id,
            updated_at = NOW()`,
         [
           task.id,
@@ -6081,16 +10363,24 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
           task.description || null,
           task.status || "TODO",
           task.priority || "MEDIUM",
-          task.assignedToUserId || null,
-          task.assignedToName || null,
+          assignedToUserId,
+          assignedToUserId ? task.assignedToName || null : null,
+          assignedByUserId,
           task.assignedByName || null,
+          existingTask.assigned_at || (assignedToUserId ? new Date() : null),
+          task.assignmentNote || existingTask.assignment_note || null,
           task.dueDate || null,
           sourceType,
           sourceId,
           task.shipmentId || null,
           existingTask.customer_id || null,
+          workflowInstanceId,
+          task.workflowStepCode || existingTask.workflow_step_code || null,
+          workflowBlockerId,
+          task.blockerCode || existingTask.blocker_code || null,
           JSON.stringify(legacy),
           task.status === "DONE" ? existingTask.completed_at || new Date() : null,
+          task.status === "DONE" ? completedByUserId : null,
         ]
       );
     }
@@ -6330,7 +10620,7 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
            organization_id = EXCLUDED.organization_id,
            customer_id = EXCLUDED.customer_id,
            customer_name = EXCLUDED.customer_name,
-           customer_phone = EXCLUDED.customer_phone,
+           customer_phone = COALESCE(NULLIF(EXCLUDED.customer_phone, ''), quotations.customer_phone),
            origin_city = EXCLUDED.origin_city,
            destination_city = EXCLUDED.destination_city,
            cargo_type = EXCLUDED.cargo_type,

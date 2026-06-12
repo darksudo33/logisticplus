@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from "react";
-import { useMockStore } from "../store/useMockStore";
+import React, { useEffect, useMemo, useState } from "react";
+import { useAppDataStore, useMockStore } from "../store/useMockStore";
 import { 
   DndContext, 
   closestCorners, 
@@ -38,7 +38,8 @@ import {
   CheckCircle,
   Layout,
   Filter,
-  Trash
+  Trash,
+  History
 } from "lucide-react";
 import { 
   Dialog, 
@@ -61,6 +62,9 @@ import { motion, AnimatePresence } from "motion/react";
 import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
 import { toast } from "sonner";
 import { EmptyState, resetFiltersAction } from "@/src/components/EmptyState";
+import { getShamsiDatePart, getTehranTimePart, ShamsiDateTimeField } from "@/src/components/ShamsiDateTimeField";
+import { TaskAssignmentHistory } from "@/src/components/tasks/TaskAssignmentHistory";
+import type { TaskEvent } from "@/src/types";
 
 const PriorityBadge = ({ priority }: { priority: string }) => {
   const styles: Record<string, string> = {
@@ -82,14 +86,22 @@ const PriorityBadge = ({ priority }: { priority: string }) => {
   );
 };
 
+function shipmentCustomerCode(shipment: any) {
+  return shipment?.customerCode || shipment?.customerId || shipment?.customerName || "";
+}
+
 const TaskListItem = ({ 
   task, 
   onEdit, 
-  onDelete 
+  onDelete,
+  onStatusChange,
+  onHistory,
 }: { 
   task: Task, 
   onEdit: (task: Task) => void,
   onDelete: (id: string) => void,
+  onStatusChange: (task: Task, status: TaskStatus) => void,
+  onHistory: (task: Task) => void,
   key?: React.Key
 }) => {
   const users = useMockStore(state => state.users);
@@ -100,14 +112,16 @@ const TaskListItem = ({
 
   const statusConfig = {
     TODO: { label: "در انتظار", color: "text-muted-foreground bg-muted border-border" },
+    ASSIGNED: { label: "ارجاع شده", color: "text-blue-500 bg-blue-500/10 border-blue-500/20" },
     IN_PROGRESS: { label: "در حال انجام", color: "text-primary bg-primary/10 border-primary/20" },
+    WAITING: { label: "در انتظار", color: "text-amber-500 bg-amber-500/10 border-amber-500/20" },
     DONE: { label: "تکمیل شده", color: "text-emerald-500 bg-emerald-500/10 border-emerald-500/20" }
   };
 
   const extendedStatusConfig = {
     ...statusConfig,
-    BLOCKED: { label: "Blocked", color: "text-amber-600 bg-amber-500/10 border-amber-500/20" },
-    CANCELLED: { label: "Cancelled", color: "text-rose-500 bg-rose-500/10 border-rose-500/20" }
+    BLOCKED: { label: "مسدود", color: "text-rose-600 bg-rose-500/10 border-rose-500/20" },
+    CANCELLED: { label: "لغو شده", color: "text-slate-500 bg-slate-100 border-slate-300" }
   };
 
   const config = extendedStatusConfig[task.status] || extendedStatusConfig.TODO;
@@ -189,6 +203,34 @@ const TaskListItem = ({
 
           {/* Actions */}
           <div className="flex items-center gap-1 justify-end">
+            {task.status !== "DONE" && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 rounded-lg text-muted-foreground hover:bg-emerald-500/10 hover:text-emerald-500"
+                onClick={() => onStatusChange(task, "DONE")}
+              >
+                <CheckCircle className="w-4 h-4" />
+              </Button>
+            )}
+            {task.status !== "IN_PROGRESS" && task.status !== "DONE" && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 rounded-lg text-muted-foreground hover:bg-primary/10 hover:text-primary"
+                onClick={() => onStatusChange(task, "IN_PROGRESS")}
+              >
+                <Clock className="w-4 h-4" />
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted"
+              onClick={() => onHistory(task)}
+            >
+              <History className="w-4 h-4" />
+            </Button>
             <Button 
               variant="ghost" 
               size="icon" 
@@ -214,19 +256,28 @@ const TaskListItem = ({
 
 export default function Tasks() {
   const allTasks = useMockStore(state => state.tasks);
-  const loadCurrentUserRecords = useMockStore(state => state.loadCurrentUserRecords);
+  const currentUser = useMockStore(state => state.currentUser);
   const softDelete = useMockStore(state => state.softDelete);
   const users = useMockStore(state => state.users);
   const shipments = useMockStore(state => state.shipments);
+  const organizationMembers = useAppDataStore(state => state.organizationMembers);
+  const refreshTasks = useAppDataStore(state => state.refreshTasks);
+  const fetchOrganizationMembers = useAppDataStore(state => state.fetchOrganizationMembers);
+  const updateTaskStatusRemote = useAppDataStore(state => state.updateTaskStatusRemote);
+  const fetchTaskEvents = useAppDataStore(state => state.fetchTaskEvents);
   
   const [searchTerm, setSearchTerm] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("ALL");
   const [statusFilter, setStatusFilter] = useState<"ALL" | TaskStatus>("ALL");
+  const [taskScope, setTaskScope] = useState<"all" | "assignedToMe" | "assignedByMe" | "overdue" | "shipment" | "blocked">("all");
   
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [taskToDelete, setTaskToDelete] = useState<string | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [historyTask, setHistoryTask] = useState<Task | null>(null);
+  const [historyEvents, setHistoryEvents] = useState<TaskEvent[]>([]);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [formData, setFormData] = useState({
     title: "",
     description: "",
@@ -238,19 +289,56 @@ export default function Tasks() {
     shipmentId: ""
   });
 
+  useEffect(() => {
+    refreshTasks().catch((error) => {
+      console.error("Could not refresh tasks.", error);
+    });
+    fetchOrganizationMembers().catch((error) => {
+      console.error("Could not load organization members.", error);
+    });
+  }, [refreshTasks, fetchOrganizationMembers]);
+
+  const assigneeOptions = useMemo(() => {
+    if (organizationMembers.length) {
+      return organizationMembers
+        .filter((member) => member.active)
+        .map((member) => ({
+          id: member.userId,
+          name: member.displayName,
+          role: member.roleName,
+        }));
+    }
+    return users.map((user) => ({ id: user.id, name: user.name, role: user.role }));
+  }, [organizationMembers, users]);
+
+  const isTaskOverdue = (task: Task) => {
+    if (!task.dueDate || task.status === "DONE" || task.status === "CANCELLED") return false;
+    const parsed = new Date(String(task.dueDate).replace(/\//g, "-"));
+    if (Number.isNaN(parsed.getTime())) return false;
+    return parsed.getTime() < Date.now();
+  };
+
   const filteredTasks = useMemo(() => {
     return allTasks.filter(t => {
       const matchesSearch = t.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
                            t.description?.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesPriority = priorityFilter === "ALL" || t.priority === priorityFilter;
       const matchesStatus = statusFilter === "ALL" || t.status === statusFilter;
-      return matchesSearch && matchesPriority && matchesStatus;
+      const matchesScope =
+        taskScope === "all" ||
+        (taskScope === "assignedToMe" && t.assignedToUserId === currentUser?.id) ||
+        (taskScope === "assignedByMe" && t.assignedByUserId === currentUser?.id) ||
+        (taskScope === "overdue" && isTaskOverdue(t)) ||
+        (taskScope === "shipment" && Boolean(t.shipmentId)) ||
+        (taskScope === "blocked" && t.status === "BLOCKED");
+      return matchesSearch && matchesPriority && matchesStatus && matchesScope;
     });
-  }, [allTasks, searchTerm, priorityFilter, statusFilter]);
+  }, [allTasks, searchTerm, priorityFilter, statusFilter, taskScope, currentUser?.id]);
   const resetTaskFilters = () => {
     setSearchTerm("");
     setPriorityFilter("ALL");
     setStatusFilter("ALL");
+    setTaskScope("all");
   };
 
   const handleOpenAdd = () => {
@@ -259,9 +347,9 @@ export default function Tasks() {
       title: "",
       description: "",
       priority: "MEDIUM",
-      assignedToUserId: users[0]?.id || "",
+      assignedToUserId: assigneeOptions[0]?.id || "",
       dueDate: format(addDays(new Date(), 15), "yyyy/MM/dd"),
-      deadline: "12:00",
+      deadline: "09:00",
       status: "TODO",
       shipmentId: ""
     });
@@ -275,8 +363,8 @@ export default function Tasks() {
       description: task.description || "",
       priority: task.priority as any,
       assignedToUserId: task.assignedToUserId || "",
-      dueDate: task.dueDate || "",
-      deadline: task.deadline || "",
+      dueDate: getShamsiDatePart(task.dueDate) || "",
+      deadline: task.deadline || getTehranTimePart(task.dueDate),
       status: task.status,
       shipmentId: task.shipmentId || ""
     });
@@ -285,7 +373,7 @@ export default function Tasks() {
 
   const handleSubmit = async () => {
     if (!formData.title) return;
-    const assignedUser = users.find(u => u.id === formData.assignedToUserId);
+    const assignedUser = assigneeOptions.find(u => u.id === formData.assignedToUserId);
     const finalData = {
       ...formData,
       assignedToName: assignedUser?.name || "",
@@ -301,11 +389,35 @@ export default function Tasks() {
       if (!response.ok || !payload.ok) {
         throw new Error(payload.error?.message || "Could not save task.");
       }
-      await loadCurrentUserRecords();
+      await refreshTasks();
       toast.success(editingTask ? "Task updated" : "Task created");
       setIsDialogOpen(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not save task.");
+    }
+  };
+
+  const handleTaskStatusChange = async (task: Task, status: TaskStatus) => {
+    try {
+      await updateTaskStatusRemote(task.id, { status });
+      await refreshTasks();
+      toast.success("Task status updated");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update task status.");
+    }
+  };
+
+  const handleOpenHistory = async (task: Task) => {
+    setHistoryTask(task);
+    setHistoryEvents([]);
+    setIsHistoryLoading(true);
+    try {
+      const events = await fetchTaskEvents(task.id);
+      setHistoryEvents(events);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not load task history.");
+    } finally {
+      setIsHistoryLoading(false);
     }
   };
 
@@ -325,7 +437,7 @@ export default function Tasks() {
             <h1 className="text-xl md:text-2xl font-black text-foreground tracking-tight">لیست وظایف عملیاتی</h1>
             <p className="text-muted-foreground text-xs md:text-sm font-medium">پایش و مدیریت هوشمند تمام وظایف پرسنل در یک نگاه.</p>
           </div>
-          <Button onClick={handleOpenAdd} className="bg-primary hover:bg-primary/90 text-primary-foreground font-black h-10 px-5 rounded-xl shadow-sm transition-all active:scale-95 text-xs">
+          <Button data-testid="open-task-dialog" onClick={handleOpenAdd} className="bg-primary hover:bg-primary/90 text-primary-foreground font-black h-10 px-5 rounded-xl shadow-sm transition-all active:scale-95 text-xs">
             <Plus className="w-5 h-5 ml-2 stroke-[3]" />
             ثبت فعالیت جدید
           </Button>
@@ -375,11 +487,13 @@ export default function Tasks() {
             {[
               { id: "ALL", label: "همه وضعیت‌ها" },
               { id: "TODO", label: "در انتظار" },
+              { id: "ASSIGNED", label: "ارجاع شده" },
               { id: "IN_PROGRESS", label: "در حال انجام" },
+              { id: "WAITING", label: "در انتظار" },
               { id: "DONE", label: "تکمیل شده" }
             ].concat([
-              { id: "BLOCKED", label: "Blocked" },
-              { id: "CANCELLED", label: "Cancelled" }
+              { id: "BLOCKED", label: "مسدود" },
+              { id: "CANCELLED", label: "لغو شده" }
             ]).map((s) => (
               <button
                 key={s.id}
@@ -414,6 +528,30 @@ export default function Tasks() {
         </div>
       </div>
 
+      <div className="flex flex-wrap gap-2 rounded-xl border border-border bg-card p-2 shadow-sm">
+        {[
+          { id: "all", label: "همه وظایف" },
+          { id: "assignedToMe", label: "وظایف ارجاع شده به من" },
+          { id: "assignedByMe", label: "وظایفی که من ارجاع داده‌ام" },
+          { id: "overdue", label: "وظایف عقب‌افتاده" },
+          { id: "shipment", label: "وظایف مرتبط با محموله" },
+          { id: "blocked", label: "وظایف مسدود" },
+        ].map((scope) => (
+          <button
+            key={scope.id}
+            onClick={() => setTaskScope(scope.id as typeof taskScope)}
+            className={cn(
+              "rounded-lg px-3 py-2 text-xs font-black transition-colors",
+              taskScope === scope.id
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+            )}
+          >
+            {scope.label}
+          </button>
+        ))}
+      </div>
+
       {/* Task List Content */}
       <div className="flex-1">
         <div className="flex flex-col gap-3">
@@ -427,7 +565,9 @@ export default function Tasks() {
                   onDelete={(id) => {
                     setTaskToDelete(id);
                     setIsDeleteDialogOpen(true);
-                  }} 
+                  }}
+                  onStatusChange={handleTaskStatusChange}
+                  onHistory={handleOpenHistory}
                 />
               ))
             ) : (
@@ -504,31 +644,19 @@ export default function Tasks() {
                   value={formData.assignedToUserId}
                   onChange={e => setFormData({...formData, assignedToUserId: e.target.value})}
                 >
-                  {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  {assigneeOptions.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </select>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest mr-1">تاریخ ددلاین</Label>
-                <Input 
-                  className="bg-background border-border h-10 md:h-12 text-sm rounded-xl md:rounded-2xl shadow-inner" 
-                  value={formData.dueDate}
-                  onChange={e => setFormData({...formData, dueDate: e.target.value})}
-                  placeholder="۱۴۰۳/۰۵/۱۵"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest mr-1">ساعت دقیق</Label>
-                <Input 
-                  className="bg-background border-border h-10 md:h-12 text-sm rounded-xl md:rounded-2xl shadow-inner" 
-                  value={formData.deadline}
-                  onChange={e => setFormData({...formData, deadline: e.target.value})}
-                  placeholder="۱۲:۰۰"
-                />
-              </div>
-            </div>
+            <ShamsiDateTimeField
+              label="تاریخ و ساعت ددلاین"
+              date={formData.dueDate}
+              time={formData.deadline}
+              onDateChange={(dueDate) => setFormData((current) => ({ ...current, dueDate }))}
+              onTimeChange={(deadline) => setFormData((current) => ({ ...current, deadline }))}
+              triggerClassName="h-10 md:h-12 rounded-xl md:rounded-2xl text-sm"
+            />
 
             <div className="space-y-2">
               <Label className="text-[10px] font-black text-muted-foreground uppercase tracking-widest mr-1">وضعیت کنونی</Label>
@@ -538,8 +666,12 @@ export default function Tasks() {
                 onChange={e => setFormData({...formData, status: e.target.value as any})}
               >
                 <option value="TODO">در انتظار</option>
+                <option value="ASSIGNED">ارجاع شده</option>
                 <option value="IN_PROGRESS">در حال انجام</option>
+                <option value="WAITING">در انتظار</option>
+                <option value="BLOCKED">مسدود</option>
                 <option value="DONE">تکمیل شده</option>
+                <option value="CANCELLED">لغو شده</option>
               </select>
             </div>
 
@@ -552,7 +684,7 @@ export default function Tasks() {
               >
                 <option value="">بدون ارجاع</option>
                 {shipments.map(s => (
-                  <option key={s.id} value={s.id}>{s.trackingNumber} - {s.customerName}</option>
+                  <option key={s.id} value={s.id}>{s.trackingNumber} - {shipmentCustomerCode(s)}</option>
                 ))}
               </select>
             </div>
@@ -566,6 +698,16 @@ export default function Tasks() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <TaskAssignmentHistory
+        open={Boolean(historyTask)}
+        onOpenChange={(open) => {
+          if (!open) setHistoryTask(null);
+        }}
+        taskTitle={historyTask?.title}
+        events={historyEvents}
+        isLoading={isHistoryLoading}
+      />
 
       <DeleteConfirmDialog 
         isOpen={isDeleteDialogOpen}

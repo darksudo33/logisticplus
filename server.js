@@ -1,4 +1,5 @@
 import express from "express";
+import compression from "compression";
 import path from "path";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
@@ -6,6 +7,7 @@ import http from "node:http";
 import { WebSocketServer } from "ws";
 import {
   addChatThreadMember,
+  assignTaskRecord,
   archiveDocumentRecord,
   archiveChequeRecord,
   archiveComplianceMeetingRecord,
@@ -16,8 +18,10 @@ import {
   convertQuotationToShipment,
   createApiError,
   createAppUserRecord,
+  createChatAttachmentMessage,
   createBillingInvoice,
   createChatMessage,
+  createChatMessageNotifications,
   createChatThread,
   createContactRequest,
   createLoginSmsChallenge,
@@ -28,17 +32,24 @@ import {
   createDocumentRecord,
   createChequeRecord,
   createComplianceMeetingRecord,
+  createShipmentRecord,
   createAppErrorLog,
   createQuotationRecord,
   createShipmentTaskRecord,
   createTaskRecord,
   deleteSessionByToken,
+  deleteAbandonedSignupRequest,
+  deleteAppUserRecord,
   deleteArchivedEntityRecord,
+  deleteChatAttachment,
   disableShipmentCustomerAccess,
   ensureDirectChat,
+  ensureShipmentChatThread,
   generateShipmentCustomerAccess,
   expireOrganizationSubscription,
   getChangeLog,
+  getChatThreadForUser,
+  getChatAttachmentForDelivery,
   getDocumentDetail,
   getDocumentForDownload,
   getFeatureConfig,
@@ -46,8 +57,10 @@ import {
   getPublicDocument,
   getPublicDocumentByTrackingToken,
   getPublicTrackingByToken,
+  getPublicTrackingTokenAuditState,
   getRecordsForUser,
   getSessionByToken,
+  getSessionAuditStateByToken,
   getShipmentCustomerAccess,
   getShipmentRecord,
   getTaskRecord,
@@ -64,6 +77,8 @@ import {
   getOrganizationSubscription,
   getQuotationRecord,
   getUserById,
+  listExitedShipmentRecords,
+  getShipmentOperationalRecord,
   getUserByEmail,
   getUserByPhone,
   getUserPermissions,
@@ -72,8 +87,11 @@ import {
   listOrganizations,
   listAppUsers,
   listArchiveRecords,
+  listAuditLogs,
   listChangeLogs,
   listChatMessages,
+  listChatMediaAttachments,
+  listChatParticipants,
   listChatThreadMemberIds,
   listChatThreads,
   listContactRequests,
@@ -89,16 +107,21 @@ import {
   listBillingPayments,
   listQuotations,
   listRoles,
+  listOrganizationMembers,
   listSignupRequests,
   listSmsDeliveries,
   listSmsTemplates,
   listSubscriptionPlans,
   listShipmentSteps,
   listTasks,
+  listTaskEvents,
   markChatThreadRead,
+  markChatAttachmentStorageCleanup,
   markBillingPaymentManually,
   markPaymentRequested,
-  markPaymentVerifiedByAuthority,
+  markPaymentVerifiedByAuthorityWithResult,
+  pool,
+  previewAppUserDeletion,
   replaceRecordsForUser,
   replaceDocumentFileRecord,
   recordImmediateSmsDelivery,
@@ -108,7 +131,11 @@ import {
   removeChatThreadMember,
   requirePermission,
   renewOrganizationSubscription,
+  grantUserPermission,
   restoreEntityRecord,
+  revokeUserPermission,
+  normalizeOperationalSearchQuery,
+  searchOperationalRecords,
   searchPublicTracking,
   setQuotationStatus,
   setTaskStatus,
@@ -121,12 +148,17 @@ import {
   updateOrganizationStatus,
   updateOrganizationSubscription,
   updateCustomerRecord,
+  moveShipmentToExitedArchive,
   updateMeetingRequiredDocument,
   updateQuotationRecord,
+  restoreShipmentFromExitedArchive,
+  updateShipmentOperationalFields,
+  updateShipmentPostExitFields,
   updateShipmentPublicStatus,
   updateShipmentStepRecord,
   updateSmsTemplate,
   updateTaskRecord,
+  updateTaskStatusRecord,
   upsertMeetingRequiredDocument,
   updateUserNotificationPreferences,
   updateUserPassword,
@@ -138,31 +170,234 @@ import {
 } from "./src/server/db.js";
 import {
   cleanupPersistedDocument,
+  deleteStoredChatAttachmentFiles,
   deleteStoredDocumentFiles,
+  persistChatAttachmentFile,
   persistDocumentFile,
+  sendStoredChatAttachment,
   sendStoredDocument,
+  uploadChatAttachmentSingle,
   uploadSingle,
 } from "./src/server/document-storage.js";
 import {
+  aiChatBodySchema,
+  archiveEntityParamsSchema,
+  billingPaymentStartParamsSchema,
+  chatDirectBodySchema,
+  chatAttachmentUploadBodySchema,
+  chatMediaListQuerySchema,
+  chatMessageAttachmentParamsSchema,
+  chatMessageListQuerySchema,
+  chatMessageSendBodySchema,
+  chatParticipantBodySchema,
+  chatParticipantsQuerySchema,
+  chatReadBodySchema,
+  chatThreadCreateBodySchema,
+  chatThreadAttachmentParamsSchema,
+  chatThreadParamsSchema,
+  chatThreadParticipantParamsSchema,
+  chatTypingBodySchema,
+  documentMetadataSchema,
+  documentParamsSchema,
+  documentVisibilitySchema,
+  exitedShipmentArchiveBodySchema,
+  exitedShipmentsListQuerySchema,
+  organizationMembersQuerySchema,
+  postExitUpdateBodySchema,
+  shipmentCreateBodySchema,
+  shipmentOperationalFieldsBodySchema,
+  shipmentParamsSchema,
+  shipmentProgressBlockerBodySchema,
+  shipmentProgressCurrentBodySchema,
+  shipmentProgressParamsSchema,
+  shipmentProgressStartBodySchema,
+  shipmentProgressUnblockBodySchema,
+  shipmentPublicStatusBodySchema,
+  shipmentStepParamsSchema,
+  shipmentTaskBodySchema,
+  signupRequestParamsSchema,
+  taskAssignBodySchema,
+  taskListQuerySchema,
+  taskParamsSchema,
+  taskStatusBodySchema,
+} from "./src/server/request-schemas.js";
+import { registerCustomerRoutes } from "./src/server/routes/customer-routes.js";
+import { registerNotificationRoutes } from "./src/server/routes/notification-routes.js";
+import { registerPublicTrackingRoutes } from "./src/server/routes/public-tracking-routes.js";
+import { registerShipmentProgressRoutes } from "./src/server/routes/shipment-progress-routes.js";
+import { registerDailyStatusRoutes } from "./src/server/routes/daily-status-routes.js";
+import { registerBusinessEntityRoutes } from "./src/server/routes/business-entity-routes.js";
+import { registerDocumentManagementCenterRoutes } from "./src/server/routes/document-management-center-routes.js";
+import { registerShipmentV2Routes } from "./src/server/routes/shipment-v2-routes.js";
+import { registerShipmentFormTemplateRoutes } from "./src/server/routes/shipment-form-template-routes.js";
+import { registerShipmentWorkflowTemplateRoutes } from "./src/server/routes/shipment-workflow-template-routes.js";
+import { registerUserRoutes } from "./src/server/routes/user-routes.js";
+import { registerRatesRoutes } from "./src/server/routes/rates-routes.js";
+import { startShipmentWorkflow as startShipmentWorkflowRecord } from "./src/server/repositories/shipment-progress.js";
+import { parseRequestValue } from "./src/server/validation.js";
+import {
+  attachTenantContext,
+  findClientTenantIdentifiers,
+  requireNoClientTenantScopeConflict,
+  requireTenantContext,
+} from "./src/server/tenant-context.js";
+import {
   clearRateLimit,
   consumeRateLimit,
-  isRateLimited,
+  consumeRateLimitKey,
   rateLimitKey,
-  recordRateLimitHit,
 } from "./src/server/rate-limit.js";
 import { runStartupChecks, shouldTrustProxy } from "./src/server/startup-checks.js";
 import { runSmsWorkerOnce, startSmsWorker } from "./src/server/sms-worker.js";
+import { startCurrencyRatesWorker } from "./src/server/rates-worker.js";
 import { sendSmsMessage } from "./src/server/sms-provider.js";
+import { AI_MESSAGES, runAiChat } from "./src/server/ai/ai-orchestrator.js";
 
 const SESSION_COOKIE = "logisticplus_session";
+const PASSWORD_LOGIN_LIMIT = { limit: 5, windowMs: 15 * 60 * 1000 };
+const PASSWORD_LOGIN_IP_LIMIT = { limit: 20, windowMs: 15 * 60 * 1000 };
+const PHONE_LOGIN_REQUEST_COOLDOWN = { limit: 1, windowMs: 60 * 1000 };
+const PHONE_LOGIN_REQUEST_LIMIT = { limit: 3, windowMs: 10 * 60 * 1000 };
+const PHONE_LOGIN_REQUEST_IP_LIMIT = { limit: 10, windowMs: 60 * 60 * 1000 };
+const PHONE_LOGIN_VERIFY_LIMIT = { limit: 6, windowMs: 15 * 60 * 1000 };
+const DOCUMENT_DOWNLOAD_LIMIT = { limit: 60, windowMs: 10 * 60 * 1000 };
+const PUBLIC_DOCUMENT_DOWNLOAD_LIMIT = { limit: 30, windowMs: 10 * 60 * 1000 };
+const PUBLIC_TRACK_LOOKUP_LIMIT = { limit: 60, windowMs: 10 * 60 * 1000 };
+const PUBLIC_TRACK_SEARCH_LIMIT = { limit: 20, windowMs: 15 * 60 * 1000 };
+const CHAT_THREAD_CREATE_LIMIT = { limit: 20, windowMs: 60 * 60 * 1000 };
+const CHAT_PARTICIPANT_CHANGE_LIMIT = { limit: 60, windowMs: 60 * 60 * 1000 };
+const CHAT_ATTACHMENT_UPLOAD_LIMIT = { limit: 20, windowMs: 15 * 60 * 1000 };
+const CHAT_MESSAGE_SEND_LIMITS = [
+  { scope: "user_short", limit: 5, windowMs: 5 * 1000 },
+  { scope: "user_minute", limit: 30, windowMs: 60 * 1000 },
+  { scope: "thread_minute", limit: 60, windowMs: 60 * 1000 },
+];
+const CHAT_TYPING_LIMIT = { limit: 1, windowMs: 2 * 1000 };
+const CHAT_SOCKET_EVENT_LIMIT = { limit: 180, windowMs: 60 * 1000 };
+const CHAT_SOCKET_CONNECTION_LIMIT = { limit: 12, windowMs: 60 * 1000 };
+const CHAT_SOCKET_MAX_BYTES = 8 * 1024;
+const AI_CHAT_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
+const ZARINPAL_MIN_AMOUNT_IRR = 10000;
 
 const chatClients = new Map();
+const chatRateLimitBuckets = new Map();
+const CHAT_SOCKET_OPEN = 1;
 
-function broadcastChat(event, userIds) {
+function sendChatSocket(ws, event) {
+  if (ws.readyState !== CHAT_SOCKET_OPEN) return;
+  ws.send(JSON.stringify(event));
+}
+
+function chatRateLimitRetryAfterMs(resetAt, now = Date.now()) {
+  return Math.max(250, resetAt - now);
+}
+
+function chatRateLimitBucket(key, windowMs, now = Date.now()) {
+  const existing = chatRateLimitBuckets.get(key);
+  if (!existing || existing.resetAt <= now) {
+    const fresh = { count: 0, resetAt: now + windowMs };
+    chatRateLimitBuckets.set(key, fresh);
+    return fresh;
+  }
+  return existing;
+}
+
+function pruneChatRateLimitBuckets(now = Date.now()) {
+  if (chatRateLimitBuckets.size < 5000) return;
+  for (const [key, bucket] of chatRateLimitBuckets.entries()) {
+    if (bucket.resetAt <= now) chatRateLimitBuckets.delete(key);
+  }
+}
+
+function consumeChatRateLimits(limits) {
+  const now = Date.now();
+  pruneChatRateLimitBuckets(now);
+  const buckets = limits.map((item) => ({
+    ...item,
+    bucket: chatRateLimitBucket(item.key, item.windowMs, now),
+  }));
+  const blocked = buckets.filter((item) => item.bucket.count >= item.limit);
+  if (blocked.length) {
+    return {
+      limited: true,
+      retryAfterMs: Math.max(...blocked.map((item) => chatRateLimitRetryAfterMs(item.bucket.resetAt, now))),
+    };
+  }
+  for (const item of buckets) {
+    item.bucket.count += 1;
+  }
+  return { limited: false, retryAfterMs: 0 };
+}
+
+function chatMessageLimitKey({ organizationId, userId, threadId, scope }) {
+  return `chat:${scope}:org:${String(organizationId)}:user:${String(userId)}:thread:${String(threadId || "")}`;
+}
+
+function consumeChatMessageSendLimit({ organizationId, userId, threadId }) {
+  return consumeChatRateLimits(CHAT_MESSAGE_SEND_LIMITS.map((limit) => {
+    const keyScope = limit.scope === "thread_minute" ? "thread_minute" : limit.scope;
+    return {
+      ...limit,
+      key: chatMessageLimitKey({
+        organizationId,
+        userId: limit.scope === "thread_minute" ? "" : userId,
+        threadId: limit.scope === "thread_minute" ? threadId : "",
+        scope: keyScope,
+      }),
+    };
+  }));
+}
+
+function consumeChatTypingLimit({ organizationId, userId, threadId }) {
+  return consumeChatRateLimits([
+    {
+      ...CHAT_TYPING_LIMIT,
+      key: chatMessageLimitKey({ organizationId, userId, threadId, scope: "typing" }),
+    },
+  ]);
+}
+
+function chatForbiddenError(message = "Thread access denied.") {
+  return Object.assign(new Error(message), { statusCode: 403, code: "FORBIDDEN" });
+}
+
+async function requireChatThreadMembership(userId, threadId, { organizationId } = {}) {
+  const memberIds = await listChatThreadMemberIds(threadId, { organizationId });
+  if (!memberIds.includes(userId)) throw chatForbiddenError();
+  return memberIds;
+}
+
+function sendChatRateLimitedResponse(res, { retryAfterMs }) {
+  res.setHeader("Retry-After", String(Math.max(1, Math.ceil(Number(retryAfterMs || 0) / 1000))));
+  return res.status(429).json({
+    ok: false,
+    error: {
+      code: "CHAT_RATE_LIMITED",
+      message: "Too many chat messages. Please slow down.",
+      retryAfterMs: Math.max(250, Number(retryAfterMs || 0)),
+    },
+  });
+}
+
+function connectedChatUserIds(organizationId, userIds = []) {
+  const allowed = new Set(userIds);
+  const connected = new Set();
+  for (const [, client] of chatClients.entries()) {
+    if (client.organizationId !== organizationId) continue;
+    if (allowed.size && !allowed.has(client.user.id)) continue;
+    connected.add(client.user.id);
+  }
+  return connected;
+}
+
+function broadcastChat(event, { organizationId, userIds } = {}) {
+  if (!organizationId) return;
   const message = JSON.stringify(event);
+  const allowedUserIds = userIds ? new Set(userIds) : null;
   for (const [ws, client] of chatClients.entries()) {
-    if (ws.readyState !== ws.OPEN) continue;
-    if (userIds && !userIds.includes(client.user.id)) continue;
+    if (ws.readyState !== CHAT_SOCKET_OPEN) continue;
+    if (client.organizationId !== organizationId) continue;
+    if (allowedUserIds && !allowedUserIds.has(client.user.id)) continue;
     ws.send(message);
   }
 }
@@ -185,33 +420,69 @@ function getSessionCookie(req) {
 }
 
 function setSessionCookie(res, token, expiresAt, { remember = false } = {}) {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  const expiry = remember ? `; Expires=${expiresAt.toUTCString()}` : "";
-  res.setHeader(
-    "Set-Cookie",
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/${expiry}${secure}`
-  );
+  const maxAgeSeconds = Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000));
+  const parts = [
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    "Path=/",
+    `Max-Age=${maxAgeSeconds}`,
+  ];
+  if (remember) parts.push(`Expires=${expiresAt.toUTCString()}`);
+  if (process.env.NODE_ENV === "production") parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
 }
 
 function clearSessionCookie(res) {
-  res.setHeader(
-    "Set-Cookie",
-    `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`
-  );
+  const parts = [
+    `${SESSION_COOKIE}=`,
+    "HttpOnly",
+    "SameSite=Lax",
+    "Path=/",
+    "Max-Age=0",
+    "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+  ];
+  if (process.env.NODE_ENV === "production") parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
 }
 
 function requestContext(req) {
   return {
     ip: req.ip || req.socket?.remoteAddress,
     userAgent: req.headers["user-agent"],
+    requestId: req.headers["x-request-id"] || null,
   };
+}
+
+function auditIdentifierHash(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "";
+  return crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 24);
+}
+
+function phoneSuffix(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits ? digits.slice(-4) : "";
 }
 
 function wantsRemember(body = {}) {
   return body.remember === true || body.remember === "true";
 }
 
-function loginBlockForUser(user) {
+function hasPlatformAdminPermission(permissions = []) {
+  return permissions.includes("platform.admin");
+}
+
+async function isPlatformAdminUser(user) {
+  if (!user?.id) return false;
+  const permissions = user.permissions || await getUserPermissions(user.id);
+  user.permissions = permissions;
+  return hasPlatformAdminPermission(permissions);
+}
+
+async function loginBlockForUser(user) {
+  const isPlatformAdmin = await isPlatformAdminUser(user);
+
   if (user.status && user.status !== "active") {
     return {
       status: 403,
@@ -229,7 +500,7 @@ function loginBlockForUser(user) {
   }
 
   if (
-    String(user.email || "").toLowerCase() !== "darksudo22@gmail.com" &&
+    !isPlatformAdmin &&
     ["expired", "suspended", "cancelled", "rejected"].includes(user.subscription_status || "")
   ) {
     return {
@@ -273,13 +544,25 @@ function sendLoginBlock(res, block) {
   });
 }
 
-async function createAuthenticatedSessionResponse(req, res, user) {
+async function createAuthenticatedSessionResponse(req, res, user, { method = "password", auditMetadata = {} } = {}) {
   const remember = wantsRemember(req.body || {});
   const { password_hash, ...safeUser } = user;
+  const permissions = user.permissions || await getUserPermissions(user.id);
   const session = await createSession(user.id, { remember });
   setSessionCookie(res, session.token, session.expiresAt, { remember });
   const records = await getRecordsForUser(user.id);
-  res.json({ user: safeUser, records });
+  await auditLog({
+    actorUserId: user.id,
+    organizationId: user.organization_id || user.organizationId || null,
+    action: "auth.login_success",
+    entityType: "SESSION",
+    entityId: session.id,
+    summary: "User login succeeded.",
+    after: { remember, expiresAt: session.expiresAt, method },
+    metadata: { method, ...auditMetadata },
+    requestContext: requestContext(req),
+  });
+  res.json({ user: { ...safeUser, permissions }, records });
 }
 
 function normalizeContactRequestBody(body = {}) {
@@ -305,7 +588,7 @@ function appBaseUrl(req) {
 }
 
 function normalizeZarinpalAmount(amount) {
-  return Math.max(1000, Math.round(Number(amount || 0)));
+  return Math.max(ZARINPAL_MIN_AMOUNT_IRR, Math.round(Number(amount || 0)));
 }
 
 function zarinpalTimeoutMs() {
@@ -358,6 +641,61 @@ async function validateDocumentAssociations({ shipmentId, customerId, organizati
       throw error;
     }
   }
+}
+
+const documentStorageResponseKeys = new Set([
+  "storage_key",
+  "storage_provider",
+  "object_key",
+  "storage_bucket",
+  "storage_region",
+  "local_path",
+  "checksum",
+  "checksum_sha256",
+  "size_bytes",
+  "content_type",
+  "storage_migrated_at",
+  "storage_verified_at",
+  "storage_migration_status",
+  "storage_migration_error",
+]);
+
+function sanitizeDocumentForApi(document) {
+  if (!document || typeof document !== "object" || Array.isArray(document)) return document;
+  const sanitized = {};
+  for (const [key, value] of Object.entries(document)) {
+    if (documentStorageResponseKeys.has(key)) continue;
+    sanitized[key] = value;
+  }
+  if (Array.isArray(document.versions)) {
+    sanitized.versions = document.versions.map(sanitizeDocumentForApi);
+  }
+  return sanitized;
+}
+
+function sanitizeDocumentEntityResponse(entityType, data) {
+  return entityType === "document" ? sanitizeDocumentForApi(data) : data;
+}
+
+function documentStorageAuditMetadata(persisted) {
+  return {
+    storageMode: persisted?.objectWrite?.attempted ? "object-capable" : "local",
+    migrationStatus: persisted?.storageMigrationStatus || "local",
+    objectWrite: {
+      attempted: Boolean(persisted?.objectWrite?.attempted),
+      verified: Boolean(persisted?.objectWrite?.verified),
+      failed: Boolean(persisted?.objectWrite?.failed),
+      required: Boolean(persisted?.objectWrite?.required),
+      provider: persisted?.objectWrite?.provider || null,
+    },
+  };
+}
+
+function safeStorageCleanupMessage(error) {
+  return String(error?.message || error || "storage_cleanup_failed")
+    .replace(/(access[_-]?key|secret|signature|credential|token|authorization)[^,\s]*/gi, "[redacted]")
+    .replace(/https?:\/\/\S+/gi, "[redacted-url]")
+    .slice(0, 300);
 }
 
 async function requestZarinpalPayment(req, payment) {
@@ -425,8 +763,27 @@ async function getAuthenticatedSession(req) {
 }
 
 async function requireAuthenticatedUser(req, res) {
-  const session = await getAuthenticatedSession(req);
+  const sessionToken = getSessionCookie(req);
+  const session = await getSessionByToken(sessionToken);
   if (!session?.user) {
+    if (sessionToken) {
+      const sessionState = await getSessionAuditStateByToken(sessionToken).catch(() => null);
+      await auditLog({
+        actorUserId: sessionState?.userId || null,
+        organizationId: sessionState?.organizationId || null,
+        actorType: sessionState?.userId ? "user" : "public",
+        action: "auth.session_restore_rejected",
+        entityType: "SESSION",
+        entityId: sessionState?.sessionId || null,
+        summary: "Session restore was rejected.",
+        metadata: {
+          reason: sessionState?.reason || "unknown_session",
+          matched: Boolean(sessionState?.matched),
+          apiEndpoint: `${req.method} ${req.path}`,
+        },
+        requestContext: requestContext(req),
+      });
+    }
     createApiError(res, 401, "UNAUTHENTICATED", "Authentication is required.");
     return null;
   }
@@ -438,40 +795,174 @@ async function requireAuthenticatedUser(req, res) {
     createApiError(res, 403, "ORGANIZATION_INACTIVE", "Organization is not active yet.");
     return null;
   }
+  const permissions = await getUserPermissions(session.user.id);
+  session.user.permissions = permissions;
   if (
-    String(session.user.email || "").toLowerCase() !== "darksudo22@gmail.com" &&
+    !hasPlatformAdminPermission(permissions) &&
     ["expired", "suspended", "cancelled", "rejected"].includes(session.user.subscriptionStatus || "")
   ) {
     createApiError(res, 403, "SUBSCRIPTION_INACTIVE", "Subscription is not active.");
     return null;
   }
+  const tenantContext = attachTenantContext(req, session.user, { permissions });
+  if ((session.user.organizationId || session.user.organization_id) && !tenantContext) {
+    createApiError(res, 403, "ORGANIZATION_MEMBERSHIP_REQUIRED", "Active organization membership is required.");
+    return null;
+  }
+  session.user.organizationId = tenantContext?.organizationId || null;
+  session.user.organization_id = tenantContext?.organizationId || null;
+  req.clientTenantIdentifiers = findClientTenantIdentifiers(req);
   return session.user;
 }
 
 async function userHasPermission(user, permissionKey) {
-  const permissions = await getUserPermissions(user.id);
+  const permissions = user.permissions || await getUserPermissions(user.id);
   return permissions.includes(permissionKey);
+}
+
+function requireRequestTenant(req, res, operation) {
+  const tenantContext = requireTenantContext(req, res, { createApiError, operation });
+  if (!tenantContext) return null;
+  if (!requireNoClientTenantScopeConflict(req, res, { createApiError, tenantContext })) return null;
+  return tenantContext;
+}
+
+async function requireAuthenticatedTenantUser(req, res, operation) {
+  const user = await requireAuthenticatedUser(req, res);
+  if (!user) return null;
+  const tenantContext = requireRequestTenant(req, res, operation);
+  if (!tenantContext) return null;
+  return { user, tenantContext, organizationId: tenantContext.organizationId };
+}
+
+function rejectClientTenantScope(req, res) {
+  const identifiers = findClientTenantIdentifiers(req);
+  if (!identifiers.length) return false;
+  createApiError(
+    res,
+    403,
+    "TENANT_SCOPE_REJECTED",
+    "This API derives tenant scope from the authenticated session.",
+    identifiers[0]
+  );
+  return true;
+}
+
+async function requireChatTenantUser(req, res, operation, permission = "chat.use") {
+  const tenantRequest = await requireAuthenticatedTenantUser(req, res, operation);
+  if (!tenantRequest) return null;
+  if (rejectClientTenantScope(req, res)) return null;
+  await requirePermission(tenantRequest.user, permission);
+  return tenantRequest;
+}
+
+function handleChatRouteError(res, error, fallbackCode, fallbackMessage) {
+  if (error.statusCode) {
+    return createApiError(res, error.statusCode, error.code || fallbackCode, error.message || fallbackMessage);
+  }
+  console.error(`${fallbackCode}:`, error);
+  return createApiError(res, 500, fallbackCode, fallbackMessage);
+}
+
+async function authenticateChatSocket(req) {
+  const sessionToken = parseCookies(req.headers.cookie || "")[SESSION_COOKIE];
+  const session = await getSessionByToken(sessionToken);
+  if (!session?.user) throw Object.assign(new Error("Authentication is required."), { statusCode: 401, code: "UNAUTHENTICATED" });
+  if (session.user.status && session.user.status !== "active") {
+    throw Object.assign(new Error("User account is not active."), { statusCode: 403, code: "FORBIDDEN" });
+  }
+  if (session.user.organizationStatus && session.user.organizationStatus !== "active") {
+    throw Object.assign(new Error("Organization is not active yet."), { statusCode: 403, code: "ORGANIZATION_INACTIVE" });
+  }
+  const permissions = await getUserPermissions(session.user.id);
+  session.user.permissions = permissions;
+  if (
+    !hasPlatformAdminPermission(permissions) &&
+    ["expired", "suspended", "cancelled", "rejected"].includes(session.user.subscriptionStatus || "")
+  ) {
+    throw Object.assign(new Error("Subscription is not active."), { statusCode: 403, code: "SUBSCRIPTION_INACTIVE" });
+  }
+  const tenantContext = attachTenantContext(req, session.user, { permissions });
+  if (!tenantContext) {
+    throw Object.assign(new Error("Active organization membership is required."), { statusCode: 403, code: "ORGANIZATION_MEMBERSHIP_REQUIRED" });
+  }
+  session.user.organizationId = tenantContext?.organizationId || null;
+  session.user.organization_id = tenantContext?.organizationId || null;
+  await requirePermission(session.user, "chat.use");
+  return { user: session.user, tenantContext, organizationId: tenantContext?.organizationId || null };
+}
+
+function sendChatSocketError(ws, { requestId, code = "CHAT_EVENT_FAILED", message = "Chat event failed.", ...details } = {}) {
+  sendChatSocket(ws, { type: "error", requestId, ok: false, error: { code, message, ...details } });
+}
+
+function parseChatSocketPayload(ws, schema, payload, requestId) {
+  const result = schema.safeParse(payload || {});
+  if (result.success) return result.data;
+  const issue = result.error?.issues?.[0];
+  sendChatSocketError(ws, {
+    requestId,
+    code: "VALIDATION_ERROR",
+    message: issue?.message || "Invalid chat event payload.",
+  });
+  return null;
+}
+
+function rejectChatSocketTenantScope(ws, payload, requestId) {
+  const identifiers = findClientTenantIdentifiers({ body: payload || {}, query: {}, params: {} });
+  if (!identifiers.length) return false;
+  sendChatSocketError(ws, {
+    requestId,
+    code: "TENANT_SCOPE_REJECTED",
+    message: "Chat tenant scope is derived from the authenticated session.",
+  });
+  return true;
 }
 
 async function requirePlatformAdmin(req, res) {
   const user = await requireAuthenticatedUser(req, res);
   if (!user) return null;
   try {
-    await requirePermission(user, "platform.admin");
+    await assertPlatformPermission(user);
     return user;
   } catch (error) {
+    await auditLog({
+      actorUserId: user.id,
+      organizationId: user.organizationId || user.organization_id || null,
+      action: "platform_admin.access_denied",
+      entityType: "PLATFORM_ADMIN",
+      entityId: user.id,
+      summary: "Platform admin access was denied.",
+      metadata: { apiEndpoint: `${req.method} ${req.path}` },
+      requestContext: requestContext(req),
+    });
     createApiError(res, 403, "FORBIDDEN", "Platform owner access is required.");
     return null;
   }
 }
 
+async function assertPlatformPermission(user, permissionKey = "platform.admin") {
+  const permissions = user.permissions || await getUserPermissions(user.id);
+  user.permissions = permissions;
+  if (!permissions.includes(permissionKey)) {
+    const error = new Error(`Missing permission: ${permissionKey}`);
+    error.statusCode = 403;
+    error.code = "FORBIDDEN";
+    throw error;
+  }
+  return user;
+}
+
 async function requireCompanyCeo(req, res) {
   const user = await requireAuthenticatedUser(req, res);
   if (!user) return null;
-  if (user.role !== "CEO" || !user.organizationId) {
+  const tenantContext = requireRequestTenant(req, res, "company CEO API");
+  if (!tenantContext) return null;
+  if (user.role !== "CEO") {
     createApiError(res, 403, "FORBIDDEN", "Company CEO access is required.");
     return null;
   }
+  user.organizationId = tenantContext.organizationId;
   return user;
 }
 
@@ -515,10 +1006,106 @@ async function canAccessTask(user, task, action = "view") {
   if (taskOrganizationId && taskOrganizationId !== user.organizationId) return false;
   const permissions = await getUserPermissions(user.id);
   const canViewAll = permissions.includes("tasks.view_all");
-  const isAssigned = task.assigned_to_id === user.id;
+  const assignedToId = task.assigned_to_id || task.assignedToUserId;
+  const assignedById = task.assigned_by_id || task.assignedByUserId;
+  const ownerUserId = task.owner_user_id || task.ownerUserId;
+  const isAssigned = assignedToId === user.id;
+  const isCreator = ownerUserId === user.id || assignedById === user.id;
   if (canViewAll) return true;
-  if (action === "status" && isAssigned) return true;
-  return permissions.includes("tasks.view_own") && isAssigned;
+  if (action === "status" && (isAssigned || isCreator)) return true;
+  return permissions.includes("tasks.view_own") && (isAssigned || isCreator);
+}
+
+async function canAccessShipment(user, shipment) {
+  if (!shipment) return false;
+  const shipmentOrganizationId = shipment.organization_id || shipment.organizationId;
+  if (shipmentOrganizationId && shipmentOrganizationId !== user.organizationId) return false;
+  const permissions = user.permissions || await getUserPermissions(user.id);
+  user.permissions = permissions;
+  if (permissions.includes("shipments.view_all")) return true;
+  if (!permissions.includes("shipments.view_assigned")) return false;
+  const ownerUserId = shipment.owner_user_id || shipment.ownerUserId;
+  const assignedManagerId = shipment.assigned_manager_id || shipment.assignedManagerId;
+  return ownerUserId === user.id || assignedManagerId === user.id;
+}
+
+function safeCount(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+}
+
+function toDashboardHomeDto(user, dashboardData = {}) {
+  const summary = dashboardData.summary || {};
+  const users = Array.isArray(dashboardData.management?.users) ? dashboardData.management.users : [];
+  const activeEmployees = users.filter((item) => {
+    const status = String(item.status || "active").toLowerCase();
+    return status === "active" || item.is_online === true;
+  }).length;
+
+  const myActiveTasks = (dashboardData.myTasks || [])
+    .filter((task) => !["DONE", "CANCELLED"].includes(String(task.status || "").toUpperCase()))
+    .slice(0, 5)
+    .map((task) => ({
+      id: task.id,
+      title: task.title || "وظیفه",
+      status: task.status || "TODO",
+      priority: task.priority || "MEDIUM",
+      dueDate: task.dueDate || "",
+      shipmentId: task.shipmentId || null,
+      actionUrl: task.shipmentId ? `/shipments/${task.shipmentId}` : "/tasks",
+    }));
+
+  const lastUpdatedShipments = (dashboardData.latestShipments || []).slice(0, 5).map((shipment) => ({
+    id: shipment.id,
+    shipmentCode: shipment.trackingNumber || shipment.shipmentCode || shipment.id,
+    customerCode: shipment.customerCode || shipment.customerId || "",
+    status: shipment.status || "PENDING",
+    destination: shipment.destination || "",
+    estimatedDelivery: shipment.estimatedDelivery || "",
+    updatedAt: shipment.updatedAt || "",
+    actionUrl: `/shipments/${shipment.id}`,
+  }));
+
+  return {
+    currentUser: {
+      id: user.id,
+      name: user.name || user.email || "کاربر",
+      role: user.role || "",
+    },
+    metrics: [
+      {
+        key: "activeShipments",
+        label: "محموله‌های فعال",
+        value: safeCount(summary.activeShipments),
+        actionUrl: "/shipments",
+      },
+      {
+        key: "documents",
+        label: "اسناد",
+        value: safeCount(summary.documents),
+        actionUrl: "/documents",
+      },
+      {
+        key: "activeEmployees",
+        label: "کارمندان فعال",
+        value: activeEmployees,
+        actionUrl: null,
+      },
+      {
+        key: "tasks",
+        label: "وظایف",
+        value: safeCount(summary.openTasks),
+        actionUrl: "/tasks",
+      },
+    ],
+    myActiveTasks,
+    lastUpdatedShipments,
+    aiAssistant: {
+      name: AI_MESSAGES.ASSISTANT_NAME,
+      status: "ready",
+      subtitle: "از وضعیت محموله‌ها، اسناد و وظایف بپرسید",
+    },
+  };
 }
 
 async function startServer() {
@@ -534,6 +1121,7 @@ async function startServer() {
     throw new Error(`Invalid PORT value: ${process.env.PORT}`);
   }
   app.set("trust proxy", shouldTrustProxy());
+  app.use(compression());
   app.use(express.json({ limit: "1mb" }));
   app.use((req, res, next) => {
     res.on("finish", async () => {
@@ -656,17 +1244,20 @@ async function startServer() {
 
   app.post("/api/billing/payments/:id/start", async (req, res) => {
     try {
+      const params = parseRequestValue(res, billingPaymentStartParamsSchema, req.params);
+      if (!params) return;
       if (!(await consumeRateLimit(req, res, "payment-start", {
         limit: 12,
         windowMs: 10 * 60 * 1000,
-        discriminator: req.params.id,
+        discriminator: params.id,
       }))) return;
-      const payment = await getBillingPayment(req.params.id);
+      const payment = await getBillingPayment(params.id);
       if (!payment) return createApiError(res, 404, "PAYMENT_NOT_FOUND", "Payment was not found.");
       if (!payment.signup_request_id || !payment.subscription_id || !payment.organization_id) {
         return createApiError(res, 404, "PAYMENT_NOT_FOUND", "Payment was not found.");
       }
       if (payment.status === "paid") return createApiError(res, 409, "PAYMENT_ALREADY_PAID", "Payment is already verified.");
+      if (payment.status === "superseded") return createApiError(res, 409, "PAYMENT_SUPERSEDED", "A newer payment attempt is available for this signup.");
       const gateway = await requestZarinpalPayment(req, payment);
       const updated = await markPaymentRequested(payment.id, {
         authority: gateway.authority,
@@ -687,18 +1278,31 @@ async function startServer() {
       if (!authority) return res.redirect("/signup/pending?payment=missing");
       const payment = await getBillingPaymentByAuthority(authority);
       if (!payment) return res.redirect("/signup/pending?payment=unknown");
+      if (payment.status === "paid") {
+        return res.redirect(`/signup/pending?payment=paid&request=${encodeURIComponent(payment.signup_request_id || "")}`);
+      }
+      if (payment.status === "superseded") {
+        return res.redirect(`/signup/pending?payment=failed&request=${encodeURIComponent(payment.signup_request_id || "")}`);
+      }
+      if (payment.status === "failed" && status.toUpperCase() !== "OK") {
+        return res.redirect(`/signup/pending?payment=failed&request=${encodeURIComponent(payment.signup_request_id || "")}`);
+      }
       const verification = await verifyZarinpalPayment(payment, authority, status);
-      const updated = await markPaymentVerifiedByAuthority(authority, verification);
-      await auditLog({
-        organizationId: updated?.organization_id,
-        action: verification.ok ? "billing.payment_verified" : "billing.payment_failed",
-        entityType: "billing_payment",
-        entityId: updated?.id,
-        summary: verification.ok ? "Payment was verified by Zarinpal." : "Payment verification failed.",
-        after: { authority, refId: verification.refId, ok: verification.ok },
-        requestContext: requestContext(req),
-      });
-      res.redirect(`/signup/pending?payment=${verification.ok ? "paid" : "failed"}&request=${encodeURIComponent(updated?.signup_request_id || "")}`);
+      const result = await markPaymentVerifiedByAuthorityWithResult(authority, verification);
+      const updated = result.payment;
+      if (result.transitioned) {
+        await auditLog({
+          organizationId: updated?.organization_id,
+          action: verification.ok ? "billing.payment_verified" : "billing.payment_failed",
+          entityType: "billing_payment",
+          entityId: updated?.id,
+          summary: verification.ok ? "Payment was verified by Zarinpal." : "Payment verification failed.",
+          after: { authority, refId: verification.refId, ok: verification.ok },
+          requestContext: requestContext(req),
+        });
+      }
+      const redirectStatus = updated?.status === "paid" ? "paid" : "failed";
+      res.redirect(`/signup/pending?payment=${redirectStatus}&request=${encodeURIComponent(updated?.signup_request_id || "")}`);
     } catch (error) {
       console.error("Zarinpal callback failed:", errorForLog(error));
       res.redirect("/signup/pending?payment=failed");
@@ -737,41 +1341,109 @@ async function startServer() {
 
   app.post("/api/auth/login", async (req, res) => {
     try {
-      const { email, password } = req.body || {};
-      const loginLimit = { limit: 5, windowMs: 15 * 60 * 1000 };
-      const loginKey = rateLimitKey(req, "login", email || "missing");
-      if (await isRateLimited(loginKey, loginLimit)) {
-        res.setHeader("Retry-After", "900");
-        return createApiError(res, 429, "RATE_LIMITED", "Too many login attempts. Please try again later.");
+      const email = String(req.body?.email || "").trim();
+      const password = String(req.body?.password || "");
+      const loginEmailKey = email.toLowerCase() || "missing";
+      const loginLimitMessage = "Too many login attempts. Please wait before trying again.";
+      const ipAllowed = await consumeRateLimit(req, res, "login-ip", {
+        ...PASSWORD_LOGIN_IP_LIMIT,
+        message: loginLimitMessage,
+      });
+      if (!ipAllowed) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.login_rate_limited",
+          entityType: "AUTH",
+          summary: "Login was rate-limited by IP.",
+          metadata: { reason: "ip_limit", identifierHash: auditIdentifierHash(loginEmailKey) },
+          requestContext: requestContext(req),
+        });
+        return;
       }
+
+      const accountAllowed = await consumeRateLimit(req, res, "login-account", {
+        ...PASSWORD_LOGIN_LIMIT,
+        discriminator: loginEmailKey,
+        message: loginLimitMessage,
+        field: "email",
+      });
+      if (!accountAllowed) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.login_rate_limited",
+          entityType: "AUTH",
+          summary: "Login was rate-limited by account.",
+          metadata: { reason: "account_limit", identifierHash: auditIdentifierHash(loginEmailKey) },
+          requestContext: requestContext(req),
+        });
+        return;
+      }
+
       if (!email || !password) {
-        await recordRateLimitHit(loginKey, loginLimit);
-        return res.status(400).json({ message: "Email and password are required." });
+        await auditLog({
+          actorType: "public",
+          action: "auth.login_failed",
+          entityType: "AUTH",
+          summary: "Login failed validation.",
+          metadata: { reason: "missing_credentials", identifierHash: auditIdentifierHash(loginEmailKey) },
+          requestContext: requestContext(req),
+        });
+        return createApiError(res, 400, "VALIDATION_ERROR", "Email and password are required.");
       }
 
       const user = await getUserByEmail(email);
       if (!user) {
-        await recordRateLimitHit(loginKey, loginLimit);
-        return res.status(401).json({ message: "Invalid email or password." });
+        await auditLog({
+          actorType: "public",
+          action: "auth.login_failed",
+          entityType: "AUTH",
+          summary: "Login failed with invalid credentials.",
+          metadata: { reason: "unknown_user", identifierHash: auditIdentifierHash(loginEmailKey) },
+          requestContext: requestContext(req),
+        });
+        return createApiError(res, 401, "INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
-      const loginBlock = loginBlockForUser(user);
+      const loginBlock = await loginBlockForUser(user);
       if (loginBlock) {
-        await recordRateLimitHit(loginKey, loginLimit);
+        await auditLog({
+          actorUserId: user.id,
+          organizationId: user.organization_id || user.organizationId || null,
+          action: "auth.login_failed",
+          entityType: "AUTH",
+          entityId: user.id,
+          summary: "Login was blocked by account or subscription state.",
+          metadata: { reason: loginBlock.code },
+          requestContext: requestContext(req),
+        });
         return sendLoginBlock(res, loginBlock);
       }
 
+      // TODO(phase-3): add Argon2id verification/rehash while preserving bcrypt login compatibility.
       const passwordMatches = await bcrypt.compare(password, user.password_hash);
       if (!passwordMatches) {
-        await recordRateLimitHit(loginKey, loginLimit);
-        return res.status(401).json({ message: "Invalid email or password." });
+        await auditLog({
+          actorUserId: user.id,
+          organizationId: user.organization_id || user.organizationId || null,
+          action: "auth.login_failed",
+          entityType: "AUTH",
+          entityId: user.id,
+          summary: "Login failed with invalid credentials.",
+          metadata: { reason: "bad_password", identifierHash: auditIdentifierHash(loginEmailKey) },
+          requestContext: requestContext(req),
+        });
+        return createApiError(res, 401, "INVALID_CREDENTIALS", "Invalid email or password.");
       }
 
-      await clearRateLimit(loginKey);
-      await createAuthenticatedSessionResponse(req, res, user);
+      await clearRateLimit(rateLimitKey(req, "login-ip"));
+      await clearRateLimit(rateLimitKey(req, "login-account", loginEmailKey));
+      await createAuthenticatedSessionResponse(req, res, user, {
+        method: "password",
+        auditMetadata: { identifierHash: auditIdentifierHash(loginEmailKey) },
+      });
     } catch (error) {
       console.error("Login failed:", error);
-      res.status(500).json({ message: "Login failed." });
+      createApiError(res, 500, "LOGIN_FAILED", "Login failed.");
     }
   });
 
@@ -781,15 +1453,69 @@ async function startServer() {
       if (!rawPhone) {
         return createApiError(res, 400, "VALIDATION_ERROR", "Phone number is required.", "phone");
       }
-      const allowed = await consumeRateLimit(req, res, "phone-login-request", {
-        limit: 3,
-        windowMs: 10 * 60 * 1000,
-        discriminator: rawPhone,
+      const ipAllowed = await consumeRateLimit(req, res, "phone-login-request-ip", {
+        ...PHONE_LOGIN_REQUEST_IP_LIMIT,
+        message: "Too many SMS login code requests. Please try again later.",
+        field: "phone",
       });
-      if (!allowed) return;
+      if (!ipAllowed) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.sms_code_request_rate_limited",
+          entityType: "AUTH",
+          summary: "SMS login code request was rate-limited by IP.",
+          metadata: { reason: "ip_limit", phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
+        return;
+      }
+
+      const cooldownAllowed = await consumeRateLimit(req, res, "phone-login-request-cooldown", {
+        ...PHONE_LOGIN_REQUEST_COOLDOWN,
+        discriminator: rawPhone,
+        message: "Please wait before requesting another SMS login code.",
+        field: "phone",
+      });
+      if (!cooldownAllowed) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.sms_code_request_rate_limited",
+          entityType: "AUTH",
+          summary: "SMS login code request was rate-limited by cooldown.",
+          metadata: { reason: "cooldown", phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
+        return;
+      }
+
+      const allowed = await consumeRateLimit(req, res, "phone-login-request", {
+        ...PHONE_LOGIN_REQUEST_LIMIT,
+        discriminator: rawPhone,
+        message: "Too many SMS login code requests for this phone number. Please try again later.",
+        field: "phone",
+      });
+      if (!allowed) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.sms_code_request_rate_limited",
+          entityType: "AUTH",
+          summary: "SMS login code request was rate-limited by phone.",
+          metadata: { reason: "phone_limit", phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
+        return;
+      }
 
       const user = await getUserByPhone(rawPhone);
       if (!user) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.sms_code_requested",
+          entityType: "AUTH",
+          summary: "SMS login code was requested for an unknown phone.",
+          metadata: { knownUser: false, phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
         return res.json({
           ok: true,
           data: {
@@ -799,8 +1525,20 @@ async function startServer() {
         });
       }
 
-      const loginBlock = loginBlockForUser(user);
-      if (loginBlock) return sendLoginBlock(res, loginBlock);
+      const loginBlock = await loginBlockForUser(user);
+      if (loginBlock) {
+        await auditLog({
+          actorUserId: user.id,
+          organizationId: user.organization_id || user.organizationId || null,
+          action: "auth.sms_code_request_blocked",
+          entityType: "AUTH",
+          entityId: user.id,
+          summary: "SMS login code request was blocked by account or subscription state.",
+          metadata: { reason: loginBlock.code, phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
+        return sendLoginBlock(res, loginBlock);
+      }
 
       const challenge = await createLoginSmsChallenge({
         userId: user.id,
@@ -833,6 +1571,21 @@ async function startServer() {
           },
           skipReason: providerResult.reason || "sms_provider_skipped",
         });
+        await auditLog({
+          actorUserId: user.id,
+          organizationId: user.organization_id || user.organizationId || null,
+          action: "auth.sms_code_requested",
+          entityType: "LOGIN_SMS_CHALLENGE",
+          entityId: challenge.id,
+          summary: "SMS login code was requested.",
+          metadata: {
+            phoneHash: auditIdentifierHash(rawPhone),
+            phoneLast4: phoneSuffix(rawPhone),
+            providerStatus: providerResult.skipped ? "skipped" : "sent",
+            skipReason: providerResult.reason || null,
+          },
+          requestContext: requestContext(req),
+        });
       } catch (sendError) {
         try {
           await recordImmediateSmsDelivery({
@@ -853,6 +1606,20 @@ async function startServer() {
           if (isMissingSmsSchemaError(logError)) throw logError;
           console.error("Phone login SMS failure log failed:", logError);
         }
+        await auditLog({
+          actorUserId: user.id,
+          organizationId: user.organization_id || user.organizationId || null,
+          action: "auth.sms_code_request_failed",
+          entityType: "LOGIN_SMS_CHALLENGE",
+          entityId: challenge.id,
+          summary: "SMS login code request failed.",
+          metadata: {
+            phoneHash: auditIdentifierHash(rawPhone),
+            phoneLast4: phoneSuffix(rawPhone),
+            errorCode: sendError.code || null,
+          },
+          requestContext: requestContext(req),
+        });
         throw sendError;
       }
 
@@ -885,27 +1652,74 @@ async function startServer() {
         return createApiError(res, 400, "VALIDATION_ERROR", "Phone number and SMS code are required.");
       }
       const allowed = await consumeRateLimit(req, res, "phone-login-verify", {
-        limit: 6,
-        windowMs: 15 * 60 * 1000,
+        ...PHONE_LOGIN_VERIFY_LIMIT,
         discriminator: rawPhone,
+        message: "Too many SMS code attempts. Please wait before trying again.",
+        field: "code",
       });
-      if (!allowed) return;
+      if (!allowed) {
+        await auditLog({
+          actorType: "public",
+          action: "auth.sms_verify_rate_limited",
+          entityType: "AUTH",
+          summary: "SMS login verification was rate-limited.",
+          metadata: { reason: "verify_limit", phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
+        return;
+      }
 
       const result = await verifyLoginSmsChallenge({ phone: rawPhone, code });
       if (!result.ok || !result.user) {
+        if (result.reason === "too_many_attempts") {
+          res.setHeader("Retry-After", "300");
+        }
+        await auditLog({
+          actorType: "public",
+          action: "auth.sms_verify_failed",
+          entityType: "AUTH",
+          summary: "SMS login verification failed.",
+          metadata: { reason: result.reason || "invalid_code", phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
         return createApiError(
           res,
           result.reason === "too_many_attempts" ? 429 : 401,
-          result.reason === "too_many_attempts" ? "RATE_LIMITED" : "INVALID_SMS_CODE",
+          result.reason === "too_many_attempts" ? "SMS_CODE_LOCKED" : "INVALID_SMS_CODE",
           "Invalid or expired SMS code."
         );
       }
 
-      const loginBlock = loginBlockForUser(result.user);
-      if (loginBlock) return sendLoginBlock(res, loginBlock);
+      const loginBlock = await loginBlockForUser(result.user);
+      if (loginBlock) {
+        await auditLog({
+          actorUserId: result.user.id,
+          organizationId: result.user.organization_id || result.user.organizationId || null,
+          action: "auth.sms_verify_failed",
+          entityType: "LOGIN_SMS_CHALLENGE",
+          entityId: result.challengeId,
+          summary: "SMS login verification was blocked by account or subscription state.",
+          metadata: { reason: loginBlock.code, phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+          requestContext: requestContext(req),
+        });
+        return sendLoginBlock(res, loginBlock);
+      }
 
       await clearRateLimit(rateLimitKey(req, "phone-login-verify", rawPhone));
-      await createAuthenticatedSessionResponse(req, res, result.user);
+      await auditLog({
+        actorUserId: result.user.id,
+        organizationId: result.user.organization_id || result.user.organizationId || null,
+        action: "auth.sms_verify_success",
+        entityType: "LOGIN_SMS_CHALLENGE",
+        entityId: result.challengeId,
+        summary: "SMS login verification succeeded.",
+        metadata: { phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+        requestContext: requestContext(req),
+      });
+      await createAuthenticatedSessionResponse(req, res, result.user, {
+        method: "sms",
+        auditMetadata: { challengeId: result.challengeId, phoneHash: auditIdentifierHash(rawPhone), phoneLast4: phoneSuffix(rawPhone) },
+      });
     } catch (error) {
       console.error("Phone login verify failed:", error);
       createApiError(res, 500, "PHONE_LOGIN_VERIFY_FAILED", "Could not verify SMS login code.");
@@ -926,7 +1740,21 @@ async function startServer() {
 
   app.post("/api/auth/logout", async (req, res) => {
     try {
-      await deleteSessionByToken(getSessionCookie(req));
+      const sessionToken = getSessionCookie(req);
+      const session = await getSessionByToken(sessionToken).catch(() => null);
+      await deleteSessionByToken(sessionToken);
+      if (session?.user) {
+        await auditLog({
+          actorUserId: session.user.id,
+          organizationId: session.user.organizationId || session.user.organization_id || null,
+          action: "auth.logout",
+          entityType: "SESSION",
+          entityId: session.sessionId,
+          summary: "User session was revoked by logout.",
+          metadata: { reason: "logout" },
+          requestContext: requestContext(req),
+        });
+      }
       clearSessionCookie(res);
       res.json({ ok: true, data: { loggedOut: true } });
     } catch (error) {
@@ -1043,15 +1871,18 @@ async function startServer() {
 
   app.get("/api/users/:userId/bootstrap", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "compatibility bootstrap API");
+      if (!tenantRequest) return;
+      const { user, tenantContext, organizationId } = tenantRequest;
       const targetUser = req.params.userId === user.id ? user : await getUserById(req.params.userId);
-      const sameOrganization = targetUser?.organizationId === user.organizationId;
+      const targetOrganizationId = targetUser?.organizationId || targetUser?.organization_id;
+      const sameOrganization = targetOrganizationId === organizationId;
       const canManageUsers = await userHasPermission(user, "users.manage");
       if (req.params.userId !== user.id && (!sameOrganization || !canManageUsers)) {
         return createApiError(res, 403, "FORBIDDEN", "You cannot load records for this user.");
       }
-      const records = await getRecordsForUser(req.params.userId);
+      const records = await getRecordsForUser(req.params.userId, { tenantContext });
+      if (!records) return createApiError(res, 404, "NOT_FOUND", "User records were not found.");
       res.json({ records });
     } catch (error) {
       console.error("Bootstrap failed:", error);
@@ -1061,15 +1892,18 @@ async function startServer() {
 
   app.put("/api/users/:userId/records", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "compatibility records API");
+      if (!tenantRequest) return;
+      const { user, tenantContext, organizationId } = tenantRequest;
       const targetUser = req.params.userId === user.id ? user : await getUserById(req.params.userId);
-      const sameOrganization = targetUser?.organizationId === user.organizationId;
+      const targetOrganizationId = targetUser?.organizationId || targetUser?.organization_id;
+      const sameOrganization = targetOrganizationId === organizationId;
       const canManageUsers = await userHasPermission(user, "users.manage");
       if (req.params.userId !== user.id && (!sameOrganization || !canManageUsers)) {
         return createApiError(res, 403, "FORBIDDEN", "You cannot save records for this user.");
       }
-      const result = await replaceRecordsForUser(req.params.userId, req.body?.records);
+      const result = await replaceRecordsForUser(req.params.userId, req.body?.records, { tenantContext });
+      if (!result) return createApiError(res, 404, "NOT_FOUND", "User records were not found.");
       await auditLog({
         actorUserId: user.id,
         action: "records.replace",
@@ -1092,11 +1926,15 @@ async function startServer() {
   for (const feature of ["shipments"]) {
     app.get(`/api/${feature}`, async (req, res) => {
       try {
-        const user = await requireAuthenticatedUser(req, res);
-        if (!user) return;
+        const tenantRequest = await requireAuthenticatedTenantUser(req, res, `${feature} list API`);
+        if (!tenantRequest) return;
+        const { user, organizationId } = tenantRequest;
         const config = getFeatureConfig(feature);
         await requirePermission(user, config.permission);
-        const data = await listFeatureRecords(feature, { organizationId: user.organizationId });
+        const data = await listFeatureRecords(feature, {
+          organizationId,
+          includeCustomerPrivateDetails: user.role === "CEO",
+        });
         res.json({ ok: true, data });
       } catch (error) {
         if (error.statusCode === 403) {
@@ -1108,79 +1946,284 @@ async function startServer() {
     });
   }
 
-  app.get("/api/customers", async (req, res) => {
+  app.post("/api/shipments", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "customers.view");
-      const data = await listCustomersDetailed({
-        includeArchived: req.query.includeArchived === "true",
-        search: req.query.search || "",
-        organizationId: user.organizationId,
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment create API");
+      if (!tenantRequest) return;
+      const { user, tenantContext } = tenantRequest;
+      await requirePermission(user, "shipments.create");
+      const body = parseRequestValue(res, shipmentCreateBodySchema, req.body || {});
+      if (!body) return;
+      const data = await createShipmentRecord({
+        ownerUserId: user.id,
+        actorUserId: user.id,
+        tenantContext,
+        shipment: body,
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
+      await auditLog({
+        actorUserId: user.id,
+        action: "shipment.create",
+        entityType: "SHIPMENT",
+        entityId: data.id,
+        summary: "Shipment was created.",
+        after: data,
+        requestContext: requestContext(req),
+      });
+      res.status(201).json({ ok: true, data });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      if (error.statusCode === 404) return createApiError(res, 404, error.code || "NOT_FOUND", error.message);
+      if (error.statusCode === 409) return createApiError(res, 409, error.code || "CONFLICT", error.message, "trackingNumber");
+      console.error("Create shipment failed:", error);
+      createApiError(res, 500, "CREATE_SHIPMENT_FAILED", "Could not create shipment.");
+    }
+  });
+
+  app.get("/api/shipments/exited", async (req, res) => {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "exited shipments list API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "shipments.view_all");
+      const query = parseRequestValue(res, exitedShipmentsListQuerySchema, req.query || {});
+      if (!query) return;
+      const data = await listExitedShipmentRecords({
+        organizationId,
+        filters: query,
       });
       res.json({ ok: true, data });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("List customers failed:", error);
-      createApiError(res, 500, "CUSTOMERS_LIST_FAILED", "Could not load customers.");
+      console.error("List exited shipments failed:", error);
+      createApiError(res, 500, "EXITED_SHIPMENTS_LIST_FAILED", "Could not load exited shipments.");
     }
   });
 
-  app.post("/api/customers", async (req, res) => {
+  app.post("/api/shipments/:id/exited-archive", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "customers.create");
-      if (!req.body?.company && !req.body?.name) {
-        return createApiError(res, 400, "VALIDATION_FAILED", "Customer name or company is required.", "name");
-      }
-      const created = await createCustomerRecord({ ownerUserId: user.id, actorUserId: user.id, customer: req.body });
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "exited shipment archive API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "shipments.archive");
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, exitedShipmentArchiveBodySchema, req.body || {});
+      if (!body) return;
+      const result = await moveShipmentToExitedArchive(params.id, {
+        organizationId,
+        actorUserId: user.id,
+        reason: body.reason,
+      });
+      if (!result) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       await auditLog({
         actorUserId: user.id,
-        action: "customer.create",
-        entityType: "customer",
-        entityId: created.id,
-        summary: "Customer was created.",
-        after: created,
+        organizationId,
+        action: "shipment.exited_archive",
+        entityType: "SHIPMENT",
+        entityId: params.id,
+        summary: "Shipment was moved to exited archive.",
+        before: result.before,
+        after: result.after,
+        metadata: {
+          reason: body.reason || null,
+          previousPostExitStatus: result.before?.postExitStatus || null,
+          newPostExitStatus: result.after?.postExitStatus || null,
+        },
         requestContext: requestContext(req),
       });
-      res.status(201).json({ ok: true, data: created });
+      res.json({ ok: true, data: result.after });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      if (error.statusCode === 409) return createApiError(res, 409, error.code || "DUPLICATE", error.message, "email");
-      console.error("Create customer failed:", error);
-      createApiError(res, 500, "CUSTOMER_CREATE_FAILED", "Could not create customer.");
+      console.error("Move shipment to exited archive failed:", error);
+      createApiError(res, 500, "EXITED_SHIPMENT_ARCHIVE_FAILED", "Could not move shipment to exited archive.");
     }
   });
 
-  app.get("/api/customers/:id", async (req, res) => {
+  app.post("/api/shipments/:id/exited-restore", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "customers.view");
-      const customer = await getCustomerRecord(req.params.id, { organizationId: user.organizationId });
-      if (!customer) return createApiError(res, 404, "NOT_FOUND", "Customer was not found.");
-      res.json({ ok: true, data: customer });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("Get customer failed:", error);
-      createApiError(res, 500, "CUSTOMER_GET_FAILED", "Could not load customer.");
-    }
-  });
-
-  app.patch("/api/customers/:id", async (req, res) => {
-    try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "customers.update");
-      const result = await updateCustomerRecord(req.params.id, req.body || {}, { organizationId: user.organizationId });
-      if (!result.after) return createApiError(res, 404, "NOT_FOUND", "Customer was not found.");
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "exited shipment restore API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "shipments.archive");
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const result = await restoreShipmentFromExitedArchive(params.id, {
+        organizationId,
+        actorUserId: user.id,
+      });
+      if (!result) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       await auditLog({
         actorUserId: user.id,
-        action: "customer.update",
-        entityType: "customer",
-        entityId: req.params.id,
-        summary: "Customer was updated.",
+        organizationId,
+        action: "shipment.exited_restore",
+        entityType: "SHIPMENT",
+        entityId: params.id,
+        summary: "Shipment was restored from exited archive.",
+        before: result.before,
+        after: result.after,
+        metadata: {
+          previousPostExitStatus: result.before?.postExitStatus || null,
+          newPostExitStatus: result.after?.postExitStatus || null,
+        },
+        requestContext: requestContext(req),
+      });
+      res.json({ ok: true, data: result.after });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      console.error("Restore exited shipment failed:", error);
+      createApiError(res, 500, "EXITED_SHIPMENT_RESTORE_FAILED", "Could not restore shipment from exited archive.");
+    }
+  });
+
+  app.patch("/api/shipments/:id/post-exit", async (req, res) => {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment post-exit update API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "shipments.update");
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, postExitUpdateBodySchema, req.body || {});
+      if (!body) return;
+      const result = await updateShipmentPostExitFields(params.id, body, {
+        organizationId,
+        actorUserId: user.id,
+      });
+      if (!result) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
+      await auditLog({
+        actorUserId: user.id,
+        organizationId,
+        action: "shipment.post_exit_update",
+        entityType: "SHIPMENT",
+        entityId: params.id,
+        summary: "Shipment post-exit follow-up was updated.",
+        before: result.before,
+        after: result.after,
+        metadata: {
+          previousPostExitStatus: result.before?.postExitStatus || null,
+          newPostExitStatus: result.after?.postExitStatus || null,
+          noteUpdated: body.postExitNote !== undefined,
+          followUpUpdated: body.postExitFollowUpAt !== undefined,
+        },
+        requestContext: requestContext(req),
+      });
+      res.json({ ok: true, data: result.after });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      if (error.statusCode === 404) return createApiError(res, 404, error.code || "NOT_FOUND", error.message);
+      if (error.statusCode === 409) return createApiError(res, 409, error.code || "CONFLICT", error.message);
+      console.error("Update shipment post-exit fields failed:", error);
+      createApiError(res, 500, "SHIPMENT_POST_EXIT_UPDATE_FAILED", "Could not update post-exit follow-up.");
+    }
+  });
+
+  app.get("/api/shipments/:shipmentId/chat-thread", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "shipment chat thread API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const params = parseRequestValue(res, shipmentProgressParamsSchema, req.params);
+      if (!params) return;
+
+      const shipment = await getShipmentRecord(params.shipmentId, { organizationId });
+      if (!shipment) {
+        await auditLog({
+          actorUserId: user.id,
+          organizationId,
+          action: "chat.shipment_access_denied",
+          entityType: "SHIPMENT",
+          entityId: params.shipmentId,
+          summary: "Shipment chat access was denied.",
+          metadata: { reason: "shipment_not_found_or_cross_tenant" },
+          requestContext: requestContext(req),
+        });
+        return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
+      }
+      if (!(await canAccessShipment(user, shipment))) {
+        await auditLog({
+          actorUserId: user.id,
+          organizationId,
+          action: "chat.shipment_access_denied",
+          entityType: "SHIPMENT",
+          entityId: params.shipmentId,
+          summary: "Shipment chat access was denied.",
+          metadata: { reason: "missing_shipment_access" },
+          requestContext: requestContext(req),
+        });
+        return createApiError(res, 403, "FORBIDDEN", "You cannot access this shipment chat.");
+      }
+
+      const ensured = await ensureShipmentChatThread({
+        actorUserId: user.id,
+        organizationId,
+        shipmentId: shipment.id,
+      });
+      if (ensured.created) {
+        await auditLog({
+          actorUserId: user.id,
+          organizationId,
+          action: "chat.shipment_thread_create",
+          entityType: "chat_thread",
+          entityId: ensured.id,
+          summary: "Shipment chat thread was created.",
+          after: { shipmentId: shipment.id, participantCount: ensured.participantCount },
+          requestContext: requestContext(req),
+        });
+      }
+      const thread = await getChatThreadForUser(ensured.id, user.id, { organizationId });
+      if (!thread) return createApiError(res, 404, "NOT_FOUND", "Shipment chat thread was not found.");
+      const memberIds = await listChatThreadMemberIds(ensured.id, { organizationId });
+      broadcastChat({ type: "thread.updated", payload: { threadId: ensured.id } }, { organizationId, userIds: memberIds });
+      res.status(ensured.created ? 201 : 200).json({ ok: true, data: thread });
+    } catch (error) {
+      handleChatRouteError(res, error, "SHIPMENT_CHAT_THREAD_FAILED", "Could not open shipment chat.");
+    }
+  });
+
+  app.get("/api/shipments/:id", async (req, res) => {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment get API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "shipments.view_all");
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const data = await getShipmentOperationalRecord(params.id, {
+        organizationId,
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
+      if (!data) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
+      res.json({ ok: true, data });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      console.error("Get shipment failed:", error);
+      createApiError(res, 500, "GET_SHIPMENT_FAILED", "Could not load shipment.");
+    }
+  });
+
+  async function updateShipmentOperationalEndpoint(req, res) {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment operational update API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "shipments.update");
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, shipmentOperationalFieldsBodySchema, req.body || {});
+      if (!body) return;
+      const result = await updateShipmentOperationalFields(params.id, body, {
+        organizationId,
+        actorUserId: user.id,
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
+      if (!result) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
+      await auditLog({
+        actorUserId: user.id,
+        action: body.status && body.status !== result.before?.status ? "shipment.status.update" : "shipment.update",
+        entityType: "SHIPMENT",
+        entityId: params.id,
+        summary: "Shipment operational fields were updated.",
         before: result.before,
         after: result.after,
         requestContext: requestContext(req),
@@ -1188,238 +2231,219 @@ async function startServer() {
       res.json({ ok: true, data: result.after });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      if (error.statusCode === 409) return createApiError(res, 409, error.code || "DUPLICATE", error.message, "email");
-      console.error("Update customer failed:", error);
-      createApiError(res, 500, "CUSTOMER_UPDATE_FAILED", "Could not update customer.");
+      if (error.statusCode === 404) return createApiError(res, 404, error.code || "NOT_FOUND", error.message);
+      if (error.statusCode === 409) return createApiError(res, 409, error.code || "CONFLICT", error.message, "trackingNumber");
+      console.error("Update shipment failed:", error);
+      createApiError(res, 500, "UPDATE_SHIPMENT_FAILED", "Could not update shipment.");
     }
-  });
-
-  for (const related of ["shipments", "documents", "quotations", "cheques"]) {
-    app.get(`/api/customers/:id/${related}`, async (req, res) => {
-      try {
-        const user = await requireAuthenticatedUser(req, res);
-        if (!user) return;
-        await requirePermission(user, "customers.view");
-        const data = await listCustomerRelated(req.params.id, related, { organizationId: user.organizationId });
-        if (!data) return createApiError(res, 404, "NOT_FOUND", "Customer was not found.");
-        res.json({ ok: true, data });
-      } catch (error) {
-        if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-        console.error(`Get customer ${related} failed:`, error);
-        createApiError(res, 500, "CUSTOMER_RELATED_FAILED", `Could not load customer ${related}.`);
-      }
-    });
   }
 
-  app.post("/api/customers/:id/archive", async (req, res) => {
+  app.patch("/api/shipments/:id/operational-fields", updateShipmentOperationalEndpoint);
+  app.patch("/api/shipments/:id", updateShipmentOperationalEndpoint);
+
+  app.get("/api/search", async (req, res) => {
+    const startedAt = Date.now();
+    const type = String(req.query.type || "all");
+    const limit = req.query.limit || 20;
+    const offset = req.query.offset || 0;
+    const normalizedQuery = normalizeOperationalSearchQuery(req.query.q || "");
+
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "customers.update");
-      const result = await archiveCustomerRecord(req.params.id, { organizationId: user.organizationId });
-      if (!result.after) return createApiError(res, 404, "NOT_FOUND", "Customer was not found.");
-      await auditLog({
-        actorUserId: user.id,
-        action: "customer.archive",
-        entityType: "customer",
-        entityId: req.params.id,
-        summary: "Customer was archived.",
-        before: result.before,
-        after: result.after,
-        requestContext: requestContext(req),
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "search API");
+      if (!tenantRequest) return;
+      const { user, tenantContext } = tenantRequest;
+
+      if (!normalizedQuery) {
+        return createApiError(res, 400, "SEARCH_QUERY_REQUIRED", "Search query is required.", "q");
+      }
+      if (normalizedQuery.length < 2) {
+        return createApiError(res, 400, "SEARCH_QUERY_TOO_SHORT", "Search query must be at least 2 characters.", "q");
+      }
+
+      const data = await searchOperationalRecords({
+        user,
+        tenantContext,
+        q: normalizedQuery,
+        type,
+        limit,
+        offset,
       });
-      res.json({ ok: true, data: result.after });
+
+      if (process.env.QA_SEARCH_LOGS === "true" || process.env.QA_MODE) {
+        console.info("Search query completed", {
+          queryLength: normalizedQuery.length,
+          type,
+          limit: data.limit,
+          offset: data.offset,
+          resultCount: data.results.length,
+          total: data.total,
+          durationMs: Date.now() - startedAt,
+          statusCode: 200,
+        });
+      }
+
+      res.json(data);
     } catch (error) {
+      if (process.env.QA_SEARCH_LOGS === "true" || process.env.QA_MODE) {
+        console.info("Search query failed", {
+          queryLength: normalizedQuery.length,
+          type,
+          durationMs: Date.now() - startedAt,
+          statusCode: error.statusCode || 500,
+        });
+      }
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("Archive customer failed:", error);
-      createApiError(res, 500, "CUSTOMER_ARCHIVE_FAILED", "Could not archive customer.");
+      console.error("Global search failed:", error);
+      createApiError(res, 500, "SEARCH_FAILED", "Could not run search.");
     }
   });
 
-  app.get("/api/users/online", async (req, res) => {
+  registerCustomerRoutes(app, {
+    archiveCustomerRecord,
+    auditLog,
+    createApiError,
+    createCustomerRecord,
+    getCustomerRecord,
+    listCustomerRelated,
+    listCustomersDetailed,
+    requestContext,
+    requireAuthenticatedUser,
+    requireTenantContext: requireRequestTenant,
+    requirePermission,
+    updateCustomerRecord,
+  });
+
+  registerNotificationRoutes(app, {
+    createApiError,
+    pool,
+    requireAuthenticatedUser,
+    requireTenantContext: requireRequestTenant,
+  });
+
+  registerShipmentProgressRoutes(app, {
+    auditLog,
+    createApiError,
+    getShipmentRecord,
+    getUserPermissions,
+    pool,
+    requestContext,
+    requireAuthenticatedUser,
+    requireTenantContext: requireRequestTenant,
+  });
+
+  registerDailyStatusRoutes(app, {
+    auditLog,
+    createApiError,
+    pool,
+    requestContext,
+    requireAuthenticatedTenantUser,
+    requirePermission,
+  });
+
+  registerShipmentV2Routes(app, {
+    auditLog,
+    createApiError,
+    pool,
+    requestContext,
+    requireAuthenticatedTenantUser,
+    requirePermission,
+  });
+
+  registerBusinessEntityRoutes(app, {
+    auditLog,
+    createApiError,
+    pool,
+    requestContext,
+    requireAuthenticatedTenantUser,
+  });
+
+  registerDocumentManagementCenterRoutes(app, {
+    createApiError,
+    pool,
+    requireAuthenticatedTenantUser,
+    requirePermission,
+  });
+
+  registerShipmentFormTemplateRoutes(app, {
+    auditLog,
+    createApiError,
+    pool,
+    requestContext,
+    requireAuthenticatedTenantUser,
+    requirePermission,
+  });
+
+  registerShipmentWorkflowTemplateRoutes(app, {
+    auditLog,
+    createApiError,
+    pool,
+    requestContext,
+    requireAuthenticatedTenantUser,
+    requirePermission,
+  });
+
+  registerUserRoutes(app, {
+    auditLog,
+    bcrypt,
+    createApiError,
+    createAppUserRecord,
+    deleteAppUserRecord,
+    grantUserPermission,
+    listAppUsers,
+    listRoles,
+    previewAppUserDeletion,
+    requestContext,
+    requireAuthenticatedUser,
+    requireCompanyCeo,
+    requirePermission,
+    requirePlatformAdmin,
+    requireTenantContext: requireRequestTenant,
+    revokeUserPermission,
+    updateAppUserRecord,
+    updateUserPassword,
+  });
+
+  registerRatesRoutes(app, {
+    auditLog,
+    createApiError,
+    pool,
+    requestContext,
+    requireAuthenticatedUser,
+    requirePlatformAdmin,
+  });
+
+  app.get("/api/organization/members", async (req, res) => {
     try {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
-      await requirePermission(user, "users.manage");
-      const data = (await listAppUsers({ includeSuspended: false, organizationId: user.organizationId })).filter((item) => item.isOnline);
+      const canAssignTasks = await userHasPermission(user, "tasks.assign");
+      const allowed = await Promise.all([
+        userHasPermission(user, "tasks.create"),
+        Promise.resolve(canAssignTasks),
+        userHasPermission(user, "shipment_steps.update"),
+        userHasPermission(user, "users.manage"),
+      ]);
+      if (!allowed.some(Boolean)) {
+        return createApiError(res, 403, "FORBIDDEN", "Missing permission: organization member lookup.");
+      }
+      const query = parseRequestValue(res, organizationMembersQuerySchema, req.query || {});
+      if (!query) return;
+      const data = canAssignTasks
+        ? await listOrganizationMembers({
+            organizationId: user.organizationId,
+            includeInactive: query.includeInactive,
+          })
+        : [{
+            userId: user.id,
+            displayName: user.name,
+            email: user.email,
+            roleName: user.role,
+            active: user.status !== "suspended",
+          }];
       res.json({ ok: true, data });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("Online users failed:", error);
-      createApiError(res, 500, "ONLINE_USERS_FAILED", "Could not load online users.");
-    }
-  });
-
-  app.get("/api/users", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      res.json({ ok: true, data: await listAppUsers({ organizationId: user.organizationId }) });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("List users failed:", error);
-      createApiError(res, 500, "USERS_LIST_FAILED", "Could not load users.");
-    }
-  });
-
-  app.post("/api/users", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      const allowedRoles = new Set(["CEO", "MANAGER", "OPERATIONS", "CUSTOMER_SERVICE", "FINANCE"]);
-      const role = String(req.body?.role || "OPERATIONS").toUpperCase();
-      const password = String(req.body?.password || "");
-      if (!req.body?.name || !req.body?.email || !password) {
-        return createApiError(res, 400, "VALIDATION_ERROR", "Name, email and password are required.");
-      }
-      if (password.length < 8) {
-        return createApiError(res, 400, "VALIDATION_ERROR", "Password must be at least 8 characters.", "password");
-      }
-      if (!allowedRoles.has(role)) {
-        return createApiError(res, 400, "VALIDATION_ERROR", "Selected role is not valid.", "role");
-      }
-      const passwordHash = await bcrypt.hash(password, 10);
-      const created = await createAppUserRecord({
-        actorUserId: user.id,
-        user: {
-          name: req.body.name,
-          email: req.body.email,
-          role,
-          avatar: req.body.avatar || "",
-          department: req.body.department || null,
-          status: "active",
-        },
-        passwordHash,
-      });
-      await auditLog({
-        actorUserId: user.id,
-        action: "user.create",
-        entityType: "user",
-        entityId: created.id,
-        summary: "User was created.",
-        after: created,
-        requestContext: requestContext(req),
-      });
-      res.status(201).json({ ok: true, data: created });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      if (error.statusCode === 402) return createApiError(res, 402, error.code || "PLAN_LIMIT_REACHED", error.message);
-      if (error.code === "23505") return createApiError(res, 409, "DUPLICATE_EMAIL", "A user with this email already exists.", "email");
-      console.error("Create user failed:", error);
-      createApiError(res, 500, "USER_CREATE_FAILED", "Could not create user.");
-    }
-  });
-
-  app.get("/api/users/:id", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      const data = (await listAppUsers({ organizationId: user.organizationId })).find((item) => item.id === req.params.id);
-      if (!data) return createApiError(res, 404, "NOT_FOUND", "User was not found.");
-      res.json({ ok: true, data });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("Get user failed:", error);
-      createApiError(res, 500, "USER_GET_FAILED", "Could not load user.");
-    }
-  });
-
-  app.patch("/api/users/:id", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      const target = await requireCompanyUserTarget(user, req.params.id, res);
-      if (!target) return;
-      if (req.params.id === user.id && req.body?.status && req.body.status !== "active") {
-        return createApiError(res, 400, "SELF_SUSPEND_BLOCKED", "You cannot suspend yourself.");
-      }
-      if (req.params.id === user.id && req.body?.role && req.body.role !== "CEO") {
-        return createApiError(res, 400, "SELF_ROLE_CHANGE_BLOCKED", "You cannot change your own CEO role.");
-      }
-      const result = await updateAppUserRecord(req.params.id, req.body || {}, user.id);
-      if (!result.after) return createApiError(res, 404, "NOT_FOUND", "User was not found.");
-      await auditLog({
-        actorUserId: user.id,
-        action: "user.update",
-        entityType: "user",
-        entityId: req.params.id,
-        summary: "User was updated.",
-        before: result.before,
-        after: result.after,
-        requestContext: requestContext(req),
-      });
-      res.json({ ok: true, data: result.after });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      if (error.code === "23505") return createApiError(res, 409, "DUPLICATE_EMAIL", "A user with this email already exists.", "email");
-      console.error("Update user failed:", error);
-      createApiError(res, 500, "USER_UPDATE_FAILED", "Could not update user.");
-    }
-  });
-
-  app.post("/api/users/:id/suspend", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      const target = await requireCompanyUserTarget(user, req.params.id, res);
-      if (!target) return;
-      if (req.params.id === user.id) {
-        return createApiError(res, 400, "SELF_SUSPEND_BLOCKED", "You cannot suspend yourself.");
-      }
-      const result = await updateAppUserRecord(req.params.id, { status: "suspended" }, user.id);
-      await auditLog({ actorUserId: user.id, action: "user.suspend", entityType: "user", entityId: req.params.id, summary: "User was suspended.", before: result.before, after: result.after, requestContext: requestContext(req) });
-      res.json({ ok: true, data: result.after });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "USER_SUSPEND_FAILED", "Could not suspend user.");
-    }
-  });
-
-  app.post("/api/users/:id/activate", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      const target = await requireCompanyUserTarget(user, req.params.id, res);
-      if (!target) return;
-      const result = await updateAppUserRecord(req.params.id, { status: "active" }, user.id);
-      await auditLog({ actorUserId: user.id, action: "user.activate", entityType: "user", entityId: req.params.id, summary: "User was activated.", before: result.before, after: result.after, requestContext: requestContext(req) });
-      res.json({ ok: true, data: result.after });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "USER_ACTIVATE_FAILED", "Could not activate user.");
-    }
-  });
-
-  app.patch("/api/users/:id/role", async (req, res) => {
-    try {
-      const user = await requireCompanyCeo(req, res);
-      if (!user) return;
-      const target = await requireCompanyUserTarget(user, req.params.id, res);
-      if (!target) return;
-      const allowedRoles = new Set(["CEO", "MANAGER", "OPERATIONS", "CUSTOMER_SERVICE", "FINANCE"]);
-      const role = String(req.body?.role || "").toUpperCase();
-      if (!allowedRoles.has(role)) return createApiError(res, 400, "VALIDATION_ERROR", "Selected role is not valid.", "role");
-      if (req.params.id === user.id && role !== "CEO") {
-        return createApiError(res, 400, "SELF_ROLE_CHANGE_BLOCKED", "You cannot change your own CEO role.");
-      }
-      const result = await updateAppUserRecord(req.params.id, { role }, user.id);
-      await auditLog({ actorUserId: user.id, action: "user.role_change", entityType: "user", entityId: req.params.id, summary: "User role was changed.", before: result.before, after: result.after, requestContext: requestContext(req) });
-      res.json({ ok: true, data: result.after });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "USER_ROLE_FAILED", "Could not update user role.");
-    }
-  });
-
-  app.get("/api/roles", async (req, res) => {
-    try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "users.manage");
-      res.json({ ok: true, data: await listRoles() });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "ROLES_FAILED", "Could not load roles.");
+      console.error("List organization members failed:", error);
+      createApiError(res, 500, "ORGANIZATION_MEMBERS_FAILED", "Could not load organization members.");
     }
   });
 
@@ -1559,6 +2583,8 @@ async function startServer() {
     }
   });
 
+  // Platform-admin boundary: organizationId filters below are privileged admin targeting
+  // after requirePlatformAdmin, not tenant scope for normal protected APIs.
   app.get("/api/admin/billing/invoices", async (req, res) => {
     try {
       const user = await requirePlatformAdmin(req, res);
@@ -1628,9 +2654,20 @@ async function startServer() {
     try {
       const user = await requirePlatformAdmin(req, res);
       if (!user) return;
-      const data = await markBillingPaymentManually(req.params.id, { actorUserId: user.id, status: "paid", note: req.body?.note });
+      const data = await markBillingPaymentManually(req.params.id, {
+        actorUserId: user.id,
+        status: "paid",
+        note: req.body?.note,
+        audit: {
+          actorUserId: user.id,
+          action: "billing.payment_manual_paid",
+          entityType: "billing_payment",
+          entityId: req.params.id,
+          summary: "Payment was manually marked paid.",
+          requestContext: requestContext(req),
+        },
+      });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Payment was not found.");
-      await auditLog({ actorUserId: user.id, action: "billing.payment_manual_paid", entityType: "billing_payment", entityId: req.params.id, summary: "Payment was manually marked paid.", after: data, requestContext: requestContext(req) });
       res.json({ ok: true, data });
     } catch (error) {
       createApiError(res, 500, "PAYMENT_MARK_PAID_FAILED", "Could not mark payment paid.");
@@ -1641,9 +2678,20 @@ async function startServer() {
     try {
       const user = await requirePlatformAdmin(req, res);
       if (!user) return;
-      const data = await markBillingPaymentManually(req.params.id, { actorUserId: user.id, status: "failed", note: req.body?.note });
+      const data = await markBillingPaymentManually(req.params.id, {
+        actorUserId: user.id,
+        status: "failed",
+        note: req.body?.note,
+        audit: {
+          actorUserId: user.id,
+          action: "billing.payment_manual_failed",
+          entityType: "billing_payment",
+          entityId: req.params.id,
+          summary: "Payment was manually marked failed.",
+          requestContext: requestContext(req),
+        },
+      });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Payment was not found.");
-      await auditLog({ actorUserId: user.id, action: "billing.payment_manual_failed", entityType: "billing_payment", entityId: req.params.id, summary: "Payment was manually marked failed.", after: data, requestContext: requestContext(req) });
       res.json({ ok: true, data });
     } catch (error) {
       createApiError(res, 500, "PAYMENT_MARK_FAILED_FAILED", "Could not mark payment failed.");
@@ -1695,6 +2743,41 @@ async function startServer() {
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       createApiError(res, 500, "SIGNUP_REQUESTS_FAILED", "Could not load signup requests.");
+    }
+  });
+
+  app.delete("/api/admin/signup-requests/:id/abandoned", async (req, res) => {
+    try {
+      const user = await requirePlatformAdmin(req, res);
+      if (!user) return;
+      const params = parseRequestValue(res, signupRequestParamsSchema, req.params);
+      if (!params) return;
+      const data = await deleteAbandonedSignupRequest(params.id, { actorUserId: user.id });
+      if (!data) return createApiError(res, 404, "NOT_FOUND", "Signup request was not found.");
+      await auditLog({
+        actorUserId: user.id,
+        action: "signup.abandoned_delete",
+        entityType: "signup_request",
+        entityId: params.id,
+        summary: "Abandoned unpaid signup was deleted and the owner email was released.",
+        after: data,
+        requestContext: requestContext(req),
+      });
+      res.json({ ok: true, data });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      if (error.statusCode === 409) {
+        return res.status(409).json({
+          ok: false,
+          error: {
+            code: error.code || "ABANDONED_SIGNUP_DELETE_BLOCKED",
+            message: error.message || "This signup cannot be deleted.",
+            blockers: error.blockers || [],
+          },
+        });
+      }
+      console.error("Abandoned signup delete failed:", error);
+      createApiError(res, 500, "ABANDONED_SIGNUP_DELETE_FAILED", "Could not delete abandoned signup.");
     }
   });
 
@@ -1943,10 +3026,15 @@ async function startServer() {
 
   app.get("/api/quotations", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "quotations list API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "quotations.manage");
-      const data = await listQuotations({ organizationId: user.organizationId, ownerUserId: user.role === "CEO" || user.role === "MANAGER" ? undefined : user.id, includeArchived: req.query.includeArchived === "true" });
+      const data = await listQuotations({
+        organizationId,
+        includeArchived: req.query.includeArchived === "true",
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
       res.json({ ok: true, data });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -1957,11 +3045,18 @@ async function startServer() {
 
   app.post("/api/quotations", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "quotation create API");
+      if (!tenantRequest) return;
+      const { user, tenantContext } = tenantRequest;
       await requirePermission(user, "quotations.manage");
       if (!req.body?.customerName) return createApiError(res, 400, "VALIDATION_FAILED", "Customer name is required.", "customerName");
-      const created = await createQuotationRecord({ ownerUserId: user.id, actorUserId: user.id, quote: req.body });
+      const created = await createQuotationRecord({
+        ownerUserId: user.id,
+        actorUserId: user.id,
+        tenantContext,
+        quote: req.body,
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
       await auditLog({ actorUserId: user.id, action: "quotation.create", entityType: "quotation", entityId: created.id, summary: "Quotation was created.", after: created, requestContext: requestContext(req) });
       res.status(201).json({ ok: true, data: created });
     } catch (error) {
@@ -1974,10 +3069,14 @@ async function startServer() {
 
   app.get("/api/quotations/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "quotation get API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "quotations.manage");
-      const data = await getQuotationRecord(req.params.id, { organizationId: user.organizationId });
+      const data = await getQuotationRecord(req.params.id, {
+        organizationId,
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Quotation was not found.");
       res.json({ ok: true, data });
     } catch (error) {
@@ -1988,10 +3087,14 @@ async function startServer() {
 
   app.patch("/api/quotations/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "quotation update API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "quotations.manage");
-      const result = await updateQuotationRecord(req.params.id, req.body || {}, { organizationId: user.organizationId });
+      const result = await updateQuotationRecord(req.params.id, req.body || {}, {
+        organizationId,
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
       if (!result.after) return createApiError(res, 404, "NOT_FOUND", "Quotation was not found.");
       await auditLog({ actorUserId: user.id, action: "quotation.update", entityType: "quotation", entityId: req.params.id, summary: "Quotation was updated.", before: result.before, after: result.after, requestContext: requestContext(req) });
       res.json({ ok: true, data: result.after });
@@ -2004,10 +3107,14 @@ async function startServer() {
   for (const [pathName, status] of Object.entries({ accept: "ACCEPTED", reject: "REJECTED", expire: "EXPIRED", archive: "ARCHIVED" })) {
     app.post(`/api/quotations/:id/${pathName}`, async (req, res) => {
       try {
-        const user = await requireAuthenticatedUser(req, res);
-        if (!user) return;
+        const tenantRequest = await requireAuthenticatedTenantUser(req, res, `quotation ${pathName} API`);
+        if (!tenantRequest) return;
+        const { user, organizationId } = tenantRequest;
         await requirePermission(user, "quotations.manage");
-        const result = await setQuotationStatus(req.params.id, status, req.body || {}, { organizationId: user.organizationId });
+        const result = await setQuotationStatus(req.params.id, status, req.body || {}, {
+          organizationId,
+          includeCustomerPrivateDetails: user.role === "CEO",
+        });
         if (!result.after) return createApiError(res, 404, "NOT_FOUND", "Quotation was not found.");
         await auditLog({ actorUserId: user.id, action: `quotation.${pathName}`, entityType: "quotation", entityId: req.params.id, summary: `Quotation was ${pathName}ed.`, before: result.before, after: result.after, requestContext: requestContext(req) });
         res.json({ ok: true, data: result.after });
@@ -2020,10 +3127,14 @@ async function startServer() {
 
   app.post("/api/quotations/:id/convert-to-shipment", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "quotation convert API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "quotations.manage");
-      const result = await convertQuotationToShipment(req.params.id, user.id, { organizationId: user.organizationId });
+      const result = await convertQuotationToShipment(req.params.id, user.id, {
+        organizationId,
+        includeCustomerPrivateDetails: user.role === "CEO",
+      });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Quotation was not found.");
       await auditLog({ actorUserId: user.id, action: "quotation.convert_to_shipment", entityType: "quotation", entityId: req.params.id, summary: "Quotation was converted to shipment.", after: result, requestContext: requestContext(req) });
       res.json({ ok: true, data: result });
@@ -2036,10 +3147,11 @@ async function startServer() {
 
   app.get("/api/archive", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "archive list API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "archive.view");
-      res.json({ ok: true, data: await listArchiveRecords({ organizationId: user.organizationId, search: req.query.search || "" }) });
+      res.json({ ok: true, data: await listArchiveRecords({ organizationId, search: req.query.search || "" }) });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       createApiError(res, 500, "ARCHIVE_LIST_FAILED", "Could not load archive.");
@@ -2048,10 +3160,11 @@ async function startServer() {
 
   app.get("/api/archive/search", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "archive search API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "archive.view");
-      res.json({ ok: true, data: await listArchiveRecords({ organizationId: user.organizationId, search: req.query.q || req.query.search || "" }) });
+      res.json({ ok: true, data: await listArchiveRecords({ organizationId, search: req.query.q || req.query.search || "" }) });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       createApiError(res, 500, "ARCHIVE_SEARCH_FAILED", "Could not search archive.");
@@ -2060,10 +3173,11 @@ async function startServer() {
 
   app.get("/api/archive/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "archive get API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "archive.view");
-      const data = (await listArchiveRecords({ organizationId: user.organizationId })).find((item) => item.id === req.params.id || item.entityId === req.params.id);
+      const data = (await listArchiveRecords({ organizationId })).find((item) => item.id === req.params.id || item.entityId === req.params.id);
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Archive record was not found.");
       res.json({ ok: true, data });
     } catch (error) {
@@ -2074,15 +3188,25 @@ async function startServer() {
 
   app.post("/api/archive/:entityType/:entityId", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "archive create API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "archive.view");
-      const data = await archiveEntityRecord(req.params.entityType, req.params.entityId, user.id, {
-        organizationId: user.organizationId,
+      const params = parseRequestValue(res, archiveEntityParamsSchema, req.params);
+      if (!params) return;
+      const data = await archiveEntityRecord(params.entityType, params.entityId, user.id, {
+        organizationId,
+        audit: {
+          actorUserId: user.id,
+          action: "archive.create",
+          entityType: params.entityType,
+          entityId: params.entityId,
+          summary: "Record was archived.",
+          requestContext: requestContext(req),
+        },
       });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Record was not found.");
-      await auditLog({ actorUserId: user.id, action: "archive.create", entityType: req.params.entityType, entityId: req.params.entityId, summary: "Record was archived.", after: data, requestContext: requestContext(req) });
-      res.json({ ok: true, data });
+      res.json({ ok: true, data: sanitizeDocumentEntityResponse(params.entityType, data) });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       createApiError(res, 500, "ARCHIVE_FAILED", "Could not archive record.");
@@ -2091,15 +3215,25 @@ async function startServer() {
 
   app.post("/api/archive/:entityType/:entityId/restore", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "archive restore API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "archive.view");
-      const data = await restoreEntityRecord(req.params.entityType, req.params.entityId, {
-        organizationId: user.organizationId,
+      const params = parseRequestValue(res, archiveEntityParamsSchema, req.params);
+      if (!params) return;
+      const data = await restoreEntityRecord(params.entityType, params.entityId, {
+        organizationId,
+        audit: {
+          actorUserId: user.id,
+          action: "archive.restore",
+          entityType: params.entityType,
+          entityId: params.entityId,
+          summary: "Record was restored.",
+          requestContext: requestContext(req),
+        },
       });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Record was not found.");
-      await auditLog({ actorUserId: user.id, action: "archive.restore", entityType: req.params.entityType, entityId: req.params.entityId, summary: "Record was restored.", after: data, requestContext: requestContext(req) });
-      res.json({ ok: true, data });
+      res.json({ ok: true, data: sanitizeDocumentEntityResponse(params.entityType, data) });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       createApiError(res, 500, "RESTORE_FAILED", "Could not restore record.");
@@ -2108,31 +3242,35 @@ async function startServer() {
 
   app.delete("/api/archive/:entityType/:entityId", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "archive delete API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "archive.view");
+      const params = parseRequestValue(res, archiveEntityParamsSchema, req.params);
+      if (!params) return;
       const documentStorageKeys =
-        req.params.entityType === "document"
-          ? await listDocumentStorageKeysForCleanup(req.params.entityId, { organizationId: user.organizationId })
+        params.entityType === "document"
+          ? await listDocumentStorageKeysForCleanup(params.entityId, { organizationId })
           : [];
-      const data = await deleteArchivedEntityRecord(req.params.entityType, req.params.entityId, {
-        organizationId: user.organizationId,
+      const data = await deleteArchivedEntityRecord(params.entityType, params.entityId, {
+        organizationId,
+        audit: {
+          actorUserId: user.id,
+          action: "archive.delete",
+          entityType: params.entityType,
+          entityId: params.entityId,
+          summary: "Archived record was permanently deleted.",
+          metadata: {
+            documentStorageCleanup: documentStorageKeys.length ? "deferred_after_db_commit" : "not_applicable",
+          },
+          requestContext: requestContext(req),
+        },
       });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Archived record was not found.");
-      let storageCleanup = null;
       if (documentStorageKeys.length) {
-        storageCleanup = await deleteStoredDocumentFiles(documentStorageKeys);
+        await deleteStoredDocumentFiles(documentStorageKeys);
       }
-      await auditLog({
-        actorUserId: user.id,
-        action: "archive.delete",
-        entityType: req.params.entityType,
-        entityId: req.params.entityId,
-        summary: "Archived record was permanently deleted.",
-        before: { ...data, storageCleanup },
-        requestContext: requestContext(req),
-      });
-      res.json({ ok: true, data });
+      res.json({ ok: true, data: sanitizeDocumentEntityResponse(params.entityType, data) });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       console.error("Archive delete failed:", error);
@@ -2140,112 +3278,476 @@ async function startServer() {
     }
   });
 
+  app.get("/api/chat/participants", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat participants API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const query = parseRequestValue(res, chatParticipantsQuerySchema, req.query || {});
+      if (!query) return;
+      const data = await listChatParticipants({
+        organizationId,
+        search: query.q,
+        limit: query.limit,
+        excludeUserId: user.id,
+      });
+      res.json({ ok: true, data });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_PARTICIPANTS_FAILED", "Could not load chat participants.");
+    }
+  });
+
   app.get("/api/chat/threads", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "chat.use");
-      res.json({ ok: true, data: await listChatThreads(user.id) });
+      const tenantRequest = await requireChatTenantUser(req, res, "chat threads API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      res.json({ ok: true, data: await listChatThreads(user.id, { organizationId }) });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("List chat threads failed:", error);
-      createApiError(res, 500, "CHAT_THREADS_FAILED", "Could not load chat threads.");
+      handleChatRouteError(res, error, "CHAT_THREADS_FAILED", "Could not load chat threads.");
+    }
+  });
+
+  app.get("/api/chat/media", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat media library API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "chat.media.view");
+      const query = parseRequestValue(res, chatMediaListQuerySchema, req.query || {});
+      if (!query) return;
+      const data = await listChatMediaAttachments({
+        organizationId,
+        search: query.q,
+        type: query.type,
+        includeDeleted: query.includeDeleted,
+        limit: query.limit,
+      });
+      res.json({ ok: true, data });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_MEDIA_FAILED", "Could not load chat media.");
+    }
+  });
+
+  app.post("/api/chat/direct", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat direct thread API");
+      if (!tenantRequest) return;
+      if (!(await consumeRateLimit(req, res, "chat_thread_create", { ...CHAT_THREAD_CREATE_LIMIT, discriminator: tenantRequest.user.id }))) return;
+      const body = parseRequestValue(res, chatDirectBodySchema, req.body || {});
+      if (!body) return;
+      const id = await ensureDirectChat(tenantRequest.user.id, body.userId, { organizationId: tenantRequest.organizationId });
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "chat.direct_ensure",
+        entityType: "chat_thread",
+        entityId: id,
+        summary: "Direct chat was opened.",
+        requestContext: requestContext(req),
+      });
+      const memberIds = await listChatThreadMemberIds(id, { organizationId: tenantRequest.organizationId });
+      broadcastChat({ type: "thread.updated", payload: { threadId: id } }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      res.status(201).json({ ok: true, data: { id } });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_DIRECT_FAILED", "Could not open direct chat.");
     }
   });
 
   app.post("/api/chat/threads", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, req.body?.type === "GROUP" ? "chat.manage_groups" : "chat.use");
-      const id = req.body?.type === "DM"
-        ? await ensureDirectChat(user.id, req.body.memberId)
-        : await createChatThread({ actorUserId: user.id, type: req.body?.type || "GROUP", name: req.body?.name, description: req.body?.description, memberIds: req.body?.memberIds || [] });
-      await auditLog({ actorUserId: user.id, action: "chat.thread_create", entityType: "chat_thread", entityId: id, summary: "Chat thread was created.", requestContext: requestContext(req) });
+      const tenantRequest = await requireChatTenantUser(req, res, "chat group thread API", "chat.manage_groups");
+      if (!tenantRequest) return;
+      if (!(await consumeRateLimit(req, res, "chat_thread_create", { ...CHAT_THREAD_CREATE_LIMIT, discriminator: tenantRequest.user.id }))) return;
+      const body = parseRequestValue(res, chatThreadCreateBodySchema, req.body || {});
+      if (!body) return;
+      const id = await createChatThread({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        type: "GROUP",
+        name: body.name,
+        description: body.description,
+        participantUserIds: body.participantUserIds,
+      });
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "chat.thread_create",
+        entityType: "chat_thread",
+        entityId: id,
+        summary: "Chat group was created.",
+        after: { type: "GROUP", participantCount: body.participantUserIds.length + 1 },
+        requestContext: requestContext(req),
+      });
+      const memberIds = await listChatThreadMemberIds(id, { organizationId: tenantRequest.organizationId });
+      broadcastChat({ type: "thread.updated", payload: { threadId: id } }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
       res.status(201).json({ ok: true, data: { id } });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("Create chat thread failed:", error);
-      createApiError(res, 500, "CHAT_THREAD_CREATE_FAILED", "Could not create chat thread.");
+      handleChatRouteError(res, error, "CHAT_THREAD_CREATE_FAILED", "Could not create chat thread.");
     }
   });
 
   app.get("/api/chat/threads/:id/messages", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "chat.use");
-      res.json({ ok: true, data: await listChatMessages(req.params.id, user.id, req.query.limit) });
+      const tenantRequest = await requireChatTenantUser(req, res, "chat messages API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatThreadParamsSchema, req.params);
+      const query = parseRequestValue(res, chatMessageListQuerySchema, req.query || {});
+      if (!params || !query) return;
+      res.json({
+        ok: true,
+        data: await listChatMessages(params.id, tenantRequest.user.id, {
+          organizationId: tenantRequest.organizationId,
+          limit: query.limit,
+          before: query.before,
+        }),
+      });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "CHAT_MESSAGES_FAILED", "Could not load messages.");
+      handleChatRouteError(res, error, "CHAT_MESSAGES_FAILED", "Could not load messages.");
+    }
+  });
+
+  app.post("/api/chat/threads/:id/messages", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat message send API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatThreadParamsSchema, req.params);
+      const body = parseRequestValue(res, chatMessageSendBodySchema, req.body || {});
+      if (!params || !body) return;
+      await requireChatThreadMembership(tenantRequest.user.id, params.id, { organizationId: tenantRequest.organizationId });
+      const sendLimit = consumeChatMessageSendLimit({
+        organizationId: tenantRequest.organizationId,
+        userId: tenantRequest.user.id,
+        threadId: params.id,
+      });
+      if (sendLimit.limited) {
+        sendChatRateLimitedResponse(res, sendLimit);
+        return;
+      }
+      const message = await createChatMessage({
+        threadId: params.id,
+        sender: tenantRequest.user,
+        organizationId: tenantRequest.organizationId,
+        body: body.body,
+        clientMessageId: body.clientMessageId,
+      });
+      const memberIds = await listChatThreadMemberIds(params.id, { organizationId: tenantRequest.organizationId });
+      const connectedRecipients = connectedChatUserIds(tenantRequest.organizationId, memberIds);
+      const missedRecipientIds = memberIds.filter((userId) => userId !== tenantRequest.user.id && !connectedRecipients.has(userId));
+      await createChatMessageNotifications({
+        organizationId: tenantRequest.organizationId,
+        threadId: params.id,
+        messageId: message.id,
+        senderId: tenantRequest.user.id,
+        senderName: tenantRequest.user.name,
+        recipientUserIds: missedRecipientIds,
+      });
+      broadcastChat({ type: "message.created", ok: true, payload: message }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      broadcastChat({ type: "thread.updated", payload: { threadId: params.id, lastMessage: message } }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      res.status(201).json({ ok: true, data: message });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_MESSAGE_SEND_FAILED", "Could not send message.");
+    }
+  });
+
+  app.post("/api/chat/threads/:threadId/attachments", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat attachment upload API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatThreadAttachmentParamsSchema, req.params);
+      if (!params) return;
+      if (!(await consumeRateLimit(req, res, "chat_attachment_upload", {
+        ...CHAT_ATTACHMENT_UPLOAD_LIMIT,
+        discriminator: tenantRequest.user.id,
+      }))) return;
+      await requireChatThreadMembership(tenantRequest.user.id, params.threadId, { organizationId: tenantRequest.organizationId });
+      await uploadChatAttachmentSingle(req, res);
+      const body = parseRequestValue(res, chatAttachmentUploadBodySchema, req.body || {});
+      if (!body) return;
+
+      const persisted = await persistChatAttachmentFile(req.file, { organizationId: tenantRequest.organizationId });
+      if (persisted.error) {
+        return createApiError(
+          res,
+          persisted.error.statusCode || 415,
+          persisted.error.code,
+          persisted.error.message,
+          persisted.error.field
+        );
+      }
+
+      let message = null;
+      try {
+        message = await createChatAttachmentMessage({
+          threadId: params.threadId,
+          sender: tenantRequest.user,
+          organizationId: tenantRequest.organizationId,
+          caption: body.caption || "",
+          clientMessageId: body.clientMessageId,
+          attachment: persisted,
+        });
+      } catch (error) {
+        await cleanupPersistedDocument(persisted);
+        throw error;
+      }
+      const attachment = message.attachments?.[0] || null;
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "chat.attachment.upload",
+        entityType: "chat_attachment",
+        entityId: attachment?.id || message.id,
+        summary: "Chat attachment was uploaded.",
+        after: {
+          attachmentId: attachment?.id,
+          messageId: message.id,
+          threadId: params.threadId,
+          attachmentType: attachment?.attachmentType,
+          contentType: attachment?.contentType,
+          sizeBytes: attachment?.sizeBytes,
+          fileName: attachment?.filename,
+        },
+        metadata: documentStorageAuditMetadata(persisted),
+        requestContext: requestContext(req),
+      });
+      const memberIds = await listChatThreadMemberIds(params.threadId, { organizationId: tenantRequest.organizationId });
+      const connectedRecipients = connectedChatUserIds(tenantRequest.organizationId, memberIds);
+      const missedRecipientIds = memberIds.filter((userId) => userId !== tenantRequest.user.id && !connectedRecipients.has(userId));
+      await createChatMessageNotifications({
+        organizationId: tenantRequest.organizationId,
+        threadId: params.threadId,
+        messageId: message.id,
+        senderId: tenantRequest.user.id,
+        senderName: tenantRequest.user.name,
+        recipientUserIds: missedRecipientIds,
+      });
+      broadcastChat({ type: "message.created", ok: true, payload: message }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      broadcastChat({ type: "thread.updated", payload: { threadId: params.threadId, lastMessage: message } }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      res.status(201).json({ ok: true, data: message });
+    } catch (error) {
+      if (error?.code === "LIMIT_FILE_SIZE") {
+        return createApiError(res, 413, "FILE_TOO_LARGE", "حجم فایل بیش از حد مجاز است", "file");
+      }
+      handleChatRouteError(res, error, "CHAT_ATTACHMENT_UPLOAD_FAILED", "Could not upload chat attachment.");
+    }
+  });
+
+  app.get("/api/chat/messages/:messageId/attachments/:attachmentId/preview", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat attachment preview API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatMessageAttachmentParamsSchema, req.params);
+      if (!params) return;
+      if (!(await consumeRateLimit(req, res, "chat-attachment-preview", {
+        ...DOCUMENT_DOWNLOAD_LIMIT,
+        discriminator: tenantRequest.user.id,
+      }))) return;
+      const attachment = await getChatAttachmentForDelivery(params.messageId, params.attachmentId, tenantRequest.user.id, {
+        organizationId: tenantRequest.organizationId,
+        previewOnly: true,
+      });
+      await sendStoredChatAttachment(res, attachment, { disposition: "inline" });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_ATTACHMENT_PREVIEW_FAILED", "Could not preview chat attachment.");
+    }
+  });
+
+  app.get("/api/chat/messages/:messageId/attachments/:attachmentId/download", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat attachment download API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatMessageAttachmentParamsSchema, req.params);
+      if (!params) return;
+      if (!(await consumeRateLimit(req, res, "chat-attachment-download", {
+        ...DOCUMENT_DOWNLOAD_LIMIT,
+        discriminator: tenantRequest.user.id,
+      }))) return;
+      const attachment = await getChatAttachmentForDelivery(params.messageId, params.attachmentId, tenantRequest.user.id, {
+        organizationId: tenantRequest.organizationId,
+      });
+      await sendStoredChatAttachment(res, attachment, { disposition: "attachment" });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_ATTACHMENT_DOWNLOAD_FAILED", "Could not download chat attachment.");
+    }
+  });
+
+  app.delete("/api/chat/messages/:messageId/attachments/:attachmentId", async (req, res) => {
+    try {
+      const tenantRequest = await requireChatTenantUser(req, res, "chat attachment delete API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatMessageAttachmentParamsSchema, req.params);
+      if (!params) return;
+      const canManageMedia = await userHasPermission(tenantRequest.user, "chat.media.delete");
+      const result = await deleteChatAttachment({
+        messageId: params.messageId,
+        attachmentId: params.attachmentId,
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        reason: canManageMedia ? "deleted_by_manager" : "deleted_by_sender",
+        allowAny: canManageMedia,
+      });
+      let storageCleanup = "already_deleted";
+      if (!result.alreadyDeleted) {
+        try {
+          await deleteStoredChatAttachmentFiles(result.before);
+          await markChatAttachmentStorageCleanup(params.attachmentId, { organizationId: tenantRequest.organizationId });
+          storageCleanup = "deleted";
+        } catch (cleanupError) {
+          const safeReason = safeStorageCleanupMessage(cleanupError);
+          await markChatAttachmentStorageCleanup(params.attachmentId, {
+            organizationId: tenantRequest.organizationId,
+            error: safeReason,
+          });
+          storageCleanup = "failed";
+        }
+      }
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "chat.attachment.delete",
+        entityType: "chat_attachment",
+        entityId: params.attachmentId,
+        summary: "Chat attachment was deleted.",
+        before: {
+          attachmentId: result.before.id,
+          messageId: result.before.message_id,
+          threadId: result.before.thread_id,
+          attachmentType: result.before.attachment_type,
+          contentType: result.before.content_type,
+          sizeBytes: Number(result.before.size_bytes || 0),
+          fileName: result.before.original_filename,
+        },
+        after: {
+          attachmentId: result.ui.id,
+          deletedAt: result.ui.deletedAt,
+          storageCleanup,
+        },
+        requestContext: requestContext(req),
+      });
+      const memberIds = await listChatThreadMemberIds(result.before.thread_id, { organizationId: tenantRequest.organizationId });
+      broadcastChat(
+        { type: "message.updated", ok: true, payload: { threadId: result.before.thread_id, messageId: params.messageId, attachment: result.ui } },
+        { organizationId: tenantRequest.organizationId, userIds: memberIds }
+      );
+      res.json({ ok: true, data: { attachment: result.ui, storageCleanup } });
+    } catch (error) {
+      handleChatRouteError(res, error, "CHAT_ATTACHMENT_DELETE_FAILED", "Could not delete chat attachment.");
     }
   });
 
   app.post("/api/chat/threads/:id/read", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "chat.use");
-      const data = await markChatThreadRead(req.params.id, user.id);
-      const memberIds = await listChatThreadMemberIds(req.params.id);
-      broadcastChat({ type: "message.read", payload: data }, memberIds);
+      const tenantRequest = await requireChatTenantUser(req, res, "chat read API");
+      if (!tenantRequest) return;
+      const params = parseRequestValue(res, chatThreadParamsSchema, req.params);
+      const body = parseRequestValue(res, chatReadBodySchema, req.body || {});
+      if (!params || !body) return;
+      const data = await markChatThreadRead(params.id, tenantRequest.user.id, {
+        organizationId: tenantRequest.organizationId,
+        messageId: body.messageId,
+      });
+      const memberIds = await listChatThreadMemberIds(params.id, { organizationId: tenantRequest.organizationId });
+      broadcastChat({ type: "message.read", payload: data }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
       res.json({ ok: true, data });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "CHAT_READ_FAILED", "Could not mark thread read.");
+      handleChatRouteError(res, error, "CHAT_READ_FAILED", "Could not mark thread read.");
     }
   });
 
-  app.post("/api/chat/threads/:id/members", async (req, res) => {
+  app.post("/api/chat/threads/:id/participants", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "chat.manage_groups");
-      if (!(await userCanAccessThread(user.id, req.params.id))) {
-        return createApiError(res, 403, "FORBIDDEN", "You cannot manage this chat thread.");
-      }
-      await addChatThreadMember(req.params.id, req.body?.userId);
-      await auditLog({ actorUserId: user.id, action: "chat.member_add", entityType: "chat_thread", entityId: req.params.id, summary: "Chat member was added.", after: req.body, requestContext: requestContext(req) });
-      const memberIds = await listChatThreadMemberIds(req.params.id);
-      broadcastChat({ type: "thread.updated", payload: { threadId: req.params.id } }, memberIds);
-      res.json({ ok: true, data: { threadId: req.params.id, userId: req.body?.userId } });
+      const tenantRequest = await requireChatTenantUser(req, res, "chat participant add API", "chat.manage_groups");
+      if (!tenantRequest) return;
+      if (!(await consumeRateLimit(req, res, "chat_participant_change", { ...CHAT_PARTICIPANT_CHANGE_LIMIT, discriminator: tenantRequest.user.id }))) return;
+      const params = parseRequestValue(res, chatThreadParamsSchema, req.params);
+      const body = parseRequestValue(res, chatParticipantBodySchema, req.body || {});
+      if (!params || !body) return;
+      const data = await addChatThreadMember(params.id, body.userId, {
+        organizationId: tenantRequest.organizationId,
+        actorUserId: tenantRequest.user.id,
+      });
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "chat.participant_add",
+        entityType: "chat_thread",
+        entityId: params.id,
+        summary: "Chat participant was added.",
+        after: { userId: body.userId },
+        requestContext: requestContext(req),
+      });
+      const memberIds = await listChatThreadMemberIds(params.id, { organizationId: tenantRequest.organizationId });
+      broadcastChat({ type: "participant.updated", payload: data }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      broadcastChat({ type: "thread.updated", payload: { threadId: params.id } }, { organizationId: tenantRequest.organizationId, userIds: memberIds });
+      res.json({ ok: true, data });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "CHAT_MEMBER_ADD_FAILED", "Could not add chat member.");
+      handleChatRouteError(res, error, "CHAT_PARTICIPANT_ADD_FAILED", "Could not add chat participant.");
     }
   });
 
-  app.delete("/api/chat/threads/:id/members/:userId", async (req, res) => {
+  app.delete("/api/chat/threads/:id/participants/:userId", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "chat.manage_groups");
-      if (!(await userCanAccessThread(user.id, req.params.id))) {
-        return createApiError(res, 403, "FORBIDDEN", "You cannot manage this chat thread.");
-      }
-      const memberIds = await listChatThreadMemberIds(req.params.id);
-      await removeChatThreadMember(req.params.id, req.params.userId);
-      await auditLog({ actorUserId: user.id, action: "chat.member_remove", entityType: "chat_thread", entityId: req.params.id, summary: "Chat member was removed.", after: { userId: req.params.userId }, requestContext: requestContext(req) });
-      broadcastChat({ type: "thread.updated", payload: { threadId: req.params.id } }, memberIds);
-      res.json({ ok: true, data: { threadId: req.params.id, userId: req.params.userId } });
+      const tenantRequest = await requireChatTenantUser(req, res, "chat participant remove API", "chat.manage_groups");
+      if (!tenantRequest) return;
+      if (!(await consumeRateLimit(req, res, "chat_participant_change", { ...CHAT_PARTICIPANT_CHANGE_LIMIT, discriminator: tenantRequest.user.id }))) return;
+      const params = parseRequestValue(res, chatThreadParticipantParamsSchema, req.params);
+      if (!params) return;
+      const memberIdsBefore = await listChatThreadMemberIds(params.id, { organizationId: tenantRequest.organizationId });
+      const data = await removeChatThreadMember(params.id, params.userId, {
+        organizationId: tenantRequest.organizationId,
+        actorUserId: tenantRequest.user.id,
+      });
+      await auditLog({
+        actorUserId: tenantRequest.user.id,
+        organizationId: tenantRequest.organizationId,
+        action: "chat.participant_remove",
+        entityType: "chat_thread",
+        entityId: params.id,
+        summary: "Chat participant was removed.",
+        after: { userId: params.userId },
+        requestContext: requestContext(req),
+      });
+      broadcastChat({ type: "participant.updated", payload: data }, { organizationId: tenantRequest.organizationId, userIds: memberIdsBefore });
+      broadcastChat({ type: "thread.updated", payload: { threadId: params.id } }, { organizationId: tenantRequest.organizationId, userIds: memberIdsBefore });
+      res.json({ ok: true, data });
     } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      createApiError(res, 500, "CHAT_MEMBER_REMOVE_FAILED", "Could not remove chat member.");
+      handleChatRouteError(res, error, "CHAT_PARTICIPANT_REMOVE_FAILED", "Could not remove chat participant.");
     }
   });
 
   app.get("/api/tasks", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "tasks list API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const query = parseRequestValue(res, taskListQuerySchema, req.query || {});
+      if (!query) return;
       const canViewAll = await userHasPermission(user, "tasks.view_all");
       const canViewOwn = canViewAll || (await userHasPermission(user, "tasks.view_own"));
       if (!canViewOwn) {
         return createApiError(res, 403, "FORBIDDEN", "Missing permission: tasks.view_own");
       }
       const data = await listTasks(
-        canViewAll ? { organizationId: user.organizationId, includeAll: true } : { organizationId: user.organizationId, assignedToId: user.id, includeAll: true }
+        canViewAll
+            ? {
+              organizationId,
+              includeAll: true,
+              shipmentId: query.shipmentId,
+              assignedToId: query.assignedTo === "me" ? user.id : undefined,
+              assignedById: query.assignedBy === "me" ? user.id : undefined,
+              status: query.status,
+              blocked: query.blocked,
+              overdue: query.overdue,
+            }
+            : {
+              organizationId,
+              participantUserId: user.id,
+              includeAll: true,
+              shipmentId: query.shipmentId,
+              status: query.status,
+              blocked: query.blocked,
+              overdue: query.overdue,
+            }
       );
       res.json({ ok: true, data });
     } catch (error) {
@@ -2256,10 +3758,11 @@ async function startServer() {
 
   app.get("/api/tasks/my", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "my tasks API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "tasks.view_own");
-      const data = await listTasks({ organizationId: user.organizationId, assignedToId: user.id, includeAll: true });
+      const data = await listTasks({ organizationId, assignedToId: user.id, includeAll: true });
       res.json({ ok: true, data });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -2270,10 +3773,11 @@ async function startServer() {
 
   app.get("/api/tasks/team", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "team tasks API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "tasks.view_all");
-      const data = await listTasks({ organizationId: user.organizationId, includeAll: true });
+      const data = await listTasks({ organizationId, includeAll: true });
       res.json({ ok: true, data });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -2284,9 +3788,10 @@ async function startServer() {
 
   app.get("/api/tasks/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      const task = await getTaskRecord(req.params.id, { organizationId: user.organizationId });
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "task get API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const task = await getTaskRecord(req.params.id, { organizationId });
       if (!task) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
       if (!(await canAccessTask(user, task))) {
         return createApiError(res, 403, "FORBIDDEN", "You cannot view this task.");
@@ -2300,28 +3805,199 @@ async function startServer() {
 
   app.post("/api/tasks", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "tasks.create");
-      const title = String(req.body?.title || "").trim();
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "task create API");
+      if (!tenantRequest) return;
+      const { user, tenantContext, organizationId } = tenantRequest;
+      const body = req.body || {};
+      const isWorkflowLinkedTask = Boolean(
+        body.workflowInstanceId || body.workflowStepCode || body.workflowBlockerId || body.blockerCode
+      );
+      const canCreateTask = await userHasPermission(user, "tasks.create");
+      const canCreateWorkflowTask =
+        isWorkflowLinkedTask &&
+        ((await userHasPermission(user, "shipments.update")) || (await userHasPermission(user, "shipment_steps.update")));
+      if (!canCreateTask && !canCreateWorkflowTask) {
+        return createApiError(res, 403, "FORBIDDEN", "Missing permission: tasks.create");
+      }
+      const title = String(body.title || "").trim();
       if (!title) return createApiError(res, 400, "VALIDATION_ERROR", "Task title is required.", "title");
-      const assignedToUserId = req.body?.assignedToUserId || user.id;
+      const assignedToUserId = body.assignedToUserId || user.id;
       if (assignedToUserId !== user.id) {
         await requirePermission(user, "tasks.assign");
       }
+      const assignee = await getUserById(assignedToUserId);
+      if (!assignee || assignee.organization_id !== organizationId || assignee.status === "suspended") {
+        return createApiError(res, 404, "ASSIGNEE_NOT_FOUND", "Assignee was not found.");
+      }
+      if (body.shipmentId) {
+        const linkedShipment = await getShipmentRecord(body.shipmentId, { organizationId });
+        if (!linkedShipment) {
+          return createApiError(res, 404, "SHIPMENT_NOT_FOUND", "Linked shipment was not found.", "shipmentId");
+        }
+      }
+      let workflowInstanceId = body.workflowInstanceId || null;
+      let currentWorkflow = null;
+      if (workflowInstanceId) {
+        const submittedWorkflowResult = await pool.query(
+          `SELECT id
+           FROM shipment_workflow_instances
+           WHERE id = $1
+             AND organization_id = $2
+             AND ($3::text IS NULL OR shipment_id = $3)
+           LIMIT 1`,
+          [workflowInstanceId, organizationId, body.shipmentId || null]
+        );
+        currentWorkflow = submittedWorkflowResult.rows[0] || null;
+        if (!currentWorkflow) workflowInstanceId = null;
+      }
+      if (body.shipmentId && isWorkflowLinkedTask) {
+        if (!currentWorkflow) {
+          const currentWorkflowResult = await pool.query(
+            `SELECT id
+             FROM shipment_workflow_instances
+             WHERE shipment_id = $1
+               AND organization_id = $2
+             ORDER BY updated_at DESC
+             LIMIT 1`,
+            [body.shipmentId, organizationId]
+          );
+          currentWorkflow = currentWorkflowResult.rows[0] || null;
+        }
+        if (!currentWorkflow) {
+          const startedWorkflow = await startShipmentWorkflowRecord(pool, {
+            shipmentId: body.shipmentId,
+            organizationId,
+            actorUserId: user.id,
+            metadata: { source: "task.create" },
+          });
+          currentWorkflow = startedWorkflow?.workflow ? { id: startedWorkflow.workflow.id } : null;
+        }
+        if (currentWorkflow?.id) workflowInstanceId = currentWorkflow.id;
+      }
+      if (body.workflowInstanceId && !workflowInstanceId && !currentWorkflow?.id && !body.shipmentId) {
+        return createApiError(res, 404, "WORKFLOW_NOT_FOUND", "Workflow instance was not found.", "workflowInstanceId");
+      }
+      let workflowBlockerId = body.workflowBlockerId || null;
+      if (body.workflowBlockerId) {
+        const blockerResult = await pool.query(
+          `SELECT id
+           FROM shipment_workflow_blockers
+           WHERE id = $1
+             AND organization_id = $2
+             AND ($3::text IS NULL OR shipment_id = $3)
+          LIMIT 1`,
+          [body.workflowBlockerId, organizationId, body.shipmentId || null]
+        );
+        if (blockerResult.rows[0]) {
+          workflowBlockerId = blockerResult.rows[0].id;
+        } else if (body.shipmentId && body.blockerCode) {
+          const fallbackBlockerResult = await pool.query(
+            `SELECT id
+             FROM shipment_workflow_blockers
+             WHERE organization_id = $1
+               AND shipment_id = $2
+               AND blocker_code = $3
+               AND ($4::text IS NULL OR step_code = $4)
+               AND ($5::text IS NULL OR workflow_instance_id = $5)
+               AND status = 'open'
+             ORDER BY updated_at DESC, created_at DESC
+             LIMIT 1`,
+            [
+              organizationId,
+              body.shipmentId,
+              body.blockerCode,
+              body.workflowStepCode || null,
+              workflowInstanceId || null,
+            ]
+          );
+          if (fallbackBlockerResult.rows[0]) {
+            workflowBlockerId = fallbackBlockerResult.rows[0].id;
+          } else {
+            if (!workflowInstanceId) {
+              return createApiError(res, 404, "BLOCKER_NOT_FOUND", "Workflow blocker was not found.", "workflowBlockerId");
+            }
+            const recoveredBlockerResult = await pool.query(
+              `INSERT INTO shipment_workflow_blockers (
+                 id, organization_id, workflow_instance_id, shipment_id, step_code, blocker_code,
+                 status, internal_note, metadata, created_by_user_id
+               )
+               VALUES ($1, $2, $3, $4, $5, $6, 'open', $7, $8::jsonb, $9)
+               ON CONFLICT (id) DO NOTHING
+               RETURNING id`,
+              [
+                body.workflowBlockerId,
+                organizationId,
+                workflowInstanceId,
+                body.shipmentId,
+                body.workflowStepCode || null,
+                body.blockerCode,
+                body.description || body.assignmentNote || null,
+                JSON.stringify({ source: "task.create", recovered: true }),
+                user.id,
+              ]
+            );
+            if (recoveredBlockerResult.rows[0]) {
+              workflowBlockerId = recoveredBlockerResult.rows[0].id;
+            } else {
+              const recoveredVerification = await pool.query(
+                `SELECT id
+                 FROM shipment_workflow_blockers
+                 WHERE id = $1
+                   AND organization_id = $2
+                   AND shipment_id = $3
+                 LIMIT 1`,
+                [body.workflowBlockerId, organizationId, body.shipmentId]
+              );
+              if (!recoveredVerification.rows[0]) {
+                return createApiError(res, 404, "BLOCKER_NOT_FOUND", "Workflow blocker was not found.", "workflowBlockerId");
+              }
+              workflowBlockerId = recoveredVerification.rows[0].id;
+            }
+            await pool.query(
+              `INSERT INTO shipment_workflow_events (
+                 id, organization_id, workflow_instance_id, shipment_id, event_type,
+                 step_code, blocker_id, blocker_code, actor_user_id, internal_note, metadata
+               )
+               VALUES ($1, $2, $3, $4, 'workflow.blocker.recovered_for_task',
+                       $5, $6, $7, $8, $9, $10::jsonb)
+               ON CONFLICT (id) DO NOTHING`,
+              [
+                crypto.randomUUID(),
+                organizationId,
+                workflowInstanceId,
+                body.shipmentId,
+                body.workflowStepCode || null,
+                workflowBlockerId,
+                body.blockerCode,
+                user.id,
+                "Recovered a missing blocker while assigning a workflow task.",
+                JSON.stringify({ source: "task.create" }),
+              ]
+            );
+          }
+        } else {
+          return createApiError(res, 404, "BLOCKER_NOT_FOUND", "Workflow blocker was not found.", "workflowBlockerId");
+        }
+      }
       const task = await createTaskRecord({
         ownerUserId: user.id,
+        tenantContext,
         title,
-        description: req.body?.description,
-        status: req.body?.status,
-        priority: req.body?.priority,
+        description: body.description,
+        status: body.status,
+        priority: body.priority,
         assignedToUserId,
-        assignedToName: req.body?.assignedToName || user.name,
+        assignedToName: assignee.name || body.assignedToName || user.name,
         assignedByUserId: user.id,
         assignedByName: user.name,
-        dueDate: req.body?.dueDate,
-        deadline: req.body?.deadline,
-        shipmentId: req.body?.shipmentId || null,
+        dueDate: body.dueDate,
+        deadline: body.deadline,
+        shipmentId: body.shipmentId || null,
+        assignmentNote: body.assignmentNote,
+        workflowInstanceId,
+        workflowStepCode: body.workflowStepCode || null,
+        workflowBlockerId,
+        blockerCode: body.blockerCode || null,
       });
       await auditLog({
         actorUserId: user.id,
@@ -2342,17 +4018,23 @@ async function startServer() {
 
   app.patch("/api/tasks/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      const before = await getTaskRecord(req.params.id, { organizationId: user.organizationId });
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "task update API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const before = await getTaskRecord(req.params.id, { organizationId });
       if (!before) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
       if (!(await canAccessTask(user, before))) {
         return createApiError(res, 403, "FORBIDDEN", "You cannot update this task.");
       }
       if (req.body?.assignedToUserId && req.body.assignedToUserId !== before.assigned_to_id) {
         await requirePermission(user, "tasks.assign");
+        const assignee = await getUserById(req.body.assignedToUserId);
+        if (!assignee || assignee.organization_id !== organizationId || assignee.status === "suspended") {
+          return createApiError(res, 404, "ASSIGNEE_NOT_FOUND", "Assignee was not found.", "assignedToUserId");
+        }
+        req.body.assignedToName = assignee.name;
       }
-      const result = await updateTaskRecord(req.params.id, req.body || {}, { organizationId: user.organizationId });
+      const result = await updateTaskRecord(req.params.id, { ...(req.body || {}), actorUserId: user.id }, { organizationId });
       await auditLog({
         actorUserId: user.id,
         action: "task.update",
@@ -2371,16 +4053,124 @@ async function startServer() {
     }
   });
 
-  async function updateTaskStatusEndpoint(req, res, status, action) {
+  app.patch("/api/tasks/:taskId/assign", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      const before = await getTaskRecord(req.params.id, { organizationId: user.organizationId });
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "task assign API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const params = parseRequestValue(res, taskParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, taskAssignBodySchema, req.body || {});
+      if (!body) return;
+      const before = await getTaskRecord(params.taskId, { organizationId });
+      if (!before) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
+      const canAssign = (await userHasPermission(user, "tasks.assign")) || before.owner_user_id === user.id || before.assigned_by_id === user.id;
+      if (!canAssign) {
+        return createApiError(res, 403, "FORBIDDEN", "Missing permission: tasks.assign");
+      }
+      const result = await assignTaskRecord(params.taskId, {
+        assignedToUserId: body.assignedToUserId,
+        actorUser: user,
+        dueAt: body.dueAt,
+        dueDate: body.dueDate,
+        priority: body.priority,
+        assignmentNote: body.assignmentNote,
+        status: body.status || "assigned",
+        organizationId,
+      });
+      if (!result) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
+      if (result.invalidAssignee) return createApiError(res, 404, "ASSIGNEE_NOT_FOUND", "Assignee was not found.", "assignedToUserId");
+      await auditLog({
+        actorUserId: user.id,
+        action: "task.assign",
+        entityType: "TASK",
+        entityId: params.taskId,
+        summary: "Task was assigned.",
+        before: result.before,
+        after: result.after,
+        requestContext: requestContext(req),
+      });
+      res.json({ ok: true, data: result.after });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      console.error("Assign task failed:", error);
+      createApiError(res, 500, "TASK_ASSIGN_FAILED", "Could not assign task.");
+    }
+  });
+
+  app.patch("/api/tasks/:taskId/status", async (req, res) => {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "task status API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const params = parseRequestValue(res, taskParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, taskStatusBodySchema, req.body || {});
+      if (!body) return;
+      const before = await getTaskRecord(params.taskId, { organizationId });
       if (!before) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
       if (!(await canAccessTask(user, before, "status"))) {
         return createApiError(res, 403, "FORBIDDEN", "You cannot update this task status.");
       }
-      const result = await setTaskStatus(req.params.id, status, { organizationId: user.organizationId });
+      const result = await updateTaskStatusRecord(params.taskId, {
+        status: body.status,
+        note: body.note,
+        actorUser: user,
+        organizationId,
+      });
+      if (!result) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
+      await auditLog({
+        actorUserId: user.id,
+        action: "task.status_update",
+        entityType: "TASK",
+        entityId: params.taskId,
+        summary: `Task status changed to ${result.after.status}.`,
+        before: result.before,
+        after: result.after,
+        requestContext: requestContext(req),
+      });
+      res.json({ ok: true, data: result.after });
+    } catch (error) {
+      console.error("Update task status failed:", error);
+      createApiError(res, 500, "TASK_STATUS_UPDATE_FAILED", "Could not update task status.");
+    }
+  });
+
+  app.get("/api/tasks/:taskId/events", async (req, res) => {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "task events API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const params = parseRequestValue(res, taskParamsSchema, req.params);
+      if (!params) return;
+      const task = await getTaskRecord(params.taskId, { organizationId });
+      if (!task) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
+      if (!(await canAccessTask(user, task))) {
+        return createApiError(res, 403, "FORBIDDEN", "You cannot view this task.");
+      }
+      const data = await listTaskEvents(params.taskId, { organizationId });
+      res.json({ ok: true, data });
+    } catch (error) {
+      console.error("List task events failed:", error);
+      createApiError(res, 500, "TASK_EVENTS_FAILED", "Could not load task events.");
+    }
+  });
+
+  async function updateTaskStatusEndpoint(req, res, status, action) {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, `${action} API`);
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      const before = await getTaskRecord(req.params.id, { organizationId });
+      if (!before) return createApiError(res, 404, "NOT_FOUND", "Task was not found.");
+      if (!(await canAccessTask(user, before, "status"))) {
+        return createApiError(res, 403, "FORBIDDEN", "You cannot update this task status.");
+      }
+      const result = await updateTaskStatusRecord(req.params.id, {
+        status,
+        actorUser: user,
+        organizationId,
+      });
       await auditLog({
         actorUserId: user.id,
         action,
@@ -2410,9 +4200,12 @@ async function startServer() {
 
   app.get("/api/shipments/:id/steps", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      const data = await listShipmentSteps(req.params.id, user.id, { organizationId: user.organizationId });
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment steps API");
+      if (!tenantRequest) return;
+      const { organizationId } = tenantRequest;
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const data = await listShipmentSteps(params.id, null, { organizationId });
       res.json({ ok: true, data });
     } catch (error) {
       console.error("List shipment steps failed:", error);
@@ -2422,12 +4215,15 @@ async function startServer() {
 
   app.patch("/api/shipments/:id/steps/:stepId", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment step update API");
+      if (!tenantRequest) return;
+      const { user } = tenantRequest;
       await requirePermission(user, "shipment_steps.update");
+      const params = parseRequestValue(res, shipmentStepParamsSchema, req.params);
+      if (!params) return;
       const result = await updateShipmentStepRecord({
-        shipmentId: req.params.id,
-        stepId: req.params.stepId,
+        shipmentId: params.id,
+        stepId: params.stepId,
         updates: req.body || {},
         actorUser: user,
       });
@@ -2436,7 +4232,7 @@ async function startServer() {
         actorUserId: user.id,
         action: "shipment_step.update",
         entityType: "SHIPMENT_STEP",
-        entityId: req.params.stepId,
+        entityId: params.stepId,
         summary: "Shipment step was updated.",
         before: result.before,
         after: { step: result.after, workflowTask: result.workflowTask },
@@ -2452,18 +4248,57 @@ async function startServer() {
 
   app.post("/api/shipments/:id/tasks", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "shipment task create API");
+      if (!tenantRequest) return;
+      const { user, tenantContext, organizationId } = tenantRequest;
       await requirePermission(user, "tasks.create");
-      const assignedToUserId = req.body?.assignedToUserId || user.id;
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, shipmentTaskBodySchema, req.body || {});
+      if (!body) return;
+      const assignedToUserId = body.assignedToUserId || user.id;
       if (assignedToUserId !== user.id) {
         await requirePermission(user, "tasks.assign");
       }
+      const assignee = await getUserById(assignedToUserId);
+      if (!assignee || assignee.organization_id !== organizationId || assignee.status === "suspended") {
+        return createApiError(res, 404, "ASSIGNEE_NOT_FOUND", "Assignee was not found.", "assignedToUserId");
+      }
+      if (body.workflowInstanceId) {
+        const workflowResult = await pool.query(
+          `SELECT id
+           FROM shipment_workflow_instances
+           WHERE id = $1
+             AND organization_id = $2
+             AND shipment_id = $3
+           LIMIT 1`,
+          [body.workflowInstanceId, organizationId, params.id]
+        );
+        if (!workflowResult.rows[0]) {
+          return createApiError(res, 404, "WORKFLOW_NOT_FOUND", "Workflow instance was not found.", "workflowInstanceId");
+        }
+      }
+      if (body.workflowBlockerId) {
+        const blockerResult = await pool.query(
+          `SELECT id
+           FROM shipment_workflow_blockers
+           WHERE id = $1
+             AND organization_id = $2
+             AND shipment_id = $3
+           LIMIT 1`,
+          [body.workflowBlockerId, organizationId, params.id]
+        );
+        if (!blockerResult.rows[0]) {
+          return createApiError(res, 404, "BLOCKER_NOT_FOUND", "Workflow blocker was not found.", "workflowBlockerId");
+        }
+      }
+      body.assignedToName = assignee.name || body.assignedToName;
       const result = await createShipmentTaskRecord({
-        shipmentId: req.params.id,
-        stepId: req.body?.stepId,
+        shipmentId: params.id,
+        stepId: body.stepId,
         actorUser: user,
-        task: req.body || {},
+        tenantContext,
+        task: body,
       });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       await auditLog({
@@ -2486,11 +4321,12 @@ async function startServer() {
 
   app.get("/api/cheques/due-soon", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "due cheques API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "cheques.manage");
       const data = await listDueSoonCheques({
-        organizationId: user.organizationId,
+        organizationId,
         ownerUserId: user.id,
         days: req.query.days || 7,
       });
@@ -2504,11 +4340,12 @@ async function startServer() {
 
   app.get("/api/cheques", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheques list API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "cheques.manage");
       const data = await listCheques({
-        organizationId: user.organizationId,
+        organizationId,
         ownerUserId: user.id,
         includeArchived: req.query.includeArchived === "true",
       });
@@ -2522,13 +4359,14 @@ async function startServer() {
 
   app.post("/api/cheques", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheque create API");
+      if (!tenantRequest) return;
+      const { user, tenantContext } = tenantRequest;
       await requirePermission(user, "cheques.manage");
       if (!req.body?.bankName || !req.body?.chequeNumber || Number(req.body?.amount || 0) <= 0) {
         return createApiError(res, 400, "VALIDATION_ERROR", "Bank, cheque number, and positive amount are required.");
       }
-      const data = await createChequeRecord({ ownerUserId: user.id, actorUserId: user.id, cheque: req.body });
+      const data = await createChequeRecord({ ownerUserId: user.id, actorUserId: user.id, tenantContext, cheque: req.body });
       await auditLog({
         actorUserId: user.id,
         action: "cheque.create",
@@ -2548,10 +4386,11 @@ async function startServer() {
 
   app.get("/api/cheques/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheque get API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "cheques.manage");
-      const data = await getChequeRecord(req.params.id, { organizationId: user.organizationId });
+      const data = await getChequeRecord(req.params.id, { organizationId });
       if (!data) return createApiError(res, 404, "NOT_FOUND", "Cheque was not found.");
       res.json({ ok: true, data });
     } catch (error) {
@@ -2563,10 +4402,11 @@ async function startServer() {
 
   app.patch("/api/cheques/:id", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheque update API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "cheques.manage");
-      const result = await updateChequeRecord(req.params.id, req.body || {}, { organizationId: user.organizationId });
+      const result = await updateChequeRecord(req.params.id, req.body || {}, { organizationId });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Cheque was not found.");
       await auditLog({
         actorUserId: user.id,
@@ -2588,10 +4428,11 @@ async function startServer() {
 
   app.post("/api/cheques/:id/status", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheque status API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "cheques.manage");
-      const result = await updateChequeRecord(req.params.id, { status: req.body?.status }, { organizationId: user.organizationId });
+      const result = await updateChequeRecord(req.params.id, { status: req.body?.status }, { organizationId });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Cheque was not found.");
       await auditLog({
         actorUserId: user.id,
@@ -2613,10 +4454,11 @@ async function startServer() {
 
   app.post("/api/cheques/:id/archive", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "cheque archive API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "cheques.manage");
-      const result = await archiveChequeRecord(req.params.id, { organizationId: user.organizationId });
+      const result = await archiveChequeRecord(req.params.id, { organizationId });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Cheque was not found.");
       await auditLog({
         actorUserId: user.id,
@@ -2642,7 +4484,7 @@ async function startServer() {
       if (!user) return;
       const canManage = await userHasPermission(user, "compliance.manage");
       const data = await listComplianceMeetings(
-        canManage ? { organizationId: user.organizationId, ownerUserId: user.id } : { organizationId: user.organizationId, assignedToId: user.id }
+        canManage ? { organizationId: user.organizationId } : { organizationId: user.organizationId, assignedToId: user.id }
       );
       res.json({ ok: true, data });
     } catch (error) {
@@ -2653,16 +4495,18 @@ async function startServer() {
 
   app.post("/api/compliance-meetings", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "compliance meeting create API");
+      if (!tenantRequest) return;
+      const { user, tenantContext } = tenantRequest;
       await requirePermission(user, "compliance.manage");
       if (!req.body?.dateTime || !req.body?.purpose) {
         return createApiError(res, 400, "VALIDATION_ERROR", "Meeting date/time and purpose are required.");
       }
-      const data = await createComplianceMeetingRecord({ ownerUserId: user.id, actorUser: user, meeting: req.body });
+      const data = await createComplianceMeetingRecord({ ownerUserId: user.id, actorUser: user, tenantContext, meeting: req.body });
       if (req.body?.assignedPersonId) {
         await createTaskRecord({
           ownerUserId: user.id,
+          tenantContext,
           title: `جلسه: ${req.body.purpose}`,
           description: `آماده‌سازی جلسه ${req.body.purpose}`,
           status: "TODO",
@@ -2881,17 +4725,97 @@ async function startServer() {
     management: "management",
   };
 
+  app.get("/api/dashboard", async (req, res) => {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "dashboard API");
+      if (!tenantRequest) return;
+      const { user } = tenantRequest;
+      const permissions = await requirePermission(user, "dashboard.view");
+      const data = await getDashboardData(user, permissions);
+      res.json({ ok: true, data: toDashboardHomeDto(user, data) });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      console.error("Dashboard failed:", error);
+      createApiError(res, 500, "DASHBOARD_FAILED", "Could not load dashboard data.");
+    }
+  });
+
+  app.post("/api/ai/chat", async (req, res) => {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "AI assistant chat API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "dashboard.view");
+      if (String(user.role || "").toUpperCase() !== "CEO") {
+        return createApiError(res, 403, "FORBIDDEN", AI_MESSAGES.CEO_ONLY_MESSAGE);
+      }
+      if (!(await consumeRateLimit(req, res, "ai-chat", { ...AI_CHAT_LIMIT, discriminator: user.id }))) return;
+      const body = parseRequestValue(res, aiChatBodySchema, req.body || {});
+      if (!body) return;
+
+      const result = await runAiChat({
+        pool,
+        user,
+        organizationId,
+        message: body.message,
+        context: body.context,
+        conversationId: body.conversationId,
+        recentMessages: body.recentMessages,
+        activeEntity: body.activeEntity,
+      });
+      const responseId = crypto.randomUUID();
+      const createdAt = new Date().toISOString();
+      const responseData = {
+        id: responseId,
+        assistantName: AI_MESSAGES.ASSISTANT_NAME,
+        status: result.audit?.success ? "answered" : "ready",
+        answer: result.data?.answer || AI_MESSAGES.NO_CODE_DETECTED,
+        tone: result.data?.tone || "direct",
+        responseMode: result.data?.responseMode || "direct_answer",
+        activeEntity: result.data?.activeEntity,
+        suggestions: result.data?.suggestions || [],
+        sources: result.data?.sources || [],
+        createdAt,
+      };
+
+      await auditLog({
+        organizationId,
+        actorUserId: user.id,
+        action: "ai.chat.ask",
+        entityType: "AI_ASSISTANT",
+        entityId: responseId,
+        summary: "AI assistant read-only question was processed.",
+        metadata: {
+          route: "/api/ai/chat",
+          context: body.context,
+          conversationId: body.conversationId,
+          queryType: result.audit?.queryType,
+          toolsCalled: result.audit?.toolsCalled || [],
+          success: Boolean(result.audit?.success),
+          reason: result.audit?.reason || null,
+          activeEntityType: body.activeEntity?.type || null,
+        },
+        requestContext: requestContext(req),
+      });
+
+      res.json({ ok: true, data: responseData });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      console.error("AI assistant chat failed:", error);
+      createApiError(res, 500, "AI_CHAT_FAILED", "Could not answer the AI assistant question.");
+    }
+  });
+
   for (const [pathName, dataKey] of Object.entries(dashboardSections)) {
     app.get(`/api/dashboard/${pathName}`, async (req, res) => {
       try {
         const user = await requireAuthenticatedUser(req, res);
         if (!user) return;
-        await requirePermission(user, "dashboard.view");
+        const permissions = await requirePermission(user, "dashboard.view");
         if (dataKey === "management") {
-          const allowed = (await userHasPermission(user, "tasks.view_all")) || user.role === "CEO" || user.role === "MANAGER";
+          const allowed = permissions.includes("tasks.view_all") || user.role === "CEO" || user.role === "MANAGER";
           if (!allowed) return createApiError(res, 403, "FORBIDDEN", "Management dashboard is not available.");
         }
-        const permissions = await getUserPermissions(user.id);
         const data = await getDashboardData(user, permissions);
         res.json({ ok: true, data: data[dataKey] });
       } catch (error) {
@@ -2904,12 +4828,12 @@ async function startServer() {
 
   app.get("/api/documents", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "documents list API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
       await requirePermission(user, "documents.view_all");
       const data = await listDocuments({
-        organizationId: user.organizationId,
-        ownerUserId: user.id,
+        organizationId,
         includeArchived: req.query.includeArchived === "true",
       });
       res.json({ ok: true, data });
@@ -2924,8 +4848,9 @@ async function startServer() {
 
   app.post("/api/documents/upload", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "document upload API");
+      if (!tenantRequest) return;
+      const { user, tenantContext, organizationId } = tenantRequest;
       await requirePermission(user, "documents.upload");
       if (!(await consumeRateLimit(req, res, "document-upload", {
         limit: 20,
@@ -2933,14 +4858,16 @@ async function startServer() {
         discriminator: user.id,
       }))) return;
       await uploadSingle(req, res);
+      const metadata = parseRequestValue(res, documentMetadataSchema, req.body || {});
+      if (!metadata) return;
 
       await validateDocumentAssociations({
-        shipmentId: req.body?.shipmentId || null,
-        customerId: req.body?.customerId || null,
-        organizationId: user.organizationId,
+        shipmentId: metadata.shipmentId || null,
+        customerId: metadata.customerId || null,
+        organizationId,
       });
 
-      const persisted = await persistDocumentFile(req.file);
+      const persisted = await persistDocumentFile(req.file, { organizationId });
       if (persisted.error) {
         return createApiError(
           res,
@@ -2955,18 +4882,32 @@ async function startServer() {
       try {
         document = await createDocumentRecord({
           ownerUserId: user.id,
-          title: String(req.body?.title || persisted.sanitizedName).trim(),
-          type: String(req.body?.type || "OTHER"),
+          tenantContext,
+          title: metadata.title || persisted.sanitizedName,
+          type: metadata.type || "OTHER",
           fileName: persisted.sanitizedName,
           mimeType: persisted.mimeType,
           fileSize: persisted.fileSize,
           storageKey: persisted.storageKey,
+          storageProvider: persisted.storageProvider,
+          objectKey: persisted.objectKey,
+          storageBucket: persisted.storageBucket,
+          storageRegion: persisted.storageRegion,
+          localPath: persisted.localPath,
           checksum: persisted.checksum,
+          checksumSha256: persisted.checksumSha256,
+          sizeBytes: persisted.sizeBytes,
+          contentType: persisted.contentType,
+          storageMigratedAt: persisted.storageMigratedAt,
+          storageVerifiedAt: persisted.storageVerifiedAt,
+          storageMigrationStatus: persisted.storageMigrationStatus,
+          storageMigrationError: persisted.storageMigrationError,
           uploadedById: user.id,
           uploadedByName: user.name,
-          shipmentId: req.body?.shipmentId || null,
-          customerId: req.body?.customerId || null,
-          visibility: req.body?.visibility,
+          shipmentId: metadata.shipmentId || null,
+          customerId: metadata.customerId || null,
+          note: metadata.note || "",
+          visibility: metadata.visibility,
         });
       } catch (error) {
         await cleanupPersistedDocument(persisted);
@@ -2984,10 +4925,11 @@ async function startServer() {
         entityId: document.id,
         summary: "Document was uploaded.",
         after: { id: document.id, title: document.title, fileName: document.file_name, shipmentId: document.shipment_id },
+        metadata: documentStorageAuditMetadata(persisted),
         requestContext: requestContext(req),
       });
 
-      res.json({ ok: true, data: document });
+      res.json({ ok: true, data: sanitizeDocumentForApi(document) });
     } catch (error) {
       if (error.statusCode === 403) {
         return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -3008,11 +4950,13 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.view_all");
-      const data = await getDocumentDetail(req.params.id, { organizationId: user.organizationId });
+      const params = parseRequestValue(res, documentParamsSchema, req.params);
+      if (!params) return;
+      const data = await getDocumentDetail(params.id, { organizationId: user.organizationId });
       if (!data) {
         return createApiError(res, 404, "NOT_FOUND", "Document was not found.");
       }
-      res.json({ ok: true, data });
+      res.json({ ok: true, data: sanitizeDocumentForApi(data) });
     } catch (error) {
       if (error.statusCode === 403) {
         return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -3027,8 +4971,24 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.view_all");
-      const document = await getDocumentForDownload(req.params.id, { organizationId: user.organizationId });
+      const params = parseRequestValue(res, documentParamsSchema, req.params);
+      if (!params) return;
+      if (!(await consumeRateLimit(req, res, "document-download", {
+        ...DOCUMENT_DOWNLOAD_LIMIT,
+        discriminator: user.id,
+      }))) return;
+      const document = await getDocumentForDownload(params.id, { organizationId: user.organizationId });
       if (!document) {
+        await auditLog({
+          actorUserId: user.id,
+          organizationId: user.organizationId,
+          action: "document.download_denied",
+          entityType: "DOCUMENT",
+          entityId: params.id,
+          summary: "Internal document download was denied.",
+          metadata: { reason: "not_found_or_forbidden" },
+          requestContext: requestContext(req),
+        });
         return createApiError(res, 404, "NOT_FOUND", "Document was not found.");
       }
       await sendStoredDocument(res, document);
@@ -3046,19 +5006,23 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.view_all");
+      const params = parseRequestValue(res, documentParamsSchema, req.params);
+      if (!params) return;
+      const metadata = parseRequestValue(res, documentMetadataSchema, req.body || {});
+      if (!metadata) return;
       await validateDocumentAssociations({
-        shipmentId: req.body?.shipmentId || null,
-        customerId: req.body?.customerId || null,
+        shipmentId: metadata.shipmentId || null,
+        customerId: metadata.customerId || null,
         organizationId: user.organizationId,
       });
       const result = await updateDocumentMetadata(
-        req.params.id,
+        params.id,
         {
-          title: req.body?.title,
-          type: req.body?.type,
-          shipmentId: req.body?.shipmentId,
-          customerId: req.body?.customerId,
-          visibility: req.body?.visibility,
+          title: metadata.title,
+          type: metadata.type,
+          shipmentId: metadata.shipmentId,
+          customerId: metadata.customerId,
+          visibility: metadata.visibility,
         },
         { organizationId: user.organizationId }
       );
@@ -3069,13 +5033,13 @@ async function startServer() {
         actorUserId: user.id,
         action: "document.update",
         entityType: "DOCUMENT",
-        entityId: req.params.id,
+        entityId: params.id,
         summary: "Document metadata was updated.",
-        before: result.before,
-        after: result.after,
+        before: sanitizeDocumentForApi(result.before),
+        after: sanitizeDocumentForApi(result.after),
         requestContext: requestContext(req),
       });
-      res.json({ ok: true, data: result.after });
+      res.json({ ok: true, data: sanitizeDocumentForApi(result.after) });
     } catch (error) {
       if (error.statusCode === 403) {
         return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -3093,6 +5057,8 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.upload");
+      const params = parseRequestValue(res, documentParamsSchema, req.params);
+      if (!params) return;
       if (!(await consumeRateLimit(req, res, "document-replace", {
         limit: 20,
         windowMs: 15 * 60 * 1000,
@@ -3100,7 +5066,7 @@ async function startServer() {
       }))) return;
       await uploadSingle(req, res);
 
-      const persisted = await persistDocumentFile(req.file);
+      const persisted = await persistDocumentFile(req.file, { organizationId: user.organizationId });
       if (persisted.error) {
         return createApiError(
           res,
@@ -3114,12 +5080,24 @@ async function startServer() {
       let result = null;
       try {
         result = await replaceDocumentFileRecord({
-          documentId: req.params.id,
+          documentId: params.id,
           fileName: persisted.sanitizedName,
           mimeType: persisted.mimeType,
           fileSize: persisted.fileSize,
           storageKey: persisted.storageKey,
+          storageProvider: persisted.storageProvider,
+          objectKey: persisted.objectKey,
+          storageBucket: persisted.storageBucket,
+          storageRegion: persisted.storageRegion,
+          localPath: persisted.localPath,
           checksum: persisted.checksum,
+          checksumSha256: persisted.checksumSha256,
+          sizeBytes: persisted.sizeBytes,
+          contentType: persisted.contentType,
+          storageMigratedAt: persisted.storageMigratedAt,
+          storageVerifiedAt: persisted.storageVerifiedAt,
+          storageMigrationStatus: persisted.storageMigrationStatus,
+          storageMigrationError: persisted.storageMigrationError,
           uploadedById: user.id,
           organizationId: user.organizationId,
         });
@@ -3135,13 +5113,14 @@ async function startServer() {
         actorUserId: user.id,
         action: "document.replace",
         entityType: "DOCUMENT",
-        entityId: req.params.id,
+        entityId: params.id,
         summary: "Document file was replaced.",
         before: { id: result.before.id, version: result.before.version, fileName: result.before.file_name },
         after: { id: result.after.id, version: result.after.version, fileName: result.after.file_name },
+        metadata: documentStorageAuditMetadata(persisted),
         requestContext: requestContext(req),
       });
-      res.json({ ok: true, data: result.after });
+      res.json({ ok: true, data: sanitizeDocumentForApi(result.after) });
     } catch (error) {
       if (error.statusCode === 403) {
         return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -3159,7 +5138,12 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.archive");
-      const result = await archiveDocumentRecord(req.params.id, { organizationId: user.organizationId });
+      const params = parseRequestValue(res, documentParamsSchema, req.params);
+      if (!params) return;
+      const result = await archiveDocumentRecord(params.id, {
+        organizationId: user.organizationId,
+        actorUserId: user.id,
+      });
       if (!result) {
         return createApiError(res, 404, "NOT_FOUND", "Document was not found.");
       }
@@ -3167,13 +5151,13 @@ async function startServer() {
         actorUserId: user.id,
         action: "document.archive",
         entityType: "DOCUMENT",
-        entityId: req.params.id,
+        entityId: params.id,
         summary: "Document was archived.",
-        before: result.before,
-        after: result.after,
+        before: sanitizeDocumentForApi(result.before),
+        after: sanitizeDocumentForApi(result.after),
         requestContext: requestContext(req),
       });
-      res.json({ ok: true, data: result.after });
+      res.json({ ok: true, data: sanitizeDocumentForApi(result.after) });
     } catch (error) {
       if (error.statusCode === 403) {
         return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -3188,7 +5172,9 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.view_all");
-      const data = await listDocuments({ organizationId: user.organizationId, ownerUserId: user.id, shipmentId: req.params.id });
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const data = await listDocuments({ organizationId: user.organizationId, shipmentId: params.id });
       res.json({ ok: true, data });
     } catch (error) {
       if (error.statusCode === 403) {
@@ -3199,28 +5185,14 @@ async function startServer() {
     }
   });
 
-  app.get("/api/customers/:id/documents", async (req, res) => {
-    try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
-      await requirePermission(user, "documents.view_all");
-      const data = await listDocuments({ organizationId: user.organizationId, ownerUserId: user.id, customerId: req.params.id });
-      res.json({ ok: true, data });
-    } catch (error) {
-      if (error.statusCode === 403) {
-        return createApiError(res, 403, "FORBIDDEN", error.message);
-      }
-      console.error("List customer documents failed:", error);
-      createApiError(res, 500, "LIST_CUSTOMER_DOCUMENTS_FAILED", "Could not load customer documents.");
-    }
-  });
-
   app.get("/api/shipments/:id/customer-access", async (req, res) => {
     try {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "customer_access.manage");
-      const data = await getShipmentCustomerAccess(req.params.id, { organizationId: user.organizationId });
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const data = await getShipmentCustomerAccess(params.id, { organizationId: user.organizationId, ownerUserId: user.id });
       if (!data) {
         return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       }
@@ -3244,20 +5216,24 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "customer_access.manage");
-      const result = await generateShipmentCustomerAccess(req.params.id, { organizationId: user.organizationId, rotate: false });
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const result = await generateShipmentCustomerAccess(params.id, {
+        organizationId: user.organizationId,
+        ownerUserId: user.id,
+        rotate: false,
+        audit: {
+          actorUserId: user.id,
+          action: "customer_access.generate",
+          entityType: "SHIPMENT",
+          entityId: params.id,
+          summary: "Customer tracking access was generated.",
+          requestContext: requestContext(req),
+        },
+      });
       if (!result) {
         return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       }
-      await auditLog({
-        actorUserId: user.id,
-        action: "customer_access.generate",
-        entityType: "SHIPMENT",
-        entityId: req.params.id,
-        summary: "Customer tracking access was generated.",
-        before: result.before,
-        after: result.after,
-        requestContext: requestContext(req),
-      });
       res.json({
         ok: true,
         data: {
@@ -3280,20 +5256,23 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "customer_access.manage");
-      const result = await generateShipmentCustomerAccess(req.params.id, { organizationId: user.organizationId });
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const result = await generateShipmentCustomerAccess(params.id, {
+        organizationId: user.organizationId,
+        ownerUserId: user.id,
+        audit: {
+          actorUserId: user.id,
+          action: "customer_access.reset",
+          entityType: "SHIPMENT",
+          entityId: params.id,
+          summary: "Customer tracking access was reset.",
+          requestContext: requestContext(req),
+        },
+      });
       if (!result) {
         return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       }
-      await auditLog({
-        actorUserId: user.id,
-        action: "customer_access.reset",
-        entityType: "SHIPMENT",
-        entityId: req.params.id,
-        summary: "Customer tracking access was reset.",
-        before: result.before,
-        after: result.after,
-        requestContext: requestContext(req),
-      });
       res.json({
         ok: true,
         data: {
@@ -3316,20 +5295,23 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "customer_access.manage");
-      const result = await disableShipmentCustomerAccess(req.params.id, { organizationId: user.organizationId });
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const result = await disableShipmentCustomerAccess(params.id, {
+        organizationId: user.organizationId,
+        ownerUserId: user.id,
+        audit: {
+          actorUserId: user.id,
+          action: "customer_access.disable",
+          entityType: "SHIPMENT",
+          entityId: params.id,
+          summary: "Customer tracking access was disabled.",
+          requestContext: requestContext(req),
+        },
+      });
       if (!result) {
         return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
       }
-      await auditLog({
-        actorUserId: user.id,
-        action: "customer_access.disable",
-        entityType: "SHIPMENT",
-        entityId: req.params.id,
-        summary: "Customer tracking access was disabled.",
-        before: result.before,
-        after: result.after,
-        requestContext: requestContext(req),
-      });
       res.json({ ok: true, data: result.after });
     } catch (error) {
       if (error.statusCode === 403) {
@@ -3345,18 +5327,18 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "customer_access.manage");
-      const publicLabel = String(req.body?.publicLabel || "").trim();
-      const publicDescription = String(req.body?.publicDescription || "").trim();
-      if (!publicLabel) {
-        return createApiError(res, 400, "VALIDATION_ERROR", "Public status label is required.", "publicLabel");
-      }
+      const params = parseRequestValue(res, shipmentParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, shipmentPublicStatusBodySchema, req.body || {});
+      if (!body) return;
       const event = await updateShipmentPublicStatus({
-        shipmentId: req.params.id,
-        publicLabel,
-        publicDescription,
-        isCustomerVisible: req.body?.isCustomerVisible !== false,
+        shipmentId: params.id,
+        publicLabel: body.publicLabel,
+        publicDescription: body.publicDescription || "",
+        isCustomerVisible: body.isCustomerVisible !== false,
         createdById: user.id,
         organizationId: user.organizationId,
+        ownerUserId: user.id,
       });
       if (!event) {
         return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
@@ -3365,7 +5347,7 @@ async function startServer() {
         actorUserId: user.id,
         action: "shipment.public_status.update",
         entityType: "SHIPMENT",
-        entityId: req.params.id,
+        entityId: params.id,
         summary: "Public shipment status was updated.",
         after: event,
         requestContext: requestContext(req),
@@ -3385,23 +5367,25 @@ async function startServer() {
       const user = await requireAuthenticatedUser(req, res);
       if (!user) return;
       await requirePermission(user, "documents.view_all");
-      const result = await updateDocumentVisibility(req.params.id, req.body?.visibility, {
+      const params = parseRequestValue(res, documentParamsSchema, req.params);
+      if (!params) return;
+      const body = parseRequestValue(res, documentVisibilitySchema, req.body || {});
+      if (!body) return;
+      const result = await updateDocumentVisibility(params.id, body.visibility, {
         organizationId: user.organizationId,
+        audit: {
+          actorUserId: user.id,
+          action: "document.visibility.update",
+          entityType: "DOCUMENT",
+          entityId: params.id,
+          summary: "Document customer visibility was updated.",
+          requestContext: requestContext(req),
+        },
       });
       if (!result) {
         return createApiError(res, 404, "NOT_FOUND", "Document was not found.");
       }
-      await auditLog({
-        actorUserId: user.id,
-        action: "document.visibility.update",
-        entityType: "DOCUMENT",
-        entityId: req.params.id,
-        summary: "Document customer visibility was updated.",
-        before: result.before,
-        after: result.after,
-        requestContext: requestContext(req),
-      });
-      res.json({ ok: true, data: result.after });
+      res.json({ ok: true, data: sanitizeDocumentForApi(result.after) });
     } catch (error) {
       if (error.statusCode === 403) {
         return createApiError(res, 403, "FORBIDDEN", error.message);
@@ -3411,58 +5395,64 @@ async function startServer() {
     }
   });
 
-  app.get("/api/public/track/:token/documents/:documentId", async (req, res) => {
-    try {
-      const document = await getPublicDocumentByTrackingToken(req.params.token, req.params.documentId);
-      if (!document) {
-        return createApiError(res, 404, "TRACKING_DOCUMENT_UNAVAILABLE", "Document is unavailable.");
-      }
-      await sendStoredDocument(res, document);
-    } catch (error) {
-      console.error("Public tracking document failed:", error);
-      createApiError(res, 500, "PUBLIC_TRACK_DOCUMENT_FAILED", "Could not load document.");
-    }
+  registerPublicTrackingRoutes(app, {
+    auditLog,
+    createApiError,
+    consumeRateLimit,
+    getPublicDocument,
+    getPublicDocumentByTrackingToken,
+    getPublicTrackingByToken,
+    getPublicTrackingTokenAuditState,
+    publicDocumentDownloadLimit: PUBLIC_DOCUMENT_DOWNLOAD_LIMIT,
+    publicTrackLookupLimit: PUBLIC_TRACK_LOOKUP_LIMIT,
+    publicTrackSearchLimit: PUBLIC_TRACK_SEARCH_LIMIT,
+    requestContext,
+    searchPublicTracking,
+    sendStoredDocument,
   });
 
-  app.get("/api/public/track/:token", async (req, res) => {
+  app.get("/api/audit-logs", async (req, res) => {
     try {
-      const data = await getPublicTrackingByToken(req.params.token);
-      if (!data) {
-        return createApiError(res, 404, "TRACKING_UNAVAILABLE", "Tracking is unavailable.");
-      }
-      res.json({ ok: true, data });
-    } catch (error) {
-      console.error("Public track failed:", error);
-      createApiError(res, 500, "PUBLIC_TRACK_FAILED", "Could not load tracking.");
-    }
-  });
-
-  app.post("/api/public/track/search", async (req, res) => {
-    try {
-      const data = await searchPublicTracking({
-        shipmentCode: req.body?.shipmentCode,
-        verification: req.body?.verification,
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "audit log list API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "changes.view");
+      const data = await listAuditLogs({
+        organizationId,
+        limit: req.query.limit,
+        eventType: req.query.eventType || undefined,
+        resourceType: req.query.resourceType || undefined,
+        resourceId: req.query.resourceId || undefined,
       });
-      if (!data) {
-        return createApiError(res, 404, "TRACKING_UNAVAILABLE", "Tracking is unavailable for the provided details.");
-      }
       res.json({ ok: true, data });
     } catch (error) {
-      console.error("Public track search failed:", error);
-      createApiError(res, 500, "PUBLIC_TRACK_SEARCH_FAILED", "Could not search tracking.");
+      if (error.statusCode === 403) {
+        return createApiError(res, 403, "FORBIDDEN", error.message);
+      }
+      console.error("List audit logs failed:", error);
+      createApiError(res, 500, "LIST_AUDIT_LOGS_FAILED", "Could not load audit logs.");
     }
   });
 
-  app.get("/api/public/documents/:id", async (req, res) => {
+  app.get("/api/admin/audit-logs", async (req, res) => {
     try {
-      const document = await getPublicDocument(req.params.id);
-      if (!document) {
-        return createApiError(res, 404, "NOT_FOUND", "Document was not found.");
-      }
-      await sendStoredDocument(res, document);
+      const admin = await requirePlatformAdmin(req, res);
+      if (!admin) return;
+      const data = await listAuditLogs({
+        organizationId: req.query.organizationId === undefined ? undefined : String(req.query.organizationId || ""),
+        actorUserId: req.query.actorUserId || undefined,
+        eventType: req.query.eventType || undefined,
+        resourceType: req.query.resourceType || undefined,
+        resourceId: req.query.resourceId || undefined,
+        limit: req.query.limit,
+      });
+      res.json({ ok: true, data });
     } catch (error) {
-      console.error("Public document failed:", error);
-      createApiError(res, 500, "PUBLIC_DOCUMENT_FAILED", "Could not load document.");
+      if (error.statusCode === 403) {
+        return createApiError(res, 403, "FORBIDDEN", error.message);
+      }
+      console.error("List platform audit logs failed:", error);
+      createApiError(res, 500, "LIST_PLATFORM_AUDIT_LOGS_FAILED", "Could not load platform audit logs.");
     }
   });
 
@@ -3518,8 +5508,16 @@ async function startServer() {
   } else {
     // Serve static files in production
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(
+      "/assets",
+      express.static(path.join(distPath, "assets"), {
+        immutable: true,
+        maxAge: "1y",
+      })
+    );
+    app.use(express.static(distPath, { maxAge: "1h" }));
     app.get('*', (req, res) => {
+      res.setHeader("Cache-Control", "no-cache");
       res.sendFile(path.join(distPath, 'index.html'));
     });
     console.log("Production mode: Serving static files from dist.");
@@ -3535,57 +5533,201 @@ async function startServer() {
         socket.destroy();
         return;
       }
-      const session = await getSessionByToken(parseCookies(req.headers.cookie || "")[SESSION_COOKIE]);
-      if (!session?.user || (session.user.status && session.user.status !== "active")) {
+      const auth = await authenticateChatSocket(req);
+      const connectionLimit = await consumeRateLimitKey(
+        rateLimitKey(req, "chat_socket_connection", auth.user.id),
+        CHAT_SOCKET_CONNECTION_LIMIT
+      );
+      if (connectionLimit.limited) {
         socket.destroy();
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
-        chatClients.set(ws, { user: session.user });
-        ws.send(JSON.stringify({ type: "connection.ready", payload: { userId: session.user.id } }));
-        broadcastChat({ type: "presence.updated", payload: { userId: session.user.id, isOnline: true } });
+        const clientState = {
+          user: auth.user,
+          organizationId: auth.organizationId,
+          joinedThreads: new Set(),
+        };
+        chatClients.set(ws, clientState);
+        sendChatSocket(ws, {
+          type: "connection.ready",
+          ok: true,
+          payload: { userId: auth.user.id, organizationId: auth.organizationId },
+        });
+        broadcastChat(
+          { type: "presence.updated", payload: { userId: auth.user.id, isOnline: true } },
+          { organizationId: auth.organizationId }
+        );
 
         ws.on("message", async (raw) => {
           let event;
+          const rawText = raw.toString();
+          if (Buffer.byteLength(rawText, "utf8") > CHAT_SOCKET_MAX_BYTES) {
+            sendChatSocketError(ws, { code: "MESSAGE_TOO_LARGE", message: "Chat event is too large." });
+            return;
+          }
+          const eventLimit = await consumeRateLimitKey(
+            rateLimitKey(req, "chat_socket_event", auth.user.id),
+            CHAT_SOCKET_EVENT_LIMIT
+          );
+          if (eventLimit.limited) {
+            sendChatSocketError(ws, { code: "RATE_LIMITED", message: "Too many chat events. Please slow down." });
+            return;
+          }
           try {
-            event = JSON.parse(raw.toString());
+            event = JSON.parse(rawText);
           } catch {
-            ws.send(JSON.stringify({ type: "error", ok: false, error: { code: "BAD_JSON", message: "Invalid WebSocket message." } }));
+            sendChatSocketError(ws, { code: "BAD_JSON", message: "Invalid WebSocket message." });
             return;
           }
 
           try {
             if (event.type === "message.send") {
-              const payload = event.payload || {};
+              if (rejectChatSocketTenantScope(ws, event.payload, event.requestId)) return;
+              const payload = parseChatSocketPayload(ws, chatMessageSendBodySchema, event.payload, event.requestId);
+              if (!payload) return;
+              if (!payload.threadId) {
+                sendChatSocketError(ws, { requestId: event.requestId, code: "THREAD_REQUIRED", message: "Thread id is required." });
+                return;
+              }
+              await requireChatThreadMembership(auth.user.id, payload.threadId, { organizationId: auth.organizationId });
+              const sendLimit = consumeChatMessageSendLimit({
+                organizationId: auth.organizationId,
+                userId: auth.user.id,
+                threadId: payload.threadId,
+              });
+              if (sendLimit.limited) {
+                sendChatSocketError(ws, {
+                  requestId: event.requestId,
+                  code: "CHAT_RATE_LIMITED",
+                  message: "Too many chat messages. Please slow down.",
+                  retryAfterMs: sendLimit.retryAfterMs,
+                });
+                return;
+              }
               const message = await createChatMessage({
                 threadId: payload.threadId,
-                sender: session.user,
-                content: payload.content,
-                legacyData: payload.legacyData || {},
+                sender: auth.user,
+                organizationId: auth.organizationId,
+                body: payload.body,
+                clientMessageId: payload.clientMessageId,
               });
-              const memberIds = await listChatThreadMemberIds(payload.threadId);
+              const memberIds = await listChatThreadMemberIds(payload.threadId, { organizationId: auth.organizationId });
+              const connectedRecipients = connectedChatUserIds(auth.organizationId, memberIds);
+              const missedRecipientIds = memberIds.filter((userId) => userId !== auth.user.id && !connectedRecipients.has(userId));
+              await createChatMessageNotifications({
+                organizationId: auth.organizationId,
+                threadId: payload.threadId,
+                messageId: message.id,
+                senderId: auth.user.id,
+                senderName: auth.user.name,
+                recipientUserIds: missedRecipientIds,
+              });
+              sendChatSocket(ws, {
+                type: "message.ack",
+                ok: true,
+                requestId: event.requestId,
+                payload: { id: message.id, clientMessageId: payload.clientMessageId },
+              });
               const outgoing = { type: "message.created", ok: true, requestId: event.requestId, payload: message };
-              broadcastChat(outgoing, memberIds);
-              broadcastChat({ type: "thread.updated", payload: { threadId: payload.threadId, lastMessage: message } }, memberIds);
+              broadcastChat(outgoing, { organizationId: auth.organizationId, userIds: memberIds });
+              broadcastChat(
+                { type: "thread.updated", payload: { threadId: payload.threadId, lastMessage: message } },
+                { organizationId: auth.organizationId, userIds: memberIds }
+              );
               return;
             }
 
             if (event.type === "message.read") {
-              const data = await markChatThreadRead(event.payload?.threadId, session.user.id);
-              const memberIds = await listChatThreadMemberIds(event.payload?.threadId);
-              broadcastChat({ type: "message.read", ok: true, requestId: event.requestId, payload: data }, memberIds);
+              if (rejectChatSocketTenantScope(ws, event.payload, event.requestId)) return;
+              const payload = parseChatSocketPayload(ws, chatReadBodySchema, event.payload, event.requestId);
+              if (!payload) return;
+              if (!payload.threadId) {
+                sendChatSocketError(ws, { requestId: event.requestId, code: "THREAD_REQUIRED", message: "Thread id is required." });
+                return;
+              }
+              const data = await markChatThreadRead(payload.threadId, auth.user.id, {
+                organizationId: auth.organizationId,
+                messageId: payload.messageId,
+              });
+              const memberIds = await listChatThreadMemberIds(payload.threadId, { organizationId: auth.organizationId });
+              broadcastChat(
+                { type: "message.read", ok: true, requestId: event.requestId, payload: data },
+                { organizationId: auth.organizationId, userIds: memberIds }
+              );
               return;
             }
 
-            ws.send(JSON.stringify({ type: "error", requestId: event.requestId, ok: false, error: { code: "UNKNOWN_EVENT", message: "Unknown chat event." } }));
+            if (event.type === "thread.join") {
+              if (rejectChatSocketTenantScope(ws, event.payload, event.requestId)) return;
+              const payload = parseChatSocketPayload(ws, chatTypingBodySchema, event.payload, event.requestId);
+              if (!payload) return;
+              if (!(await userCanAccessThread(auth.user.id, payload.threadId, { organizationId: auth.organizationId }))) {
+                sendChatSocketError(ws, { requestId: event.requestId, code: "FORBIDDEN", message: "Thread access denied." });
+                return;
+              }
+              clientState.joinedThreads.add(payload.threadId);
+              sendChatSocket(ws, { type: "thread.joined", ok: true, requestId: event.requestId, payload });
+              return;
+            }
+
+            if (event.type === "thread.leave") {
+              if (rejectChatSocketTenantScope(ws, event.payload, event.requestId)) return;
+              const payload = parseChatSocketPayload(ws, chatTypingBodySchema, event.payload, event.requestId);
+              if (!payload) return;
+              clientState.joinedThreads.delete(payload.threadId);
+              sendChatSocket(ws, { type: "thread.left", ok: true, requestId: event.requestId, payload });
+              return;
+            }
+
+            if (event.type === "typing.start" || event.type === "typing.stop") {
+              if (rejectChatSocketTenantScope(ws, event.payload, event.requestId)) return;
+              const payload = parseChatSocketPayload(ws, chatTypingBodySchema, event.payload, event.requestId);
+              if (!payload) return;
+              if (!(await userCanAccessThread(auth.user.id, payload.threadId, { organizationId: auth.organizationId }))) {
+                sendChatSocketError(ws, { requestId: event.requestId, code: "FORBIDDEN", message: "Thread access denied." });
+                return;
+              }
+              const typingLimit = consumeChatTypingLimit({
+                organizationId: auth.organizationId,
+                userId: auth.user.id,
+                threadId: payload.threadId,
+              });
+              if (typingLimit.limited) return;
+              const memberIds = (await listChatThreadMemberIds(payload.threadId, { organizationId: auth.organizationId }))
+                .filter((userId) => userId !== auth.user.id);
+              broadcastChat(
+                {
+                  type: "typing.updated",
+                  payload: {
+                    threadId: payload.threadId,
+                    userId: auth.user.id,
+                    isTyping: event.type === "typing.start",
+                  },
+                },
+                { organizationId: auth.organizationId, userIds: memberIds }
+              );
+              return;
+            }
+
+            sendChatSocketError(ws, { requestId: event.requestId, code: "UNKNOWN_EVENT", message: "Unknown chat event." });
           } catch (error) {
-            ws.send(JSON.stringify({ type: "error", requestId: event.requestId, ok: false, error: { code: error.code || "CHAT_EVENT_FAILED", message: error.message || "Chat event failed." } }));
+            sendChatSocketError(ws, {
+              requestId: event.requestId,
+              code: error.code || "CHAT_EVENT_FAILED",
+              message: error.message || "Chat event failed.",
+            });
           }
         });
 
         ws.on("close", () => {
           chatClients.delete(ws);
-          broadcastChat({ type: "presence.updated", payload: { userId: session.user.id, isOnline: false } });
+          if (!connectedChatUserIds(auth.organizationId, [auth.user.id]).has(auth.user.id)) {
+            broadcastChat(
+              { type: "presence.updated", payload: { userId: auth.user.id, isOnline: false } },
+              { organizationId: auth.organizationId }
+            );
+          }
         });
       });
     } catch {
@@ -3595,6 +5737,7 @@ async function startServer() {
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     startSmsWorker();
+    startCurrencyRatesWorker(pool);
     console.log(`Server running on http://localhost:${PORT}`);
   });
 }

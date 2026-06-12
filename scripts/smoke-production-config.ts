@@ -44,6 +44,7 @@ child.on("exit", (code) => {
   const expected = [
     "Production configuration error",
     "DOCUMENT_STORAGE_DIR",
+    "RATE_LIMIT_STORE",
     "ZARINPAL_SANDBOX",
     "ZARINPAL_MERCHANT_ID",
   ];
@@ -54,5 +55,5 @@ child.on("exit", (code) => {
     process.exit(1);
   }
 
-  console.log("Production config smoke passed: missing storage and live Zarinpal config fail loudly.");
+  console.log("Production config smoke passed: missing storage, live Zarinpal config, and unsafe production rate-limit store fail loudly.");
 });

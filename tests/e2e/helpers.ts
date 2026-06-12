@@ -63,6 +63,7 @@ function collectUnsafeKeys(value: unknown, path = ""): string[] {
     /cheque/i,
     /compliance/i,
     /internal/i,
+    /private/i,
     /^task/i,
   ];
 
@@ -77,28 +78,99 @@ export function expectPublicTrackingPayloadIsSafe(data: any) {
   expect(Object.keys(data).sort()).toEqual(["company", "documents", "shipment", "steps"]);
   expect(Object.keys(data.shipment).sort()).toEqual([
     "code",
+    "completedPublicStepsCount",
+    "currentPublicLabel",
+    "currentPublicPhase",
     "destination",
     "estimatedDelivery",
     "lastPublicUpdate",
     "origin",
+    "publicNote",
     "publicStatusDescription",
     "publicStatusLabel",
+    "totalPublicStepsCount",
   ]);
   expect(Array.isArray(data.steps)).toBe(true);
   expect(Array.isArray(data.documents)).toBe(true);
+  for (const document of data.documents) {
+    expect(Object.keys(document).sort()).toEqual([
+      "createdAt",
+      "downloadUrl",
+      "fileName",
+      "fileSize",
+      "id",
+      "title",
+    ]);
+    expect(document.downloadUrl).toContain("/api/public/documents/");
+    expect(document.downloadUrl).not.toContain("/api/public/track/");
+  }
   expect(Object.keys(data.company).sort()).toEqual(["contactText", "name"]);
   expect(collectUnsafeKeys(data)).toEqual([]);
 
   const serialized = JSON.stringify(data).toLowerCase();
   for (const forbidden of [
+    "organizationid",
     "owner_user_id",
     "organization_id",
     "legacy_data",
     "customer_access_token",
+    "trackingtoken",
+    "tokenhash",
+    "sessiontoken",
+    "storagekey",
+    "storage_key",
+    "objectkey",
+    "object_key",
+    "storageprovider",
+    "storage_provider",
+    "storagebucket",
+    "storage_bucket",
+    "storageregion",
+    "storage_region",
+    "localpath",
+    "local_path",
+    "filepath",
+    "file_path",
+    "bucket",
+    "region",
+    "signedurl",
+    "signed_url",
+    "internalnotes",
+    "privatenotes",
+    "payment",
+    "invoice",
+    "receipt",
+    "sms",
     "password_hash",
     "audit",
     "cheques",
     "compliance",
+    "commercialcard",
+    "commercial_card",
+    "cotage",
+    "customsoffice",
+    "customs_office",
+    "declarationreference",
+    "declaration_reference",
+    "daily_status",
+    "banktrackingnumber",
+    "bank_tracking_number",
+    "paymentreference",
+    "payment_reference",
+    "truckplate",
+    "truck_plate",
+    "drivername",
+    "driver_name",
+    "actoruserid",
+    "actor_user_id",
+    "completedbyuserid",
+    "completed_by_user_id",
+    "internalnote",
+    "kootaj",
+    "postexit",
+    "post_exit",
+    "exitedarchive",
+    "exited_archive",
   ]) {
     expect(serialized).not.toContain(forbidden);
   }

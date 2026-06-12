@@ -5,13 +5,16 @@ import {
   ArrowRight,
   Calendar,
   CheckCircle2,
+  Circle,
+  Clock3,
   Download,
   FileText,
+  HelpCircle,
   MapPin,
-  Package,
   Search,
   ShieldCheck,
   Truck,
+  Route as RouteIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +28,7 @@ type PublicDocument = {
   title: string;
   fileName?: string;
   fileSize?: string;
+  createdAt?: string;
   downloadUrl: string;
 };
 
@@ -45,6 +49,11 @@ type PublicTrackingPayload = {
     destination?: string;
     estimatedDelivery?: string;
     lastPublicUpdate?: string;
+    currentPublicPhase?: string;
+    currentPublicLabel?: string;
+    completedPublicStepsCount?: number;
+    totalPublicStepsCount?: number;
+    publicNote?: string;
   };
   steps?: PublicStep[];
   documents: PublicDocument[];
@@ -56,29 +65,12 @@ type PublicTrackingPayload = {
 
 const unavailableMessage = "این لینک رهگیری در دسترس نیست یا غیرفعال شده است.";
 
-const statusTranslations: Record<string, string> = {
-  "Shipment is being prepared": "محموله در حال آماده سازی است",
-  "Shipment is booked": "حمل محموله رزرو شده است",
-  "Shipment is in transit": "محموله در مسیر حمل است",
-  "Shipment has arrived": "محموله به مقصد یا بندر رسیده است",
-  "Shipment is in customs review": "محموله در حال بررسی گمرکی است",
-  "Shipment is cleared": "محموله ترخیص شده است",
-  "Shipment is delivered": "محموله تحویل شده است",
-  "Shipment is closed": "پرونده حمل بسته شده است",
-  "Shipment is being prepared for customs": "محموله برای بررسی گمرکی آماده می شود",
-};
-
 const descriptionTranslations: Record<string, string> = {
   "Your shipment is being handled by our operations team.":
     "محموله شما توسط تیم عملیات در حال پیگیری است.",
   "Documents are under review and the operations team will publish the next safe update soon.":
     "اسناد در حال بررسی است و به محض آماده شدن، وضعیت بعدی برای شما نمایش داده می شود.",
 };
-
-function localizeStatus(value?: string) {
-  if (!value) return "وضعیت محموله به روز شد";
-  return statusTranslations[value] || value;
-}
 
 function localizeDescription(value?: string) {
   if (!value) return "جزئیات قابل نمایش برای مشتری هنوز ثبت نشده است.";
@@ -98,203 +90,317 @@ function formatPublicDate(value?: string) {
   }).format(parsed);
 }
 
-function DetailTile({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value?: string;
-}) {
-  return (
-    <Card className="rounded-xl border-slate-200 bg-white shadow-sm">
-      <CardContent className="flex items-center gap-3 p-4">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
-          {icon}
-        </div>
-        <div className="min-w-0">
-          <p className="text-xs font-bold text-slate-500">{label}</p>
-          <p className="mt-1 truncate text-sm font-black text-slate-950">{value || "منتشر نشده"}</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
+const unknownValue = "ثبت نشده";
+
+const publicStages = [
+  {
+    id: "registered",
+    label: "ثبت محموله",
+    summary: "اطلاعات محموله ثبت شده است",
+    guidance: "پس از تکمیل بررسی اطلاعات، وضعیت بعدی محموله در این صفحه نمایش داده می‌شود.",
+  },
+  {
+    id: "review",
+    label: "آماده‌سازی و بررسی اطلاعات",
+    summary: "اطلاعات پرونده در حال بررسی است",
+    guidance: "پس از تکمیل بررسی اطلاعات، وضعیت بعدی محموله در این صفحه نمایش داده می‌شود.",
+  },
+  {
+    id: "transit",
+    label: "حمل و ورود",
+    summary: "محموله در مسیر حمل یا ورود است",
+    guidance: "پس از دریافت اطلاعات ورود، وضعیت محموله به‌روزرسانی می‌شود.",
+  },
+  {
+    id: "clearance",
+    label: "فرآیند ترخیص",
+    summary: "پرونده در مرحله بررسی و ترخیص قرار دارد",
+    guidance: "پرونده در مرحله بررسی و ترخیص قرار دارد. نتیجه بعدی پس از ثبت به‌روزرسانی می‌شود.",
+  },
+  {
+    id: "delivery",
+    label: "خروج و تحویل",
+    summary: "محموله در مرحله خروج یا تحویل است",
+    guidance: "فرآیند محموله تکمیل شده است.",
+  },
+] as const;
+
+type PublicStageState = "completed" | "current" | "pending" | "issue";
+
+function cleanPublicValue(value?: string, fallback = unknownValue) {
+  const text = String(value || "").trim();
+  return text || fallback;
 }
 
-function stepStatusLabel(status: string) {
-  if (status === "COMPLETED") return "انجام شده";
-  if (status === "IN_PROGRESS") return "در حال انجام";
+function normalizePublicText(value?: string) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isFinalPublicStatus(text: string) {
+  return [
+    "delivered",
+    "closed",
+    "تحویل",
+    "تکمیل",
+    "بسته",
+  ].some((keyword) => text.includes(keyword));
+}
+
+function hasSafeIssueStatus(text: string) {
+  return ["issue", "review needed", "نیازمند بررسی"].some((keyword) => text.includes(keyword));
+}
+
+function publicStageIndex(shipment: PublicTrackingPayload["shipment"]) {
+  const statusText = normalizePublicText([
+    shipment.publicStatusLabel,
+    shipment.publicStatusDescription,
+    shipment.currentPublicPhase,
+    shipment.currentPublicLabel,
+  ].filter(Boolean).join(" "));
+
+  if (isFinalPublicStatus(statusText)) return 4;
+  if (statusText.includes("cleared") || statusText.includes("خروج")) return 4;
+  if (statusText.includes("customs") || statusText.includes("clearance") || statusText.includes("ترخیص") || statusText.includes("گمرک")) return 3;
+  if (statusText.includes("transit") || statusText.includes("arrived") || statusText.includes("حمل") || statusText.includes("ورود") || statusText.includes("رسیده")) return 2;
+  if (statusText.includes("booked") || statusText.includes("prepared") || statusText.includes("آماده") || statusText.includes("بررسی")) return 1;
+
+  const total = Number(shipment.totalPublicStepsCount || 0);
+  const completed = Number(shipment.completedPublicStepsCount || 0);
+  if (total > 0) {
+    const ratio = Math.max(0, Math.min(1, completed / total));
+    return Math.max(0, Math.min(publicStages.length - 1, Math.floor(ratio * publicStages.length)));
+  }
+  return 0;
+}
+
+function timelineForShipment(shipment: PublicTrackingPayload["shipment"]) {
+  const currentIndex = publicStageIndex(shipment);
+  const statusText = normalizePublicText([
+    shipment.publicStatusLabel,
+    shipment.currentPublicLabel,
+    shipment.publicNote,
+  ].filter(Boolean).join(" "));
+  const final = isFinalPublicStatus(statusText) || (
+    Number(shipment.totalPublicStepsCount || 0) > 0 &&
+    Number(shipment.completedPublicStepsCount || 0) >= Number(shipment.totalPublicStepsCount || 0)
+  );
+  const issue = hasSafeIssueStatus(statusText) && !final;
+
+  return publicStages.map((stage, index) => {
+    let state: PublicStageState = "pending";
+    if (final && index <= currentIndex) state = "completed";
+    else if (index < currentIndex) state = "completed";
+    else if (index === currentIndex) state = issue ? "issue" : "current";
+    return { ...stage, state };
+  });
+}
+
+function currentStageForShipment(shipment: PublicTrackingPayload["shipment"]) {
+  return publicStages[publicStageIndex(shipment)] || publicStages[0];
+}
+
+function nextStepGuidance(shipment: PublicTrackingPayload["shipment"]) {
+  const statusText = normalizePublicText([
+    shipment.publicStatusLabel,
+    shipment.currentPublicLabel,
+  ].filter(Boolean).join(" "));
+  if (isFinalPublicStatus(statusText)) return publicStages[4].guidance;
+  return currentStageForShipment(shipment).guidance;
+}
+
+function stageStatusLabel(state: PublicStageState) {
+  if (state === "completed") return "انجام شده";
+  if (state === "current") return "در حال انجام";
+  if (state === "issue") return "نیازمند بررسی";
   return "در انتظار";
 }
 
-function stepStatusStyle(status: string) {
-  if (status === "COMPLETED") return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  if (status === "IN_PROGRESS") return "border-blue-200 bg-blue-50 text-blue-700";
-  return "border-slate-200 bg-slate-50 text-slate-500";
-}
-
-function CustomerStepsBox({ steps = [] }: { steps?: PublicStep[] }) {
-  const completed = steps.filter((step) => step.status === "COMPLETED").length;
-  const inProgress = steps.find((step) => step.status === "IN_PROGRESS");
-  const progress = steps.length ? Math.round((completed / steps.length) * 100) : 0;
-
-  return (
-    <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
-      <CardHeader className="pb-3">
-        <CardTitle className="flex flex-col gap-3 text-base font-black text-slate-950 sm:flex-row sm:items-center sm:justify-between">
-          <span className="flex items-center gap-2">
-            <Truck className="h-5 w-5 text-blue-600" />
-            مراحل محموله
-          </span>
-          <Badge className="w-fit border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-50">
-            {completed} از {steps.length || 0} مرحله انجام شده
-          </Badge>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {steps.length ? (
-          <>
-            <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-4">
-              <div className="flex items-center justify-between gap-4 text-xs font-bold text-slate-600">
-                <span>پیشرفت کلی</span>
-                <span dir="ltr">{progress}%</span>
-              </div>
-              <div className="mt-3 h-2 overflow-hidden rounded-full bg-white">
-                <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${progress}%` }} />
-              </div>
-              <p className="mt-3 text-xs font-medium leading-6 text-blue-900">
-                {inProgress
-                  ? `مرحله فعلی: ${inProgress.label}`
-                  : completed === steps.length
-                    ? "تمام مراحل قابل نمایش این محموله تکمیل شده است."
-                    : "مرحله بعدی پس از به روزرسانی تیم عملیات نمایش داده می شود."}
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              {steps.map((step, index) => (
-                <div
-                  key={step.id || `${step.order}-${step.label}`}
-                  className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3"
-                >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-xs font-black text-slate-500 shadow-sm">
-                    {index + 1}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <p className="text-sm font-black leading-6 text-slate-950">{step.label}</p>
-                      <Badge className={`w-fit shrink-0 ${stepStatusStyle(step.status)}`}>
-                        {stepStatusLabel(step.status)}
-                      </Badge>
-                    </div>
-                    {step.completedAt && (
-                      <p className="mt-1 text-xs font-medium text-slate-500">تکمیل شده در {step.completedAt}</p>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        ) : (
-          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center">
-            <Truck className="mx-auto h-8 w-8 text-slate-300" />
-            <p className="mt-3 text-sm font-bold text-slate-600">هنوز مرحله ای برای نمایش عمومی ثبت نشده است.</p>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
+function routeText(origin?: string, destination?: string) {
+  const from = cleanPublicValue(origin, "مبدأ ثبت نشده");
+  const to = cleanPublicValue(destination, "مقصد ثبت نشده");
+  return `از ${from} به ${to}`;
 }
 
 function PublicTrackingResult({ data }: { data: PublicTrackingPayload }) {
-  const statusLabel = useMemo(
-    () => localizeStatus(data.shipment.publicStatusLabel),
-    [data.shipment.publicStatusLabel]
-  );
+  const timeline = useMemo(() => timelineForShipment(data.shipment), [data.shipment]);
+  const currentStage = useMemo(() => currentStageForShipment(data.shipment), [data.shipment]);
+  const statusLabel = useMemo(() => currentStage.summary, [currentStage]);
   const statusDescription = useMemo(
     () => localizeDescription(data.shipment.publicStatusDescription),
     [data.shipment.publicStatusDescription]
   );
+  const origin = cleanPublicValue(data.shipment.origin, "مبدأ ثبت نشده");
+  const destination = cleanPublicValue(data.shipment.destination, "مقصد ثبت نشده");
+  const estimatedDelivery = cleanPublicValue(data.shipment.estimatedDelivery, "");
 
   return (
-    <div className="space-y-5">
-      <section className="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
-        <div className="border-b border-blue-100 bg-blue-50/70 px-5 py-4 md:px-7">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div className="space-y-2">
+    <div className="space-y-5" data-testid="public-tracking-result">
+      <section className="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm" data-testid="public-tracking-hero">
+        <div className="bg-blue-50/70 px-5 py-5 md:px-7">
+          <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_20rem] md:items-start">
+            <div className="min-w-0 space-y-4">
               <Badge className="w-fit border-blue-200 bg-white text-blue-700 hover:bg-white">
                 رهگیری امن مشتری
               </Badge>
               <div>
-                <p className="text-xs font-bold text-slate-500">شماره محموله</p>
-                <h1 className="mt-1 text-3xl font-black tracking-tight text-slate-950 md:text-4xl" dir="ltr">
+                <p className="text-xs font-black text-slate-500">شماره محموله</p>
+                <h1 className="mt-1 truncate text-3xl font-black tracking-tight text-slate-950 md:text-4xl" dir="ltr">
                   {data.shipment.code}
                 </h1>
               </div>
+              <div className="max-w-2xl">
+                <h2 className="text-xl font-black leading-9 text-slate-950 md:text-2xl" data-testid="public-current-status">
+                  {statusLabel}
+                </h2>
+                <p className="mt-2 text-sm font-medium leading-7 text-slate-600">{statusDescription}</p>
+              </div>
             </div>
-            <div className="rounded-xl border border-blue-200 bg-white p-4 md:min-w-72">
+            <div className="rounded-xl border border-blue-200 bg-white p-4 shadow-sm">
               <div className="flex items-center gap-2 text-blue-700">
                 <CheckCircle2 className="h-5 w-5" />
                 <p className="text-xs font-black">آخرین وضعیت قابل نمایش</p>
               </div>
-              <h2 className="mt-3 text-xl font-black leading-8 text-slate-950">{statusLabel}</h2>
-              <p className="mt-2 text-sm font-medium leading-7 text-slate-600">{statusDescription}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid gap-4 p-5 md:grid-cols-[1.1fr_0.9fr] md:p-7">
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-bold text-slate-500">مسیر حمل</p>
-                <p className="mt-1 text-base font-black text-slate-950">
-                  {data.shipment.origin || "مبدا نامشخص"} به {data.shipment.destination || "مقصد نامشخص"}
+              <Badge className="mt-3 w-fit border-blue-200 bg-blue-50 px-3 py-1 text-blue-700 hover:bg-blue-50">
+                {currentStage.label}
+              </Badge>
+              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-bold text-slate-500">آخرین بروزرسانی</p>
+                <p className="mt-1 text-sm font-black leading-7 text-slate-950">
+                  {formatPublicDate(data.shipment.lastPublicUpdate)}
                 </p>
               </div>
-              <Truck className="h-8 w-8 text-blue-600" />
             </div>
-            <div className="mt-5 flex items-center gap-3">
-              <div className="h-3 w-3 rounded-full bg-blue-600" />
-              <div className="h-0.5 flex-1 bg-blue-200" />
-              <div className="h-3 w-3 rounded-full bg-emerald-500" />
-            </div>
-            <div className="mt-2 flex justify-between gap-4 text-xs font-bold text-slate-500">
-              <span className="truncate">{data.shipment.origin || "مبدا"}</span>
-              <span className="truncate text-left">{data.shipment.destination || "مقصد"}</span>
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <p className="text-xs font-bold text-slate-500">آخرین به روزرسانی</p>
-            <p className="mt-2 text-sm font-black leading-7 text-slate-950">
-              {formatPublicDate(data.shipment.lastPublicUpdate)}
-            </p>
-            <p className="mt-3 text-xs font-medium leading-6 text-slate-500">
-              فقط اطلاعات امن و قابل نمایش برای مشتری در این صفحه منتشر می شود.
-            </p>
           </div>
         </div>
       </section>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <DetailTile icon={<MapPin className="h-5 w-5" />} label="مبدا" value={data.shipment.origin} />
-        <DetailTile icon={<Package className="h-5 w-5" />} label="مقصد" value={data.shipment.destination} />
-        <DetailTile
-          icon={<Calendar className="h-5 w-5" />}
-          label="زمان تقریبی تحویل"
-          value={data.shipment.estimatedDelivery}
-        />
-      </div>
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6" data-testid="public-route-section">
+        <div className="mb-5 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="flex items-center gap-2 text-base font-black text-slate-950">
+              <RouteIcon className="h-5 w-5 text-blue-600" />
+              مسیر محموله
+            </p>
+            <p className="mt-1 text-sm font-medium leading-7 text-slate-500" data-testid="public-route-text">
+              {routeText(data.shipment.origin, data.shipment.destination)}
+            </p>
+          </div>
+          <Badge className="w-fit border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-50">
+            مسیر
+          </Badge>
+        </div>
 
-      <CustomerStepsBox steps={data.steps} />
+        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="flex items-center gap-2 text-xs font-black text-slate-500">
+              <MapPin className="h-4 w-4 text-blue-600" />
+              مبدأ
+            </p>
+            <p className="mt-2 truncate text-base font-black text-slate-950" data-testid="public-route-origin">{origin}</p>
+          </div>
+          <div className="flex min-w-0 items-center justify-center gap-3 py-1 md:w-44">
+            <span className="h-3 w-3 rounded-full bg-blue-600" />
+            <span className="h-0.5 min-w-10 flex-1 rounded-full bg-blue-100 md:min-w-20" />
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white shadow-sm">
+              <Truck className="h-4 w-4" />
+            </span>
+            <span className="h-0.5 min-w-10 flex-1 rounded-full bg-emerald-100 md:min-w-20" />
+            <span className="h-3 w-3 rounded-full bg-emerald-500" />
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <p className="flex items-center gap-2 text-xs font-black text-slate-500">
+              <MapPin className="h-4 w-4 text-emerald-600" />
+              مقصد
+            </p>
+            <p className="mt-2 truncate text-base font-black text-slate-950" data-testid="public-route-destination">{destination}</p>
+          </div>
+        </div>
 
-      <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
+        <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50/70 p-4" data-testid="public-eta">
+          <p className="flex items-center gap-2 text-sm font-black text-blue-900">
+            <Calendar className="h-4 w-4 text-blue-700" />
+            {estimatedDelivery
+              ? `زمان تقریبی تحویل: ${estimatedDelivery}`
+              : "زمان تقریبی تحویل هنوز ثبت نشده است."}
+          </p>
+          {estimatedDelivery && (
+            <p className="mt-2 text-xs font-medium leading-6 text-blue-800">
+              این زمان تقریبی است و ممکن است با توجه به وضعیت حمل و ترخیص تغییر کند.
+            </p>
+          )}
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6" data-testid="public-progress-timeline">
+        <div className="mb-5 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-base font-black text-slate-950">مراحل محموله</p>
+            <p className="mt-1 text-sm font-medium leading-7 text-slate-500">
+              مراحل زیر به صورت کلی و امن برای مشتری نمایش داده می‌شوند.
+            </p>
+          </div>
+          <Badge className="w-fit border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-50">
+            {currentStage.label}
+          </Badge>
+        </div>
+        <div className="grid gap-3 md:grid-cols-5">
+          {timeline.map((stage, index) => {
+            const isCompleted = stage.state === "completed";
+            const isCurrent = stage.state === "current";
+            const isIssue = stage.state === "issue";
+            const markerClassName = isCompleted
+              ? "border-emerald-500 bg-emerald-500 text-white"
+              : isIssue
+                ? "border-amber-400 bg-amber-50 text-amber-700"
+                : isCurrent
+                  ? "border-blue-600 bg-blue-600 text-white"
+                  : "border-slate-200 bg-slate-50 text-slate-400";
+            return (
+              <div
+                key={stage.id}
+                className="relative rounded-xl border border-slate-200 bg-slate-50/70 p-4"
+                data-testid={`public-stage-${stage.id}`}
+              >
+                {index < timeline.length - 1 && (
+                  <div className="absolute left-4 right-4 top-8 hidden h-0.5 translate-x-1/2 bg-slate-200 md:block" />
+                )}
+                <div className="relative z-10 flex items-start gap-3 md:flex-col">
+                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 ${markerClassName}`}>
+                    {isCompleted ? <CheckCircle2 className="h-4 w-4" /> : isCurrent ? <Clock3 className="h-4 w-4" /> : <Circle className="h-4 w-4" />}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-black leading-6 text-slate-950">{stage.label}</p>
+                    <p className="mt-1 text-xs font-bold text-slate-500">{stageStatusLabel(stage.state)}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-blue-100 bg-blue-50/70 p-5 shadow-sm" data-testid="public-next-step-card">
+        <div className="flex items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-blue-700 shadow-sm">
+            <HelpCircle className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="text-base font-black text-blue-950">مرحله بعدی</p>
+            <p className="mt-2 text-sm font-medium leading-7 text-blue-900">{nextStepGuidance(data.shipment)}</p>
+          </div>
+        </div>
+      </section>
+
+      <Card className="rounded-2xl border-slate-200 bg-white shadow-sm" data-testid="public-documents-section">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base font-black text-slate-950">
+          <CardTitle className="flex flex-col gap-2 text-base font-black text-slate-950 sm:flex-row sm:items-center sm:justify-between">
+            <span className="flex items-center gap-2">
             <FileText className="h-5 w-5 text-blue-600" />
             اسناد قابل مشاهده برای مشتری
+            </span>
+            <Badge className="w-fit border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-50">
+              {data.documents.length} سند
+            </Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -303,12 +409,14 @@ function PublicTrackingResult({ data }: { data: PublicTrackingPayload }) {
               <a
                 key={document.id}
                 href={document.downloadUrl}
+                aria-label={`Download ${document.title}`}
                 className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 transition hover:border-blue-200 hover:bg-blue-50"
               >
                 <div className="min-w-0">
                   <p className="truncate text-sm font-black text-slate-950">{document.title}</p>
-                  <p className="mt-1 text-xs font-medium text-slate-500">
-                    {[document.fileName, document.fileSize].filter(Boolean).join(" | ") || "سند اشتراک گذاری شده"}
+                  <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs font-medium text-slate-500">
+                    <span>{[document.fileName, document.fileSize].filter(Boolean).join(" | ") || "سند منتشر شده"}</span>
+                    {document.createdAt && <span>منتشر شده: {formatPublicDate(document.createdAt)}</span>}
                   </p>
                 </div>
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-blue-700 shadow-sm">
@@ -317,22 +425,18 @@ function PublicTrackingResult({ data }: { data: PublicTrackingPayload }) {
               </a>
             ))
           ) : (
-            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-5 text-center">
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center" data-testid="public-documents-empty">
               <FileText className="mx-auto h-8 w-8 text-slate-300" />
               <p className="mt-3 text-sm font-bold text-slate-600">
                 هنوز سندی برای نمایش به مشتری منتشر نشده است.
               </p>
-              <p className="mt-1 text-xs font-medium text-slate-500">
-                هر زمان تیم عملیات سندی را برای مشتری فعال کند، همین جا نمایش داده می شود.
+              <p className="mt-2 text-xs font-medium leading-6 text-slate-500">
+                به محض آماده شدن اسناد قابل مشاهده، در این بخش نمایش داده می‌شوند.
               </p>
             </div>
           )}
         </CardContent>
       </Card>
-
-      <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-sm font-medium leading-7 text-blue-900">
-        برای سوال درباره این محموله، لطفا با نماینده عملیات خود در لجستیک پلاس تماس بگیرید.
-      </div>
     </div>
   );
 }
@@ -420,12 +524,6 @@ function PublicShell({ children }: { children: React.ReactNode }) {
               <p className="truncate text-xs font-semibold text-slate-500">رهگیری امن محموله</p>
             </div>
           </div>
-          <Link
-            to="/track/search"
-            className="shrink-0 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 hover:bg-blue-100"
-          >
-            جستجوی محموله
-          </Link>
         </div>
       </header>
       <main className="mx-auto max-w-5xl space-y-5 px-4 py-5 md:py-8">

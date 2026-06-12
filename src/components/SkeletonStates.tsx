@@ -5,16 +5,18 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 function SkeletonRows({ rows = 5, columns = 4 }: { rows?: number; columns?: number }) {
+  const gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
+
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card">
-      <div className="grid gap-3 border-b border-border bg-muted/45 p-4" style={{ gridTemplateColumns: `repeat(${columns}, minmax(120px, 1fr))` }}>
+      <div className="grid gap-2 border-b border-border bg-muted/45 p-4 sm:gap-3" style={{ gridTemplateColumns }}>
         {Array.from({ length: columns }).map((_, index) => (
           <Skeleton key={index} className="h-3 w-20 max-w-full" />
         ))}
       </div>
       <div className="divide-y divide-border">
         {Array.from({ length: rows }).map((_, row) => (
-          <div key={row} className="grid gap-3 p-4" style={{ gridTemplateColumns: `repeat(${columns}, minmax(120px, 1fr))` }}>
+          <div key={row} className="grid gap-2 p-4 sm:gap-3" style={{ gridTemplateColumns }}>
             {Array.from({ length: columns }).map((__, column) => (
               <Skeleton key={column} className={cn("h-4", column === 0 ? "w-28" : "w-20", column === columns - 1 && "w-16")} />
             ))}

@@ -3,139 +3,86 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { Suspense, lazy, useEffect, useRef } from "react";
+import React, { Suspense, lazy, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from "react-router-dom";
-import { Sidebar, TopBar } from "./components/layout/Navbar";
-import { MobileBottomNav } from "./components/layout/MobileBottomNav";
-import { useMockStore } from "./store/useMockStore";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { Toaster } from "sonner";
-import { format } from "date-fns-jalali";
 import { ClientErrorBoundary } from "./components/ClientErrorBoundary";
+import { ProtectedShellSkeleton, PublicRouteSkeleton } from "./components/SkeletonStates";
+import { QUOTATIONS_UI_ENABLED, SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED } from "./config/features";
 import { installClientErrorReporting } from "./lib/errorReporting";
-import { ProtectedContentSkeleton, ProtectedShellSkeleton, PublicRouteSkeleton } from "./components/SkeletonStates";
+import { installClientPerformanceMonitoring } from "./lib/clientPerformance";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
-// Lazy Loaded Components
-import LoginPage from "./app/LoginPage";
-import LandingPage from "./app/LandingPage";
-import ContactPage from "./app/ContactPage";
-import { PricingPage, SignupPage, SignupPendingPage } from "./app/SaasSignup";
+const LazyToaster = lazy(() =>
+  import("sonner").then(({ Toaster }) => ({
+    default: () => <Toaster position="top-center" dir="rtl" />,
+  }))
+);
+const ProtectedAppLayout = lazy(() => import("./components/layout/ProtectedAppLayout"));
+const LoginPage = lazy(() => import("./app/LoginPage"));
+const LandingPage = lazy(() => import("./app/LandingPage"));
+const ContactPage = lazy(() => import("./app/ContactPage"));
+const PricingPage = lazy(() => import("./app/SaasSignup").then((module) => ({ default: module.PricingPage })));
+const SignupPage = lazy(() => import("./app/SaasSignup").then((module) => ({ default: module.SignupPage })));
+const SignupPendingPage = lazy(() => import("./app/SaasSignup").then((module) => ({ default: module.SignupPendingPage })));
 const Dashboard = lazy(() => import("./app/Dashboard"));
 const Shipments = lazy(() => import("./app/Shipments"));
+const ExitedShipments = lazy(() => import("./app/ExitedShipments"));
+const DailyStatus = lazy(() => import("./app/DailyStatus"));
 const Customers = lazy(() => import("./app/Customers"));
 const Tasks = lazy(() => import("./app/Tasks"));
 const Chat = lazy(() => import("./app/Chat"));
 const PublicTrack = lazy(() => import("./app/PublicTrack"));
-const PublicTrackSearch = lazy(() => import("./app/PublicTrack").then(module => ({ default: module.PublicTrackSearch })));
+const PublicTrackSearch = lazy(() => import("./app/PublicTrack").then((module) => ({ default: module.PublicTrackSearch })));
 const Profile = lazy(() => import("./app/Profile"));
 const Settings = lazy(() => import("./app/Settings"));
 const UserManagement = lazy(() => import("./app/UserManagement"));
-const AdminPanel = lazy(() => import("./app/AdminPanel"));
+const ShipmentFormTemplatesAdmin = SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED ? lazy(() => import("./app/ShipmentFormTemplatesAdmin")) : null;
+const ShipmentWorkflowTemplatesAdmin = SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED ? lazy(() => import("./app/ShipmentWorkflowTemplatesAdmin")) : null;
+const AdminConsoleRoute = lazy(() => import("./app/AdminConsoleRoute"));
 const ShipmentDetail = lazy(() => import("./app/ShipmentDetail"));
+const ShipmentCreateV2 = lazy(() => import("./app/ShipmentCreateV2"));
+const ShipmentDetailV2 = lazy(() => import("./app/ShipmentDetailV2"));
 const Documents = lazy(() => import("./app/Documents"));
-const ShipmentEdit = lazy(() => import("./app/ShipmentEdit").then(module => ({ default: module.ShipmentEdit })));
+const DocumentManagementCenter = lazy(() => import("./app/DocumentManagementCenter"));
+const ShipmentEdit = lazy(() => import("./app/ShipmentEdit").then((module) => ({ default: module.ShipmentEdit })));
 const ChangeLog = lazy(() => import("./app/ChangeLog"));
 const Compliance = lazy(() => import("./app/Compliance"));
 const ChequeManagement = lazy(() => import("./app/ChequeManagement"));
+const CommercialCards = lazy(() => import("./app/CommercialCards"));
 const ArchivePage = lazy(() => import("./app/Archive"));
-const QuotageManagement = lazy(() => import("./app/QuotageManagement"));
+const QuotageManagement = QUOTATIONS_UI_ENABLED ? lazy(() => import("./app/QuotageManagement")) : null;
 const CustomerDetail = lazy(() => import("./app/CustomerDetail"));
+const SearchPage = lazy(() => import("./app/SearchPage"));
+const RatesAndTariffs = lazy(() => import("./app/RatesAndTariffs"));
 
 const protectedRoutePrefixes = [
   "/dashboard",
+  "/daily-status",
+  "/kootaj-board",
   "/shipments",
   "/changelog",
   "/customers",
   "/tasks",
   "/documents",
   "/compliance",
+  "/compliance-meetings",
   "/cheques",
+  "/commercial-cards",
+  "/rates",
+  "/search",
   "/quotage",
+  "/quotations",
   "/archive",
   "/chat",
   "/profile",
   "/settings",
   "/management",
   "/admin",
+  "/platform-admin",
 ];
 
 const isProtectedPath = (pathname: string) =>
   protectedRoutePrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
-
-const ComplianceSync = () => {
-  const currentUser = useMockStore(state => state.currentUser);
-  const appointments = useMockStore(state => state.appointments);
-  const updateAppointment = useMockStore(state => state.updateAppointment);
-  const addNotification = useMockStore(state => state.addNotification);
-
-  useEffect(() => {
-    if (!currentUser) return;
-
-    const todayStr = format(new Date(), "yyyy/MM/dd");
-
-    const todayApps = appointments.filter(app =>
-      app.assignedPersonId === currentUser.id &&
-      app.dateTime.startsWith(todayStr) &&
-      !app.reminderSent
-    );
-
-    if (todayApps.length > 0) {
-      todayApps.forEach(app => {
-        addNotification({
-          title: "یادآوری جلسه امروز",
-          message: `شما امروز یک جلسه دارید: ${app.purpose} (ساعت ${app.dateTime.split(" ")[1]})`,
-          type: "URGENT",
-          link: "/compliance"
-        });
-        updateAppointment(app.id, { reminderSent: true });
-      });
-    }
-  }, [currentUser, appointments, updateAppointment, addNotification]);
-
-  return null;
-};
-
-const ProtectedLayout = ({ children }: { children: React.ReactNode }) => {
-  const currentUser = useMockStore(state => state.currentUser);
-  const setCurrentUser = useMockStore(state => state.setCurrentUser);
-  const hasHydratedFromDatabase = useMockStore(state => state.hasHydratedFromDatabase);
-  const loadCurrentUserRecords = useMockStore(state => state.loadCurrentUserRecords);
-  const { pathname } = useLocation();
-  const mainRef = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    if (mainRef.current) {
-      mainRef.current.scrollTo(0, 0);
-    }
-  }, [pathname]);
-
-  useEffect(() => {
-    if (currentUser && !hasHydratedFromDatabase) {
-      loadCurrentUserRecords().catch((error) => {
-        console.error(error);
-        setCurrentUser(null);
-      });
-    }
-  }, [currentUser, hasHydratedFromDatabase, loadCurrentUserRecords, setCurrentUser]);
-
-  if (!currentUser) {
-    return <Navigate to="/login" replace />;
-  }
-
-  return (
-    <div className="dashboard-theme app-shell flex h-screen bg-background text-foreground overflow-hidden" dir="rtl">
-      {hasHydratedFromDatabase ? <ComplianceSync /> : null}
-      <Sidebar />
-      <div className="flex-1 flex flex-col min-w-0 h-full relative">
-        <TopBar />
-        <main ref={mainRef} className="app-main flex-1 overflow-y-auto w-full pb-16 lg:pb-0">
-          {hasHydratedFromDatabase ? children : <ProtectedContentSkeleton />}
-        </main>
-        <MobileBottomNav />
-      </div>
-    </div>
-  );
-};
 
 function AppRoutes() {
   const location = useLocation();
@@ -154,24 +101,66 @@ function AppRoutes() {
         <Route path="/track/:token" element={<PublicTrack />} />
         <Route path="/track/search" element={<PublicTrackSearch />} />
 
-        <Route path="/dashboard" element={<ProtectedLayout><Dashboard /></ProtectedLayout>} />
-        <Route path="/shipments" element={<ProtectedLayout><Shipments /></ProtectedLayout>} />
-        <Route path="/shipments/:id" element={<ProtectedLayout><ShipmentDetail /></ProtectedLayout>} />
-        <Route path="/shipments/:id/edit" element={<ProtectedLayout><ShipmentEdit /></ProtectedLayout>} />
-        <Route path="/changelog" element={<ProtectedLayout><ChangeLog /></ProtectedLayout>} />
-        <Route path="/customers" element={<ProtectedLayout><Customers /></ProtectedLayout>} />
-        <Route path="/customers/:id" element={<ProtectedLayout><CustomerDetail /></ProtectedLayout>} />
-        <Route path="/tasks" element={<ProtectedLayout><Tasks /></ProtectedLayout>} />
-        <Route path="/documents" element={<ProtectedLayout><Documents /></ProtectedLayout>} />
-        <Route path="/compliance" element={<ProtectedLayout><Compliance /></ProtectedLayout>} />
-        <Route path="/cheques" element={<ProtectedLayout><ChequeManagement /></ProtectedLayout>} />
-        <Route path="/quotage" element={<ProtectedLayout><QuotageManagement /></ProtectedLayout>} />
-        <Route path="/archive" element={<ProtectedLayout><ArchivePage /></ProtectedLayout>} />
-        <Route path="/chat" element={<ProtectedLayout><Chat /></ProtectedLayout>} />
-        <Route path="/profile" element={<ProtectedLayout><Profile /></ProtectedLayout>} />
-        <Route path="/settings" element={<ProtectedLayout><Settings /></ProtectedLayout>} />
-        <Route path="/management" element={<ProtectedLayout><UserManagement /></ProtectedLayout>} />
-        <Route path="/admin" element={<ProtectedLayout><AdminPanel /></ProtectedLayout>} />
+        <Route path="/dashboard" element={<ProtectedAppLayout><Dashboard /></ProtectedAppLayout>} />
+        <Route path="/daily-status" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><DailyStatus /></ProtectedAppLayout>} />
+        <Route path="/kootaj-board" element={<Navigate to="/daily-status" replace />} />
+        <Route path="/shipments" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><Shipments /></ProtectedAppLayout>} />
+        <Route path="/shipments/new-v2" element={<ProtectedAppLayout anyOf={["shipments.create"]}><ShipmentCreateV2 /></ProtectedAppLayout>} />
+        <Route path="/shipments/exited" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ExitedShipments /></ProtectedAppLayout>} />
+        <Route path="/shipments/:id/legacy" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentDetail /></ProtectedAppLayout>} />
+        <Route path="/shipments/:id/v2" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentDetailV2 /></ProtectedAppLayout>} />
+        <Route path="/shipments/:id" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentDetailV2 /></ProtectedAppLayout>} />
+        <Route path="/shipments/:id/edit" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentEdit /></ProtectedAppLayout>} />
+        <Route path="/changelog" element={<ProtectedAppLayout anyOf={["changes.view"]}><ChangeLog /></ProtectedAppLayout>} />
+        <Route path="/customers" element={<ProtectedAppLayout anyOf={["customers.view"]} roles={["CEO"]}><Customers /></ProtectedAppLayout>} />
+        <Route path="/customers/:id" element={<ProtectedAppLayout anyOf={["customers.view"]} roles={["CEO"]}><CustomerDetail /></ProtectedAppLayout>} />
+        <Route path="/tasks" element={<ProtectedAppLayout anyOf={["tasks.view_own", "tasks.view_all"]}><Tasks /></ProtectedAppLayout>} />
+        <Route path="/documents" element={<ProtectedAppLayout anyOf={["documents.view_all"]}><Documents /></ProtectedAppLayout>} />
+        <Route path="/documents/management-center" element={<ProtectedAppLayout allOf={["documents.view_all", "shipments.view_all"]}><DocumentManagementCenter /></ProtectedAppLayout>} />
+        <Route path="/compliance" element={<Navigate to="/compliance-meetings" replace />} />
+        <Route path="/compliance-meetings" element={<ProtectedAppLayout anyOf={["compliance.manage"]}><Compliance /></ProtectedAppLayout>} />
+        <Route path="/cheques" element={<ProtectedAppLayout anyOf={["cheques.manage"]}><ChequeManagement /></ProtectedAppLayout>} />
+        <Route path="/commercial-cards" element={<ProtectedAppLayout><CommercialCards /></ProtectedAppLayout>} />
+        <Route path="/rates" element={<ProtectedAppLayout><RatesAndTariffs /></ProtectedAppLayout>} />
+        <Route path="/search" element={<ProtectedAppLayout><SearchPage /></ProtectedAppLayout>} />
+        <Route path="/quotage" element={<Navigate to="/dashboard" replace />} />
+        <Route
+          path="/quotations"
+          element={
+            QUOTATIONS_UI_ENABLED && QuotageManagement ? (
+              <ProtectedAppLayout anyOf={["quotations.manage"]}><QuotageManagement /></ProtectedAppLayout>
+            ) : (
+              <Navigate to="/dashboard" replace />
+            )
+          }
+        />
+        <Route path="/archive" element={<ProtectedAppLayout anyOf={["archive.view"]}><ArchivePage /></ProtectedAppLayout>} />
+        <Route path="/chat" element={<ProtectedAppLayout anyOf={["chat.use"]}><Chat /></ProtectedAppLayout>} />
+        <Route path="/profile" element={<ProtectedAppLayout><Profile /></ProtectedAppLayout>} />
+        <Route path="/settings" element={<ProtectedAppLayout><Settings /></ProtectedAppLayout>} />
+        <Route path="/management" element={<ProtectedAppLayout anyOf={["users.manage"]}><UserManagement /></ProtectedAppLayout>} />
+        <Route
+          path="/admin/shipment-form-templates"
+          element={
+            SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED && ShipmentFormTemplatesAdmin ? (
+              <ProtectedAppLayout anyOf={["shipment_forms.manage"]}><ShipmentFormTemplatesAdmin /></ProtectedAppLayout>
+            ) : (
+              <Navigate to="/shipments" replace />
+            )
+          }
+        />
+        <Route
+          path="/admin/workflow-templates"
+          element={
+            SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED && ShipmentWorkflowTemplatesAdmin ? (
+              <ProtectedAppLayout anyOf={["shipment_workflows.manage"]}><ShipmentWorkflowTemplatesAdmin /></ProtectedAppLayout>
+            ) : (
+              <Navigate to="/shipments" replace />
+            )
+          }
+        />
+        <Route path="/admin" element={<Navigate to="/platform-admin" replace />} />
+        <Route path="/platform-admin" element={<AdminConsoleRoute />} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
@@ -180,25 +169,17 @@ function AppRoutes() {
 }
 
 export default function App() {
-  const currentTheme = useMockStore(state => state.currentTheme);
-
-  useEffect(() => {
-    const root = window.document.documentElement;
-    if (currentTheme === "dark") {
-      root.classList.add("dark");
-    } else {
-      root.classList.remove("dark");
-    }
-  }, [currentTheme]);
-
   useEffect(() => {
     installClientErrorReporting();
+    installClientPerformanceMonitoring();
   }, []);
 
   return (
     <Router>
       <TooltipProvider>
-        <Toaster position="top-center" dir="rtl" />
+        <Suspense fallback={null}>
+          <LazyToaster />
+        </Suspense>
         <div className="h-full">
           <ClientErrorBoundary>
             <AppRoutes />

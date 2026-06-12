@@ -67,6 +67,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { EmptyState, resetFiltersAction } from "@/src/components/EmptyState";
+import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
 
 // --- Components ---
 
@@ -125,9 +126,16 @@ export default function Compliance() {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
+  const [appointmentPendingCancel, setAppointmentPendingCancel] = useState<Appointment | null>(null);
 
   // Deriving selected appointment from store to keep it reactive
   const selectedAppointment = appointments.find(a => a.id === selectedAppointmentId) || null;
+  const selectedRequiredDocuments = selectedAppointment && Array.isArray(selectedAppointment.requiredDocuments)
+    ? selectedAppointment.requiredDocuments
+    : [];
+  const selectedDocumentCompletion = selectedRequiredDocuments.length
+    ? Math.round((selectedRequiredDocuments.filter(d => d.completed).length / selectedRequiredDocuments.length) * 100)
+    : 0;
 
   // View state
   const [viewDate, setViewDate] = useState<Date>(new Date());
@@ -149,18 +157,22 @@ export default function Compliance() {
     { id: "d3", name: "گواهی مبدا", required: false, completed: false },
   ]);
 
-  const filteredAppointments = appointments.filter(a => 
+  const activeAppointments = React.useMemo(
+    () => appointments.filter(a => !a.isArchived && a.status !== "CANCELLED"),
+    [appointments]
+  );
+  const filteredAppointments = activeAppointments.filter(a =>
     (a.departmentName?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
     (a.purpose?.toLowerCase() || "").includes(searchTerm.toLowerCase())
   );
   const resetComplianceFilters = () => setSearchTerm("");
 
   const complianceStats = React.useMemo(() => {
-    const total = appointments.length;
-    const scheduled = appointments.filter(a => a.status === "SCHEDULED").length;
-    const inProgress = appointments.filter(a => a.status === "IN_PROGRESS").length;
-    const completed = appointments.filter(a => a.status === "COMPLETED").length;
-    const allDocuments = appointments.flatMap(a => a.requiredDocuments);
+    const total = activeAppointments.length;
+    const scheduled = activeAppointments.filter(a => a.status === "SCHEDULED").length;
+    const inProgress = activeAppointments.filter(a => a.status === "IN_PROGRESS").length;
+    const completed = activeAppointments.filter(a => a.status === "COMPLETED").length;
+    const allDocuments = activeAppointments.flatMap(a => a.requiredDocuments);
     const requiredDocuments = allDocuments.filter(d => d.required);
     const completedRequiredDocuments = requiredDocuments.filter(d => d.completed).length;
     const documentRate = requiredDocuments.length
@@ -173,7 +185,7 @@ export default function Compliance() {
       { label: "تکمیل شده", value: completed, helper: "بسته و ممیزی شده", icon: CheckCircle2, tone: "emerald" },
       { label: "تکمیل مدارک", value: `${documentRate}%`, helper: `${completedRequiredDocuments}/${requiredDocuments.length || 0} مدرک الزامی`, icon: FileCheck, tone: "indigo" },
     ];
-  }, [appointments]);
+  }, [activeAppointments]);
 
   const handleOpenAdd = () => {
     setEditingAppointment(null);
@@ -590,32 +602,9 @@ export default function Compliance() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)_360px] gap-5">
-        {/* Left Side: Calendar & Stats */}
+        {/* Left Side: Calendar */}
         <div className="space-y-5">
           {renderCalendar()}
-          
-          <Card className="bg-card border-border rounded-xl overflow-hidden shadow-sm">
-             <CardHeader className="p-5 pb-0">
-               <CardTitle className="text-[11px] font-black text-muted-foreground uppercase tracking-[0.2em] mb-4">آمار انطباق تیم</CardTitle>
-             </CardHeader>
-             <CardContent className="p-5 pt-0 space-y-6">
-                {[
-                  { label: "نرخ تکمیل مدارک", val: 82, color: "bg-primary" },
-                  { label: "جلسات با خروجی مثبت", val: 68, color: "bg-emerald-500" },
-                  { label: "انحراف از ددلاین", val: 12, color: "bg-destructive" },
-                ].map((s, i) => (
-                  <div key={i} className="space-y-2">
-                    <div className="flex justify-between text-[10px] font-bold">
-                       <span className="text-muted-foreground">{s.label}</span>
-                       <span className="text-foreground">{s.val}%</span>
-                    </div>
-                    <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                      <div className={cn("h-full rounded-full", s.color)} style={{ width: `${s.val}%` }} />
-                    </div>
-                  </div>
-                ))}
-             </CardContent>
-          </Card>
         </div>
 
         {/* Center: Appointment List */}
@@ -716,9 +705,18 @@ export default function Compliance() {
                               <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl hover:bg-primary/10 hover:text-primary" onClick={(e) => { e.stopPropagation(); handleOpenEdit(app); }}>
                                  <Edit3 className="w-4 h-4" />
                               </Button>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-xl hover:bg-destructive/10 hover:text-destructive" onClick={async (e) => { e.stopPropagation(); await saveMeeting(`/api/compliance-meetings/${app.id}/cancel`, { method: "POST" }); toast.error("نوبت لغو شد."); }}>
-                                 <Trash2 className="w-4 h-4" />
-                              </Button>
+                               <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 rounded-xl hover:bg-destructive/10 hover:text-destructive"
+                                aria-label={`Archive compliance meeting ${app.id}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setAppointmentPendingCancel(app);
+                                }}
+                              >
+                                  <Trash2 className="w-4 h-4" />
+                               </Button>
                            </div>
                         </div>
                       </div>
@@ -762,7 +760,7 @@ export default function Compliance() {
                       onChange={handleDocumentUpload}
                     />
                     <div className="space-y-2 bg-muted/40 p-4 rounded-xl border border-border/50">
-                      {selectedAppointment.requiredDocuments.map((doc) => (
+                      {selectedRequiredDocuments.map((doc) => (
                         <div 
                           key={doc.id} 
                           className="flex items-center justify-between group/item py-2 gap-3"
@@ -805,12 +803,12 @@ export default function Compliance() {
                          <div className="px-2 space-y-2">
                            <div className="flex justify-between text-[9px] font-black text-primary">
                               <span>میزان پیشرفت مستندات</span>
-                              <span>{Math.round((selectedAppointment.requiredDocuments.filter(d => d.completed).length / selectedAppointment.requiredDocuments.length) * 100)}%</span>
+                              <span>{selectedDocumentCompletion}%</span>
                            </div>
-                           <Progress 
-                            value={(selectedAppointment.requiredDocuments.filter(d => d.completed).length / selectedAppointment.requiredDocuments.length) * 100} 
-                            className="h-1.5 bg-muted [&>div]:bg-primary shadow-sm"
-                           />
+                            <Progress
+                             value={selectedDocumentCompletion}
+                             className="h-1.5 bg-muted [&>div]:bg-primary shadow-sm"
+                            />
                          </div>
                       </div>
   
@@ -880,6 +878,20 @@ export default function Compliance() {
           </AnimatePresence>
         </div>
       </div>
+      <DeleteConfirmDialog
+        isOpen={Boolean(appointmentPendingCancel)}
+        onClose={() => setAppointmentPendingCancel(null)}
+        onConfirm={async () => {
+          if (!appointmentPendingCancel) return;
+          await saveMeeting(`/api/compliance-meetings/${appointmentPendingCancel.id}/archive`, { method: "POST" });
+          toast.error("نوبت بایگانی شد.");
+        }}
+        title="بایگانی نوبت"
+        description="این نوبت از برنامه فعال خارج می‌شود و وضعیت آن به لغو شده تغییر می‌کند."
+        itemName={appointmentPendingCancel?.purpose}
+        confirmLabel="انتقال به بایگانی"
+        pendingLabel="در حال بایگانی..."
+      />
     </div>
   );
 }

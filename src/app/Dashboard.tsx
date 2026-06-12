@@ -1,529 +1,763 @@
 import React from "react";
-import { cn } from "@/lib/utils";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { useMockStore } from "../store/useMockStore";
+import { useNavigate } from "react-router-dom";
+import type { LucideIcon } from "lucide-react";
 import {
-  AlertTriangle,
-  CheckCircle,
-  CheckSquare,
-  Clock,
-  CreditCard,
+  AlertCircle,
+  ArrowLeft,
+  Bot,
+  CheckCircle2,
+  ClipboardList,
   FileText,
-  LayoutDashboard,
-  Package,
-  PlusCircle,
+  Loader2,
+  PackageSearch,
+  Search,
   Ship,
-  TrendingUp,
+  Sparkles,
   Users,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
-import { motion } from "motion/react";
-import { differenceInSeconds, format, parse } from "date-fns-jalali";
-import { EmptyState, EmptyTableRow, SetupChecklist } from "@/src/components/EmptyState";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 
-const cardBase = "rounded-lg border-border bg-card shadow-none transition-all";
+type DashboardMetric = {
+  key: "activeShipments" | "documents" | "activeEmployees" | "tasks";
+  label: string;
+  value: number;
+  actionUrl?: string | null;
+};
 
-const QuickAccessButton = ({ icon: Icon, label, path }: { key?: string; icon: any; label: string; path: string }) => {
+type DashboardTask = {
+  id: string;
+  title: string;
+  status: string;
+  priority: string;
+  dueDate?: string;
+  shipmentId?: string | null;
+  actionUrl: string;
+};
+
+type DashboardShipment = {
+  id: string;
+  shipmentCode: string;
+  customerCode?: string;
+  status: string;
+  destination?: string;
+  estimatedDelivery?: string;
+  updatedAt?: string;
+  actionUrl: string;
+};
+
+type DashboardHomeData = {
+  currentUser: {
+    id: string;
+    name: string;
+    role: string;
+  };
+  metrics: DashboardMetric[];
+  myActiveTasks: DashboardTask[];
+  lastUpdatedShipments: DashboardShipment[];
+  aiAssistant: {
+    name: string;
+    status: string;
+    subtitle: string;
+  };
+};
+
+type ShipmentSearchResult = {
+  id: string;
+  type: string;
+  title: string;
+  subtitle?: string;
+  description?: string;
+  url?: string;
+};
+
+type AiActiveEntity = {
+  type: "shipment" | "customer";
+  id: string;
+  code?: string;
+  label?: string;
+};
+
+type AiSource = {
+  type:
+    | "shipment"
+    | "customer"
+    | "document"
+    | "malvani"
+    | "captain"
+    | "workflow"
+    | "task"
+    | "cheque"
+    | "tariff"
+    | "rate"
+    | "public_tracking"
+    | "chat"
+    | "archive"
+    | "audit"
+    | "user"
+    | "system";
+  id?: string;
+  label: string;
+  url?: string;
+};
+
+type AiChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  tone?: "direct" | "conversational" | "clarification";
+  responseMode?: "direct_answer" | "short_summary" | "report";
+  sources?: AiSource[];
+  suggestions?: string[];
+  activeEntity?: AiActiveEntity;
+};
+
+const metricIcons: Record<DashboardMetric["key"], LucideIcon> = {
+  activeShipments: Ship,
+  documents: FileText,
+  activeEmployees: Users,
+  tasks: ClipboardList,
+};
+
+const metricTones: Record<DashboardMetric["key"], string> = {
+  activeShipments: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-300",
+  documents: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300",
+  activeEmployees: "border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-900/60 dark:bg-violet-950/30 dark:text-violet-300",
+  tasks: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300",
+};
+
+const statusLabels: Record<string, string> = {
+  PENDING: "در انتظار",
+  IN_TRANSIT: "در مسیر",
+  ARRIVED: "رسیده",
+  CUSTOMS: "گمرک",
+  CLEARED: "ترخیص شده",
+  DELIVERED: "تحویل شده",
+  CLOSED: "بسته شده",
+  TODO: "باز",
+  IN_PROGRESS: "در حال انجام",
+  BLOCKED: "متوقف",
+  DONE: "انجام شده",
+};
+
+const priorityLabels: Record<string, string> = {
+  URGENT: "فوری",
+  HIGH: "بالا",
+  MEDIUM: "متوسط",
+  LOW: "کم",
+};
+
+function formatNumber(value: number) {
+  return Number(value || 0).toLocaleString("fa-IR");
+}
+
+function formatShortDate(value?: string) {
+  if (!value) return "ثبت نشده";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+    month: "2-digit",
+    day: "2-digit",
+  }).format(parsed);
+}
+
+function createChatMessageId(prefix: string) {
+  const random = globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
+  return `${prefix}-${random}`;
+}
+
+function statusText(status: string) {
+  return statusLabels[String(status || "").toUpperCase()] || status || "ثبت نشده";
+}
+
+function priorityText(priority: string) {
+  return priorityLabels[String(priority || "").toUpperCase()] || priority || "متوسط";
+}
+
+function priorityTone(priority: string) {
+  const normalized = String(priority || "").toUpperCase();
+  if (normalized === "URGENT") return "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300";
+  if (normalized === "HIGH") return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300";
+  return "border-border bg-muted/50 text-muted-foreground";
+}
+
+function MetricCard({ metric }: { metric: DashboardMetric; key?: React.Key }) {
   const navigate = useNavigate();
+  const Icon = metricIcons[metric.key];
+  const content = (
+    <>
+      <span className="flex min-w-0 items-start gap-2.5">
+        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-md border", metricTones[metric.key])}>
+          <Icon className="h-4 w-4" strokeWidth={2.2} />
+        </span>
+        <span className="min-w-0 pt-0.5">
+          <span className="block truncate text-[12px] font-black leading-5 text-muted-foreground">{metric.label}</span>
+          <span className="mt-1 block text-2xl font-black leading-none text-foreground tabular-nums">{formatNumber(metric.value)}</span>
+        </span>
+      </span>
+      {metric.actionUrl ? (
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition-colors group-hover:border-primary/30 group-hover:text-primary">
+          <ArrowLeft className="h-3.5 w-3.5" strokeWidth={2.4} />
+        </span>
+      ) : null}
+    </>
+  );
+
+  const className =
+    "group flex min-h-[86px] w-full items-start justify-between gap-3 rounded-lg border border-border bg-card p-3 text-right shadow-none transition-colors hover:border-primary/30";
+
+  if (!metric.actionUrl) {
+    return (
+      <div className={className} data-testid={`dashboard-metric-${metric.key}`}>
+        {content}
+      </div>
+    );
+  }
 
   return (
-    <motion.div whileHover={{ y: -2 }} whileTap={{ scale: 0.98 }} className="min-w-0">
-      <Button
-        variant="ghost"
-        onClick={() => navigate(path)}
-        className="group h-16 w-full justify-start gap-2.5 rounded-lg border border-border bg-card px-3.5 text-right hover:border-primary/30 hover:bg-primary/5"
-      >
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
-          <Icon className="h-4.5 w-4.5" />
-        </span>
-        <span className="truncate text-[13px] font-black text-foreground">{label}</span>
-      </Button>
-    </motion.div>
+    <button
+      type="button"
+      className={className}
+      onClick={() => navigate(metric.actionUrl || "/dashboard")}
+      data-testid={`dashboard-metric-${metric.key}`}
+    >
+      {content}
+    </button>
   );
-};
+}
 
-const StatusBadge = ({ status }: { status: string }) => {
-  const styles: Record<string, string> = {
-    IN_TRANSIT: "bg-blue-500/10 text-blue-600 dark:text-blue-500",
-    ARRIVED: "bg-green-500/10 text-green-600 dark:text-green-500",
-    CUSTOMS: "bg-amber-500/10 text-amber-700 dark:text-amber-500",
-    CLEARED: "bg-violet-500/10 text-violet-600 dark:text-violet-500",
-    DELIVERED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-500",
-    PENDING: "bg-slate-500/10 text-slate-600 dark:text-slate-500",
-  };
-  const labels: Record<string, string> = {
-    IN_TRANSIT: "در حال حمل",
-    ARRIVED: "رسیده به بندر",
-    CUSTOMS: "در انتظار گمرک",
-    CLEARED: "ترخیص شده",
-    DELIVERED: "تحویل نهایی",
-    PENDING: "در انتظار ثبت",
-  };
-
-  return <Badge className={cn("h-5.5 border-none px-2 text-[10px] font-black", styles[status])}>{labels[status] || status}</Badge>;
-};
-
-const PriorityBadge = ({ priority }: { priority: string }) => (
-  <Badge
-    className={cn(
-      "h-5.5 border-none px-2 text-[10px] font-black",
-      priority === "URGENT" && "bg-rose-500 text-white",
-      priority === "HIGH" && "bg-amber-500 text-black",
-      priority !== "URGENT" && priority !== "HIGH" && "bg-muted text-muted-foreground"
-    )}
-  >
-    {priority === "URGENT" ? "فوری" : priority === "HIGH" ? "بالا" : "عادی"}
-  </Badge>
-);
-
-const getRiskMeta = (days: number) => {
-  if (days < 2) return { label: "ریسک فوری", className: "bg-rose-500 text-white", bar: "bg-rose-500" };
-  if (days < 5) return { label: "نیازمند پیگیری", className: "bg-amber-500 text-black", bar: "bg-amber-500" };
-  return { label: "تحت کنترل", className: "bg-blue-500 text-white", bar: "bg-primary" };
-};
-
-type DashboardApiData = {
-  summary?: {
-    activeShipments?: number;
-    customsShipments?: number;
-    openTasks?: number;
-    completedTasks?: number;
-    dueSoonCheques?: number;
-    returnedCheques?: number;
-    upcomingMeetings?: number;
-    missingMeetingDocuments?: number;
-  };
-  latestShipments?: any[];
-  priorityShipments?: any[];
-  myTasks?: any[];
-  alerts?: any[];
-  management?: any;
-};
-
-export default function Dashboard() {
+function ShipmentQuickSearch() {
   const navigate = useNavigate();
-  const shipments = useMockStore((state) => state.shipments);
-  const tasks = useMockStore((state) => state.tasks);
-  const customers = useMockStore((state) => state.customers);
-  const documents = useMockStore((state) => state.documents);
-  const currentUser = useMockStore((state) => state.currentUser);
-  const [dashboardData, setDashboardData] = React.useState<DashboardApiData | null>(null);
+  const [query, setQuery] = React.useState("");
+  const [results, setResults] = React.useState<ShipmentSearchResult[]>([]);
+  const [error, setError] = React.useState("");
+  const [isSearching, setIsSearching] = React.useState(false);
+
+  const openShipment = React.useCallback(
+    (result: ShipmentSearchResult) => {
+      navigate(result.url || `/shipments/${result.id}`);
+    },
+    [navigate]
+  );
+
+  const handleSearch = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const searchTerm = query.trim();
+    setError("");
+    setResults([]);
+
+    if (searchTerm.length < 2) {
+      setError("برای جستجو حداقل دو کاراکتر وارد کنید.");
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const params = new URLSearchParams({ q: searchTerm, type: "shipments", limit: "6" });
+      const response = await fetch(`/api/search?${params.toString()}`, { credentials: "include" });
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        navigate("/login");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(payload?.error?.message || "جستجوی محموله ناموفق بود.");
+      }
+      const shipmentResults = (payload.results || []).filter((item: ShipmentSearchResult) => item.type === "shipment");
+      if (shipmentResults.length === 1) {
+        openShipment(shipmentResults[0]);
+        return;
+      }
+      setResults(shipmentResults);
+      if (shipmentResults.length === 0) {
+        setError("محموله‌ای با این شماره پیدا نشد.");
+      }
+    } catch (searchError) {
+      setError(searchError instanceof Error ? searchError.message : "جستجوی محموله ناموفق بود.");
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  return (
+    <Card data-testid="dashboard-shipment-search-section">
+      <CardHeader className="pb-0">
+        <div className="flex items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <PackageSearch className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <CardTitle className="text-base font-black">جستجوی سریع محموله</CardTitle>
+            <CardDescription className="mt-1 text-xs font-bold">
+              شماره محموله را وارد کنید تا پرونده از مسیر اصلی محموله باز شود.
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-4">
+        <form className="flex flex-col gap-2 sm:flex-row" onSubmit={handleSearch}>
+          <div className="relative min-w-0 flex-1">
+            <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                if (error) setError("");
+              }}
+              placeholder="جستجوی شماره محموله..."
+              className="h-10 rounded-lg bg-background pr-9 text-sm font-bold"
+              data-testid="dashboard-shipment-search-input"
+            />
+          </div>
+          <Button type="submit" className="h-10 px-4 text-xs font-black" disabled={isSearching} data-testid="dashboard-shipment-search-submit">
+            {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            جستجو
+          </Button>
+        </form>
+
+        {error ? (
+          <p className="mt-2 flex items-center gap-1 text-xs font-bold text-destructive" data-testid="dashboard-shipment-search-error">
+            <AlertCircle className="h-3.5 w-3.5" />
+            {error}
+          </p>
+        ) : null}
+
+        {results.length > 0 ? (
+          <div className="mt-3 grid gap-2" data-testid="dashboard-shipment-search-results">
+            {results.map((result) => (
+              <button
+                key={result.id}
+                type="button"
+                className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border bg-background p-3 text-right transition-colors hover:border-primary/30 hover:bg-primary/5"
+                onClick={() => openShipment(result)}
+                data-testid="dashboard-shipment-search-result"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate font-mono text-sm font-black text-primary">{result.title}</span>
+                  <span className="mt-1 block truncate text-xs font-bold text-muted-foreground">{result.subtitle || result.description || "محموله"}</span>
+                </span>
+                <ArrowLeft className="h-4 w-4 text-muted-foreground" />
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function AiAssistantCard({ assistant }: { assistant: DashboardHomeData["aiAssistant"] }) {
+  const navigate = useNavigate();
+  const [draft, setDraft] = React.useState("");
+  const [messages, setMessages] = React.useState<AiChatMessage[]>([]);
+  const [activeEntity, setActiveEntity] = React.useState<AiActiveEntity | null>(null);
+  const [error, setError] = React.useState("");
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [conversationId] = React.useState(() => createChatMessageId("dashboard-ai"));
+  const threadEndRef = React.useRef<HTMLDivElement | null>(null);
+
+  const latestAssistantId = React.useMemo(
+    () => [...messages].reverse().find((item) => item.role === "assistant")?.id,
+    [messages]
+  );
 
   React.useEffect(() => {
-    let cancelled = false;
-    const loadDashboard = async () => {
-      try {
-        const endpoints = ["summary", "latest-shipments", "priority-shipments", "my-tasks", "alerts", "management"];
-        const responses = await Promise.all(endpoints.map((endpoint) => fetch(`/api/dashboard/${endpoint}`)));
-        const payloads = await Promise.all(responses.map((response) => response.json()));
-        if (cancelled) return;
-        setDashboardData({
-          summary: payloads[0]?.data,
-          latestShipments: payloads[1]?.data,
-          priorityShipments: payloads[2]?.data,
-          myTasks: payloads[3]?.data,
-          alerts: payloads[4]?.data,
-          management: payloads[5]?.data,
-        });
-      } catch {
-        if (!cancelled) setDashboardData(null);
+    threadEndRef.current?.scrollIntoView({ block: "end" });
+  }, [messages, isSubmitting]);
+
+  const sendMessage = React.useCallback(async (rawMessage: string) => {
+    const trimmedMessage = rawMessage.trim();
+    setError("");
+
+    if (!trimmedMessage) {
+      setError("متن سوال را وارد کنید.");
+      return;
+    }
+
+    const recentMessages = messages.slice(-8).map((item) => ({
+      role: item.role,
+      content: item.content,
+    }));
+    const userMessage: AiChatMessage = {
+      id: createChatMessageId("user"),
+      role: "user",
+      content: trimmedMessage,
+    };
+
+    setMessages((current) => [...current, userMessage]);
+    setDraft("");
+    setIsSubmitting(true);
+    try {
+      const response = await fetch("/api/ai/chat", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: trimmedMessage,
+          context: "dashboard",
+          conversationId,
+          recentMessages,
+          ...(activeEntity ? { activeEntity } : {}),
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        navigate("/login");
+        return;
       }
-    };
-    loadDashboard();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload?.error?.message || "پاسخ همیار آماده نشد.");
+      }
+      const responseData = payload.data || {};
+      const assistantMessage: AiChatMessage = {
+        id: responseData.id || createChatMessageId("assistant"),
+        role: "assistant",
+        content: responseData.answer || "همیار لاجستیک هنوز پاسخی برای این سوال ندارد.",
+        tone: responseData.tone || "direct",
+        responseMode: responseData.responseMode || "direct_answer",
+        sources: Array.isArray(responseData.sources) ? responseData.sources : [],
+        suggestions: Array.isArray(responseData.suggestions) ? responseData.suggestions : [],
+        activeEntity: responseData.activeEntity,
+      };
+      setMessages((current) => [...current, assistantMessage]);
+      setActiveEntity(responseData.activeEntity || null);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "پاسخ همیار آماده نشد.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [activeEntity, conversationId, messages, navigate]);
 
-  const today = format(new Date(), "yyyy/MM/dd");
-  const activeCustomers = customers.filter((customer) => !customer.isArchived);
-  const visibleShipments = shipments.filter((shipment) => !shipment.isArchived);
-  const activeShipments = shipments.filter((s) => !s.isArchived && s.status !== "DELIVERED" && s.status !== "CLOSED");
-  const customsShipments = shipments.filter((s) => !s.isArchived && s.status === "CUSTOMS");
-  const openTodayTasks = tasks.filter((t) => t.status !== "DONE" && t.dueDate === today);
-  const completedTasks = tasks.filter((t) => t.status === "DONE");
-  const demurrageRisk = shipments.filter((s) => s.status === "ARRIVED" && (s.freeTimeDays || 14) < 5);
-  const summary = dashboardData?.summary;
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void sendMessage(draft);
+  };
 
-  const quickLinks = [
-    { icon: Ship, label: "محموله‌ها", path: "/shipments" },
-    { icon: Users, label: "مشتریان", path: "/customers" },
-    { icon: CheckSquare, label: "وظایف", path: "/tasks" },
-    { icon: FileText, label: "اسناد", path: "/documents" },
-    { icon: CreditCard, label: "چک‌ها", path: "/cheques" },
-  ];
+  const handleInputKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    void sendMessage(draft);
+  };
 
-  const activeDocuments = documents.filter((document) => !document.isArchived);
-  const setupItems = [
-    {
-      label: "ثبت اولین مشتری",
-      description: "پروفایل شرکت یا مخاطب اصلی را بسازید.",
-      done: activeCustomers.length > 0,
-      to: "/customers",
-      icon: Users,
-    },
-    {
-      label: "ایجاد اولین محموله",
-      description: "شماره رهگیری، مسیر و وضعیت اولیه را وارد کنید.",
-      done: visibleShipments.length > 0,
-      to: "/shipments",
-      icon: Ship,
-    },
-    {
-      label: "بارگذاری اولین سند",
-      description: "اسناد داخلی یا قابل نمایش برای مشتری را اضافه کنید.",
-      done: activeDocuments.length > 0,
-      to: "/documents",
-      icon: FileText,
-    },
-    {
-      label: "فعال کردن رهگیری مشتری",
-      description: "بعد از ثبت محموله، لینک رهگیری عمومی را بسازید.",
-      done: visibleShipments.some((shipment) => Boolean((shipment as any).publicTrackingToken || (shipment as any).customerAccessToken)),
-      to: "/shipments",
-      icon: PlusCircle,
-    },
-  ];
-
-  const recentShipments = React.useMemo(() => dashboardData?.latestShipments?.length ? dashboardData.latestShipments : visibleShipments.slice(0, 8), [dashboardData, visibleShipments]);
-  const recentTasks = React.useMemo(() => tasks.slice(0, 4), [tasks]);
-
-  const myTasks = React.useMemo(() => {
-    if (dashboardData?.myTasks?.length) return dashboardData.myTasks;
-    if (!currentUser) return [];
-    return tasks
-      .filter((task) => task.assignedToUserId === currentUser.id && task.status !== "DONE")
-      .sort((a, b) => {
-        const priorityOrder = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
-        return priorityOrder[a.priority as keyof typeof priorityOrder] - priorityOrder[b.priority as keyof typeof priorityOrder];
-      })
-      .slice(0, 4);
-  }, [tasks, currentUser, dashboardData]);
-
-  const stats = [
-    {
-      title: "محموله‌های فعال",
-      value: (summary?.activeShipments ?? activeShipments.length).toLocaleString("fa-IR"),
-      detail: `${visibleShipments.length.toLocaleString("fa-IR")} محموله ثبت شده`,
-      icon: Package,
-      tone: "text-primary",
-      bg: "bg-primary/10",
-    },
-    {
-      title: "در انتظار ترخیص",
-      value: (summary?.customsShipments ?? customsShipments.length).toLocaleString("fa-IR"),
-      detail: `${(summary?.customsShipments ?? customsShipments.length).toLocaleString("fa-IR")} مورد در گمرک`,
-      icon: TrendingUp,
-      tone: "text-amber-600",
-      bg: "bg-amber-500/10",
-    },
-    {
-      title: "وظایف امروز",
-      value: (summary?.openTasks ?? openTodayTasks.length).toLocaleString("fa-IR"),
-      detail: `${(summary?.completedTasks ?? completedTasks.length).toLocaleString("fa-IR")} وظیفه تکمیل شده`,
-      icon: CheckCircle,
-      tone: "text-emerald-600",
-      bg: "bg-emerald-500/10",
-    },
-    {
-      title: "ریسک دموراژ",
-      value: demurrageRisk.length.toLocaleString("fa-IR"),
-      detail: demurrageRisk.length ? "نیازمند پیگیری فوری" : "مورد فوری وجود ندارد",
-      icon: AlertTriangle,
-      tone: "text-rose-600",
-      bg: "bg-rose-500/10",
-    },
-  ];
-
-  const criticalShipments = React.useMemo(() => {
-    const sourceShipments = dashboardData?.priorityShipments?.length ? dashboardData.priorityShipments : visibleShipments;
-    return sourceShipments
-      .filter((s) => ["ARRIVED", "CUSTOMS", "IN_TRANSIT"].includes(s.status))
-      .map((s) => {
-        let daysRem = 5;
-        try {
-          if (s.estimatedDelivery) {
-            const delivery = parse(s.estimatedDelivery, "yyyy/MM/dd", new Date());
-            daysRem = differenceInSeconds(delivery, new Date()) / (24 * 3600);
-          }
-        } catch (error) {
-          daysRem = 5;
-        }
-
-        return { ...s, daysRemaining: Math.max(0, daysRem) };
-      })
-      .sort((a, b) => a.daysRemaining - b.daysRemaining)
-      .slice(0, 3);
-  }, [visibleShipments, dashboardData]);
+  const openSource = (sourceItem: AiSource) => {
+    if (!sourceItem.url) return;
+    navigate(sourceItem.url);
+  };
 
   return (
-    <div className="app-page space-y-5 font-sans rtl">
-      <div className="flex flex-col gap-1.5">
-        <h1 className="text-xl font-black text-foreground md:text-2xl">خوش آمدید، {currentUser?.name || "مدیر"} عزیز</h1>
-        <p className="text-xs font-bold text-muted-foreground">نمای آرام و متمرکز از وضعیت امروز عملیات، ترخیص و وظایف تیم.</p>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {stats.map((stat) => (
-          <Card key={stat.title} className={cn(cardBase, "min-h-[118px] hover:border-primary/30")}>
-            <CardContent className="flex h-full flex-col justify-between gap-4 p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-[13px] font-black text-foreground">{stat.title}</p>
-                  <p className="mt-1 text-[11px] font-bold text-muted-foreground">{stat.detail}</p>
-                </div>
-                <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg", stat.bg)}>
-                  <stat.icon className={cn("h-4.5 w-4.5", stat.tone)} />
-                </span>
-              </div>
-              <p className="text-3xl font-black leading-none text-foreground tabular-nums">{stat.value}</p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      <SetupChecklist items={setupItems} />
-
-      <section className="space-y-2.5">
-        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h2 className="flex items-center gap-2 text-base font-black text-foreground">
-              <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
-              محموله‌های بحرانی
-            </h2>
-            <p className="mt-1 text-[11px] font-bold text-muted-foreground">بر اساس نزدیک‌ترین زمان تحویل یا پایان فری‌تایم مرتب شده‌اند.</p>
+    <Card data-testid="dashboard-ai-assistant">
+      <CardHeader className="pb-0">
+        <div className="flex items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-600 dark:text-violet-300">
+            <Bot className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <CardTitle className="text-base font-black">{assistant.name}</CardTitle>
+            <CardDescription className="mt-1 text-xs font-bold">{assistant.subtitle}</CardDescription>
           </div>
-          <Button variant="ghost" className="h-8 justify-start text-xs font-black text-primary" onClick={() => navigate("/shipments")}>
-            مشاهده همه محموله‌ها
-          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-4">
+        <div className="rounded-lg border border-border bg-background/70">
+          <div className="flex max-h-[360px] min-h-[180px] flex-col gap-3 overflow-y-auto p-3" data-testid="dashboard-ai-thread">
+            {messages.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border bg-muted/25 p-3 text-sm font-bold leading-7 text-muted-foreground">
+                سوال کوتاه بپرسید؛ مثلاً وضعیت یک محموله، شماره ناخدا یا شماره تماس مشتری.
+              </div>
+            ) : null}
+
+            {messages.map((item) => {
+              const isUser = item.role === "user";
+              const isLatestAssistant = item.id === latestAssistantId;
+              return (
+                <div
+                  key={item.id}
+                  className={cn("flex flex-col", isUser ? "items-end" : "items-start")}
+                  data-testid={isUser ? "dashboard-ai-user-message" : "dashboard-ai-assistant-message"}
+                >
+                  <div
+                    className={cn(
+                      "max-w-[88%] break-words rounded-lg px-3 py-2 text-sm font-bold leading-7 shadow-none",
+                      isUser
+                        ? "bg-primary text-primary-foreground"
+                        : "border border-border bg-muted/40 text-foreground"
+                    )}
+                    data-testid={isLatestAssistant ? "dashboard-ai-answer" : undefined}
+                  >
+                    {item.content}
+                  </div>
+
+                  {!isUser && item.sources?.length ? (
+                    <div className="mt-2 flex max-w-[88%] flex-wrap gap-1.5" data-testid="dashboard-ai-source-chips">
+                      {item.sources.map((sourceItem, index) => (
+                        <button
+                          key={`${sourceItem.type}-${sourceItem.id || sourceItem.label}-${index}`}
+                          type="button"
+                          className={cn(
+                            "h-7 max-w-full truncate rounded-lg border border-border bg-background px-2 text-[11px] font-black text-muted-foreground transition-colors",
+                            sourceItem.url ? "hover:border-primary/40 hover:text-primary" : "cursor-default"
+                          )}
+                          onClick={() => openSource(sourceItem)}
+                          disabled={!sourceItem.url}
+                          data-testid="dashboard-ai-source-chip"
+                        >
+                          {sourceItem.label}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {!isUser && isLatestAssistant && item.suggestions?.length ? (
+                    <div className="mt-2 flex max-w-[88%] flex-wrap gap-1.5" data-testid="dashboard-ai-suggestions">
+                      {item.suggestions.slice(0, 4).map((suggestion) => (
+                        <button
+                          key={suggestion}
+                          type="button"
+                          className="min-h-7 rounded-lg border border-primary/20 bg-primary/5 px-2 py-1 text-[11px] font-black leading-5 text-primary transition-colors hover:border-primary/50 hover:bg-primary/10 disabled:opacity-60"
+                          onClick={() => void sendMessage(suggestion)}
+                          disabled={isSubmitting}
+                          data-testid="dashboard-ai-suggestion-chip"
+                        >
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+
+            {isSubmitting ? (
+              <div className="flex items-start" data-testid="dashboard-ai-typing">
+                <div className="flex max-w-[88%] items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm font-bold text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  همیار لاجستیک در حال بررسی...
+                </div>
+              </div>
+            ) : null}
+            <div ref={threadEndRef} />
+          </div>
         </div>
 
-        {criticalShipments.length === 0 ? (
-          <EmptyState
-            icon={Ship}
-            title="هنوز محموله بحرانی ندارید"
-            description="بعد از ثبت اولین محموله، موارد نزدیک به تحویل یا پایان فری‌تایم اینجا دیده می‌شوند."
-            primaryAction={{ label: "ثبت محموله", to: "/shipments", icon: PlusCircle }}
-            secondaryAction={{ label: "ثبت مشتری", to: "/customers", icon: Users, variant: "outline" }}
-            compact
+        <form className="mt-3 space-y-2" onSubmit={handleSubmit}>
+          <textarea
+            value={draft}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              if (error) setError("");
+            }}
+            onKeyDown={handleInputKeyDown}
+            placeholder="مثلاً: وضعیت محموله 14051102036 چیه؟"
+            className="min-h-12 w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm font-bold leading-7 outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-3 focus:ring-ring/25"
+            data-testid="dashboard-ai-input"
           />
-        ) : (
-          <div className="grid auto-rows-fr grid-cols-1 gap-3 lg:grid-cols-3">
-            {criticalShipments.map((shipment) => {
-            const days = Math.floor(shipment.daysRemaining);
-            const hours = Math.floor((shipment.daysRemaining % 1) * 24);
-            const progress = Math.min(100, Math.max(8, 100 - (shipment.daysRemaining / (shipment.freeTimeDays || 14)) * 100));
-            const risk = getRiskMeta(days);
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <Badge variant="outline" className="h-6 w-fit rounded-lg text-[11px] font-black">
+              {activeEntity?.label || (assistant.status === "placeholder" ? "نسخه آزمایشی امن" : "فعال")}
+            </Badge>
+            <Button type="submit" className="h-9 px-4 text-xs font-black" disabled={isSubmitting} data-testid="dashboard-ai-submit">
+              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              ارسال
+            </Button>
+          </div>
+        </form>
 
-            return (
+        {error ? (
+          <p className="mt-3 flex items-center gap-1 text-xs font-bold text-destructive">
+            <AlertCircle className="h-3.5 w-3.5" />
+            {error}
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function MyTasksPanel({ tasks }: { tasks: DashboardTask[] }) {
+  const navigate = useNavigate();
+
+  return (
+    <Card data-testid="dashboard-my-tasks">
+      <CardHeader className="flex flex-row items-center justify-between gap-3 border-b border-border pb-3">
+        <div>
+          <CardTitle className="text-base font-black">وظایف فعال من</CardTitle>
+          <CardDescription className="mt-1 text-xs font-bold">{formatNumber(tasks.length)} وظیفه باز</CardDescription>
+        </div>
+        <Button type="button" variant="outline" size="sm" className="text-xs font-black" onClick={() => navigate("/tasks")}>
+          همه وظایف
+        </Button>
+      </CardHeader>
+      <CardContent className="pt-4">
+        {tasks.length === 0 ? (
+          <div className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-muted/25 p-4" data-testid="dashboard-my-tasks-empty">
+            <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" />
+            <p className="text-sm font-bold text-muted-foreground">وظیفه فعالی برای شما ثبت نشده است.</p>
+          </div>
+        ) : (
+          <div className="grid gap-2">
+            {tasks.map((task) => (
+              <button
+                key={task.id}
+                type="button"
+                className="grid min-w-0 gap-2 rounded-lg border border-border bg-background p-3 text-right transition-colors hover:border-primary/30 hover:bg-primary/5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                onClick={() => navigate(task.actionUrl || "/tasks")}
+                data-testid="dashboard-my-task"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-black text-foreground">{task.title}</span>
+                  <span className="mt-1 block text-xs font-bold text-muted-foreground">
+                    {statusText(task.status)} · موعد: {task.dueDate || "ثبت نشده"}
+                  </span>
+                </span>
+                <Badge variant="outline" className={cn("h-6 rounded-lg text-[11px] font-black", priorityTone(task.priority))}>
+                  {priorityText(task.priority)}
+                </Badge>
+              </button>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function LastShipmentsPanel({ shipments }: { shipments: DashboardShipment[] }) {
+  const navigate = useNavigate();
+
+  return (
+    <Card data-testid="dashboard-last-shipments">
+      <CardHeader className="flex flex-row items-center justify-between gap-3 border-b border-border pb-3">
+        <div>
+          <CardTitle className="text-base font-black">آخرین محموله‌های بروزرسانی‌شده</CardTitle>
+          <CardDescription className="mt-1 text-xs font-bold">حداکثر پنج پرونده آخر</CardDescription>
+        </div>
+        <Button type="button" variant="outline" size="sm" className="text-xs font-black" onClick={() => navigate("/shipments")}>
+          همه محموله‌ها
+        </Button>
+      </CardHeader>
+      <CardContent className="pt-4">
+        {shipments.length === 0 ? (
+          <div className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-muted/25 p-4">
+            <Ship className="h-5 w-5 shrink-0 text-primary" />
+            <p className="text-sm font-bold text-muted-foreground">هنوز محموله‌ای برای نمایش وجود ندارد.</p>
+          </div>
+        ) : (
+          <div className="grid gap-2">
+            {shipments.map((shipment) => (
               <button
                 key={shipment.id}
                 type="button"
-                onClick={() => navigate(`/shipments/${shipment.id}`)}
-                className="h-full rounded-xl text-right focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="grid min-w-0 gap-3 rounded-lg border border-border bg-background p-3 text-right transition-colors hover:border-primary/30 hover:bg-primary/5 md:grid-cols-[minmax(140px,0.9fr)_minmax(120px,0.7fr)_minmax(96px,0.5fr)_auto] md:items-center"
+                onClick={() => navigate(shipment.actionUrl)}
+                data-testid="dashboard-last-shipment"
               >
-                <Card className={cn(cardBase, "h-full overflow-hidden hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-sm")}>
-                  <CardContent className="flex h-full flex-col gap-3 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="font-mono text-xs font-black text-primary">{shipment.trackingNumber}</p>
-                        <p className="mt-1.5 truncate text-sm font-black text-foreground">{shipment.customerName}</p>
-                      </div>
-                      <div className="flex shrink-0 flex-col items-end gap-2">
-                        <StatusBadge status={shipment.status} />
-                        <Badge className={cn("h-5.5 border-none px-2 text-[10px] font-black", risk.className)}>{risk.label}</Badge>
-                      </div>
-                    </div>
-
-                    <div className="rounded-lg border border-border bg-background p-3">
-                      <div className="mb-2 flex items-center justify-between">
-                        <span className="text-[11px] font-bold text-muted-foreground">زمان باقی‌مانده</span>
-                        {days < 2 ? <AlertTriangle className="h-3.5 w-3.5 text-rose-500" /> : <Clock className="h-3.5 w-3.5 text-primary" />}
-                      </div>
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-3xl font-black leading-none text-foreground tabular-nums">{days}</span>
-                        <span className="text-xs font-bold text-muted-foreground">روز</span>
-                        <span className="mx-1 text-muted-foreground/40">/</span>
-                        <span className="text-xl font-black text-foreground tabular-nums">{hours}</span>
-                        <span className="text-xs font-bold text-muted-foreground">ساعت</span>
-                      </div>
-                    </div>
-
-                    <div className="mt-auto space-y-2">
-                      <div className="flex justify-between text-[11px] font-bold text-muted-foreground">
-                        <span>مصرف فری‌تایم</span>
-                        <span className={cn(progress > 80 ? "text-rose-500" : "text-primary")}>{Math.round(progress)}%</span>
-                      </div>
-                      <div className="h-2 overflow-hidden rounded-full bg-muted">
-                        <div className={cn("h-full rounded-full transition-all duration-1000", risk.bar)} style={{ width: `${progress}%` }} />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                <span className="min-w-0">
+                  <span className="block truncate font-mono text-sm font-black text-primary">{shipment.shipmentCode}</span>
+                  <span className="mt-1 block truncate text-xs font-bold text-muted-foreground">{shipment.customerCode || "بدون کد مشتری"}</span>
+                </span>
+                <span className="truncate text-xs font-bold text-muted-foreground">{shipment.destination || "مقصد ثبت نشده"}</span>
+                <Badge variant="outline" className="h-6 w-fit rounded-lg text-[11px] font-black">
+                  {statusText(shipment.status)}
+                </Badge>
+                <span className="text-xs font-bold text-muted-foreground">بروزرسانی: {formatShortDate(shipment.updatedAt)}</span>
               </button>
-            );
-            })}
-          </div>
-        )}
-      </section>
-
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="space-y-3">
-          <Card className={cardBase}>
-            <CardHeader className="flex flex-row items-center justify-between border-b border-border p-3.5">
-              <CardTitle className="text-sm font-black text-foreground">وظایف من</CardTitle>
-              <Badge variant="outline" className="h-6 border-primary/30 px-2 text-xs font-black text-primary">
-                {myTasks.length.toLocaleString("fa-IR")} وظیفه
-              </Badge>
-            </CardHeader>
-            <CardContent className={cn("p-3.5", myTasks.length ? "space-y-2.5" : "py-4")}>
-              {myTasks.length === 0 ? (
-                <EmptyState
-                  icon={CheckSquare}
-                  title="وظیفه فعالی برای شما ثبت نشده"
-                  description="برای شروع کار تیم، یک تسک عملیاتی بسازید یا بعد از ثبت محموله وظایف مرتبط را اضافه کنید."
-                  primaryAction={{ label: "تعریف وظیفه", to: "/tasks", icon: PlusCircle }}
-                  compact
-                />
-              ) : myTasks.length === -1 ? (
-                <div className="flex items-center justify-between gap-3 rounded-lg border border-dashed border-border bg-muted/30 p-3.5">
-                  <p className="text-xs font-bold text-muted-foreground">برنامه کاری شما برای امروز تکمیل است.</p>
-                  <Button variant="ghost" className="h-8 text-xs font-black text-primary" onClick={() => navigate("/tasks")}>
-                    مشاهده وظایف
-                  </Button>
-                </div>
-              ) : (
-                myTasks.map((task) => (
-                  <button
-                    key={task.id}
-                    type="button"
-                    onClick={() => navigate("/tasks")}
-                    className="flex w-full items-center justify-between gap-3 rounded-lg border border-border bg-background p-3 text-right transition-colors hover:border-primary/30 hover:bg-primary/5"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate text-[13px] font-black text-foreground">{task.title}</p>
-                      <p className="mt-1 flex items-center gap-1 text-xs font-bold text-muted-foreground">
-                        <Clock className="h-3.5 w-3.5" />
-                        {task.dueDate}
-                      </p>
-                    </div>
-                    <PriorityBadge priority={task.priority} />
-                  </button>
-                ))
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className={cardBase}>
-            <CardHeader className="flex flex-row items-center justify-between border-b border-border p-3.5">
-              <CardTitle className="text-sm font-black text-foreground">پیگیری عملیاتی تیم</CardTitle>
-              <Button variant="outline" className="h-8 rounded-lg border-dashed text-xs font-bold" onClick={() => navigate("/tasks")}>
-                افزودن تسک
-              </Button>
-            </CardHeader>
-            <CardContent className="grid gap-2.5 p-3.5 sm:grid-cols-2">
-              {recentTasks.length === 0 ? (
-                <div className="sm:col-span-2">
-                  <EmptyState
-                    icon={CheckSquare}
-                    title="هنوز تسکی برای تیم تعریف نشده"
-                    description="اولین وظیفه را برای پیگیری تماس، سند، ترخیص یا تحویل ثبت کنید."
-                    primaryAction={{ label: "افزودن تسک", to: "/tasks", icon: PlusCircle }}
-                    compact
-                  />
-                </div>
-              ) : (
-                recentTasks.map((task) => (
-                <button
-                  key={task.id}
-                  type="button"
-                  onClick={() => navigate("/tasks")}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background p-3 text-right transition-colors hover:border-primary/30 hover:bg-primary/5"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-[13px] font-black text-foreground">{task.title}</p>
-                    <p className="mt-1 text-xs font-bold text-muted-foreground">{task.assignedToName}</p>
-                  </div>
-                  <span
-                    className={cn(
-                      "h-2.5 w-2.5 shrink-0 rounded-full",
-                      task.priority === "URGENT" ? "bg-rose-500" : task.priority === "HIGH" ? "bg-amber-500" : "bg-primary"
-                    )}
-                  />
-                </button>
-                ))
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <section className="space-y-2.5">
-          <div className="flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-base font-black text-foreground">
-              <LayoutDashboard className="h-3.5 w-3.5 text-primary" />
-              دسترسی سریع
-            </h2>
-          </div>
-          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-1">
-            {quickLinks.map((link) => (
-              <QuickAccessButton key={link.path} icon={link.icon} label={link.label} path={link.path} />
             ))}
           </div>
-        </section>
-      </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
-      <Card className={cn(cardBase, "overflow-hidden")}>
-        <CardHeader className="flex flex-row items-center justify-between border-b border-border p-3.5">
-          <CardTitle className="text-sm font-black text-foreground">بارهای اخیر</CardTitle>
-          <Button variant="ghost" className="h-8 text-xs font-black text-primary" onClick={() => navigate("/shipments")}>
-            مشاهده همه
-          </Button>
-        </CardHeader>
-        <CardContent className="p-0 text-right">
-          <div className="overflow-x-auto">
-            <table className="w-full text-right text-[13px]">
-              <thead className="border-b border-border bg-muted/40 text-xs font-black text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3">شماره رهگیری</th>
-                  <th className="px-4 py-3">مشتری</th>
-                  <th className="px-4 py-3">وضعیت</th>
-                  <th className="px-4 py-3">تحویل تخمینی</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {recentShipments.length === 0 ? (
-                  <EmptyTableRow colSpan={4}>
-                    <EmptyState
-                      icon={Ship}
-                      title="هنوز باری ثبت نشده"
-                      description="بعد از ثبت اولین محموله، آخرین بارها و وضعیت آن‌ها در این جدول نمایش داده می‌شوند."
-                      primaryAction={{ label: "ثبت محموله", to: "/shipments", icon: PlusCircle }}
-                      compact
-                    />
-                  </EmptyTableRow>
-                ) : (
-                  recentShipments.map((shipment) => (
-                    <tr
-                      key={shipment.id}
-                      className="cursor-pointer transition-colors hover:bg-primary/5"
-                      onClick={() => navigate(`/shipments/${shipment.id}`)}
-                    >
-                      <td className="px-4 py-3 font-mono text-[13px] font-black text-primary">{shipment.trackingNumber}</td>
-                      <td className="px-4 py-3 font-bold text-foreground">{shipment.customerName}</td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={shipment.status} />
-                      </td>
-                      <td className="px-4 py-3 font-mono text-xs font-bold text-muted-foreground">{shipment.estimatedDelivery}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
+function DashboardLoading() {
+  return (
+    <div className="app-page space-y-4 rtl" dir="rtl">
+      <div className="flex items-center gap-2 rounded-lg border border-border bg-card p-4 text-sm font-bold text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        در حال بارگذاری داشبورد...
+      </div>
+    </div>
+  );
+}
+
+export default function Dashboard() {
+  const navigate = useNavigate();
+  const [data, setData] = React.useState<DashboardHomeData | null>(null);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [error, setError] = React.useState("");
+
+  const loadDashboard = React.useCallback(async () => {
+    setIsLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/dashboard", { credentials: "include" });
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        navigate("/login");
+        return;
+      }
+      if (!response.ok || payload.ok === false) {
+        throw new Error(payload?.error?.message || "داشبورد بارگذاری نشد.");
+      }
+      setData(payload.data);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "داشبورد بارگذاری نشد.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [navigate]);
+
+  React.useEffect(() => {
+    void loadDashboard();
+  }, [loadDashboard]);
+
+  if (isLoading) return <DashboardLoading />;
+
+  if (error || !data) {
+    return (
+      <div className="app-page rtl" dir="rtl">
+        <Card>
+          <CardContent className="flex flex-col gap-3 p-4">
+            <p className="flex items-center gap-2 text-sm font-bold text-destructive">
+              <AlertCircle className="h-4 w-4" />
+              {error || "داشبورد بارگذاری نشد."}
+            </p>
+            <Button type="button" className="w-fit text-xs font-black" onClick={() => void loadDashboard()}>
+              تلاش دوباره
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app-page space-y-4 rtl" dir="rtl" data-testid="dashboard-home">
+      <header className="space-y-1.5">
+        <h1 className="text-xl font-black text-foreground md:text-2xl" data-testid="dashboard-greeting">
+          سلام، {data.currentUser.name}
+        </h1>
+        <p className="max-w-3xl text-xs font-bold leading-6 text-muted-foreground md:text-sm">
+          به پنل لاجستیک پلاس خوش آمدید، نمای آرام و متمرکز از وضعیت امروز
+        </p>
+      </header>
+
+      <section className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4" aria-label="شاخص‌های امروز">
+        {data.metrics.map((metric) => (
+          <MetricCard key={metric.key} metric={metric} />
+        ))}
+      </section>
+
+      <ShipmentQuickSearch />
+
+      <AiAssistantCard assistant={data.aiAssistant} />
+
+      <MyTasksPanel tasks={data.myActiveTasks} />
+
+      <LastShipmentsPanel shipments={data.lastUpdatedShipments} />
     </div>
   );
 }

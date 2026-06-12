@@ -7,8 +7,9 @@ import React, { useState, useEffect } from "react";
 import { format } from "date-fns-jalali";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { LayoutDashboard, Ship, Users, CheckSquare, MessageSquare, ChevronRight, ChevronLeft, LogOut, Search, Bell, FileText, History, Settings as SettingsIcon, Menu, ShieldCheck, CreditCard, Archive, Calculator, X, Sun, Moon } from "lucide-react";
+import { LayoutDashboard, Ship, Users, CheckSquare, MessageSquare, ChevronRight, ChevronLeft, LogOut, Search, Bell, FileText, FileSearch, History, Settings as SettingsIcon, Menu, ShieldCheck, CreditCard, Archive, Calculator, X, Sun, Moon, IdCard, ClipboardList, GitBranch, Banknote } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { EXITED_SHIPMENTS_NAV_ENABLED, QUOTATIONS_UI_ENABLED, SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED } from "@/src/config/features";
 import { useMockStore } from "../../store/useMockStore";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -16,6 +17,8 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { GlobalSearch } from "@/src/components/search/GlobalSearch";
+import { useCurrentUserPermissions } from "@/src/hooks/useCurrentUserPermissions";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,18 +32,48 @@ import {
 const sidebarItems = [
   { icon: ShieldCheck, label: "ادمین پلتفرم", path: "/admin", platformOnly: true },
   { icon: LayoutDashboard, label: "داشبورد", path: "/dashboard" },
-  { icon: Users, label: "مراجعات حضوری", path: "/compliance" },
-  { icon: CreditCard, label: "مدیریت چک‌ها", path: "/cheques" },
+  { icon: FileSearch, label: "مرکز مدیریت اسناد", path: "/documents/management-center", permissions: ["documents.view_all", "shipments.view_all"] },
+  { icon: ClipboardList, label: "وضعیت روزانه", path: "/daily-status" },
   { icon: Ship, label: "محموله‌ها", path: "/shipments" },
-  { icon: Calculator, label: "مدیریت کوتاژ", path: "/quotage" },
-  { icon: Users, label: "مشتریان", path: "/customers" },
-  { icon: Archive, label: "بایگانی", path: "/archive" },
-  { icon: ShieldCheck, label: "مدیریت کاربران", path: "/management", ceoOnly: true },
+  { icon: Archive, label: "محموله‌های خروج‌شده", path: "/shipments/exited", permission: "shipments.view_all", enabled: EXITED_SHIPMENTS_NAV_ENABLED },
+  { icon: MessageSquare, label: "چت داخلی", path: "/chat", permission: "chat.use" },
+  { icon: Users, label: "مراجعات حضوری", path: "/compliance-meetings" },
   { icon: CheckSquare, label: "وظایف", path: "/tasks" },
+  { icon: IdCard, label: "کارت‌های بازرگانی", path: "/commercial-cards" },
+  { icon: Users, label: "مشتریان", path: "/customers", ceoOnly: true },
+  { icon: ShieldCheck, label: "مدیریت کاربران", path: "/management", ceoOnly: true },
   { icon: FileText, label: "اسناد", path: "/documents" },
+  { icon: CreditCard, label: "چک‌ها", path: "/cheques" },
+  { icon: Archive, label: "آرشیو", path: "/archive" },
   { icon: History, label: "تغییرات", path: "/changelog" },
-  { icon: MessageSquare, label: "چت", path: "/chat" },
+  { icon: Banknote, label: "نرخ‌ها و تعرفه‌ها", path: "/rates" },
+  ...(SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED
+    ? [
+      { icon: SettingsIcon, label: "فرم‌های نوع محموله", path: "/admin/shipment-form-templates", permission: "shipment_forms.manage" },
+      { icon: GitBranch, label: "قالب گردش کار محموله‌ها", path: "/admin/workflow-templates", permission: "shipment_workflows.manage" },
+    ]
+    : []),
+  ...(QUOTATIONS_UI_ENABLED ? [{ icon: Calculator, label: "مدیریت کوتاژ", path: "/quotations" }] : []),
 ];
+
+function canShowSidebarItem(item: (typeof sidebarItems)[number], currentUser: any) {
+  if ((item as any).enabled === false) return false;
+  if ((item as any).platformOnly) return false;
+  if ((item as any).ceoOnly && currentUser?.role !== "CEO") return false;
+  const permission = (item as any).permission;
+  const permissions = (item as any).permissions;
+  const userPermissions = Array.isArray(currentUser?.permissions) ? currentUser.permissions : [];
+  if (Array.isArray(permissions) && permissions.length) {
+    return permissions.every((requiredPermission) => userPermissions.includes(requiredPermission));
+  }
+  if (!permission) return true;
+  return userPermissions.includes(permission);
+}
+
+function isSidebarItemActive(pathname: string, itemPath: string) {
+  if (itemPath === "/documents") return pathname === "/documents";
+  return pathname === itemPath || pathname.startsWith(`${itemPath}/`);
+}
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
@@ -48,12 +81,9 @@ export function Sidebar() {
   const navigate = useNavigate();
   const currentUser = useMockStore(state => state.currentUser);
   const setCurrentUser = useMockStore(state => state.setCurrentUser);
+  const { isPlatformAdmin } = useCurrentUserPermissions();
 
-  const menuItems = sidebarItems.filter(item => {
-    if ((item as any).platformOnly && currentUser?.email?.toLowerCase() !== "darksudo22@gmail.com") return false;
-    if ((item as any).ceoOnly && currentUser?.role !== "CEO") return false;
-    return true;
-  });
+  const menuItems = sidebarItems.filter(item => canShowSidebarItem(item, currentUser));
 
   const handleLogout = () => {
     fetch("/api/auth/logout", { method: "POST" }).catch((error) => {
@@ -65,7 +95,7 @@ export function Sidebar() {
 
   return (
     <div className={cn(
-      "h-screen bg-card/95 backdrop-blur-xl border-l border-border/80 transition-all duration-300 hidden lg:flex flex-col pt-3",
+      "h-screen min-h-0 bg-card/95 backdrop-blur-xl border-l border-border/80 transition-all duration-300 hidden lg:flex flex-col pt-3",
       collapsed ? "w-[72px]" : "w-[224px]"
     )}>
       <div className={cn("px-3 mb-4 flex items-center gap-2 font-sans", collapsed ? "justify-center" : "justify-between")}>
@@ -98,6 +128,12 @@ export function Sidebar() {
                 <span>تنظیمات حساب</span>
                 <SettingsIcon className="w-3 h-3 text-primary" />
               </DropdownMenuItem>
+              {isPlatformAdmin && (
+                <DropdownMenuItem data-testid="admin-console-shortcut-menu" onClick={() => navigate("/platform-admin")} className="focus:bg-accent cursor-pointer text-xs text-right w-full flex items-center justify-between rounded-lg h-9">
+                  <span>Admin Console</span>
+                  <ShieldCheck className="w-3 h-3 text-primary" />
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator className="bg-border" />
               <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:bg-destructive/10 cursor-pointer text-xs rounded-lg h-9">
                 <LogOut className="w-3 h-3 ml-2" />
@@ -117,27 +153,27 @@ export function Sidebar() {
         </Button>
       </div>
 
-      <ScrollArea className="flex-1 px-2 font-sans">
-        <nav className="space-y-1">
+      <ScrollArea className="min-h-0 flex-1 px-2 font-sans">
+        <nav className="space-y-1 pb-6">
           {menuItems.map((item) => (
             <Link
               key={item.path}
               to={item.path}
               className={cn(
                 "group relative flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] transition-colors",
-                location.pathname.startsWith(item.path)
+                isSidebarItemActive(location.pathname, item.path)
                   ? "bg-primary/10 text-primary"
                   : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
                 collapsed && "justify-center px-0"
               )}
             >
-              {location.pathname.startsWith(item.path) && !collapsed && (
+              {isSidebarItemActive(location.pathname, item.path) && !collapsed && (
                 <span className="absolute right-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-l-full bg-primary" />
               )}
               <span
                 className={cn(
                   "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors",
-                  location.pathname.startsWith(item.path)
+                  isSidebarItemActive(location.pathname, item.path)
                     ? "bg-primary text-primary-foreground shadow-sm"
                     : "bg-muted/50 text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary"
                 )}
@@ -167,6 +203,7 @@ export function TopBar() {
   const unreadCount = notifications.filter(n => !n.isRead).length;
   const currentTheme = useMockStore(state => state.currentTheme);
   const toggleTheme = useMockStore(state => state.toggleTheme);
+  const { isPlatformAdmin } = useCurrentUserPermissions();
 
   const handleLogout = () => {
     fetch("/api/auth/logout", { method: "POST" }).catch((error) => {
@@ -176,28 +213,31 @@ export function TopBar() {
     navigate("/login");
   };
 
+  const notificationTime = (createdAt: string) => {
+    const date = new Date(createdAt);
+    return Number.isNaN(date.getTime()) ? "" : format(date, "HH:mm");
+  };
+
   const handleNotificationClick = (id: string, link?: string) => {
-    markNotificationRead(id);
+    void markNotificationRead(id).catch((error) => {
+      console.error("Notification read update failed:", error);
+    });
     if (link) navigate(link);
   };
 
-  const menuItems = sidebarItems.filter(item => {
-    if ((item as any).platformOnly && currentUser?.email?.toLowerCase() !== "darksudo22@gmail.com") return false;
-    if ((item as any).ceoOnly && currentUser?.role !== "CEO") return false;
-    return true;
-  });
+  const menuItems = sidebarItems.filter(item => canShowSidebarItem(item, currentUser));
 
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date());
-    }, 1000);
+    }, 60_000);
     return () => clearInterval(timer);
   }, []);
 
   const dateString = format(currentTime, "EEEE، d MMMM yyyy");
-  const timeString = format(currentTime, "HH:mm:ss");
+  const timeString = format(currentTime, "HH:mm");
 
   return (
     <header className="h-14 bg-card/80 backdrop-blur-xl border-b border-border/80 px-4 md:px-5 flex items-center justify-between sticky top-0 z-30 font-sans">
@@ -205,11 +245,11 @@ export function TopBar() {
         {/* Mobile Menu Trigger */}
         <Sheet>
           <SheetTrigger render={(triggerProps) => (
-            <Button {...triggerProps} variant="ghost" size="icon" className="lg:hidden text-muted-foreground">
+            <Button {...triggerProps} data-testid="mobile-nav-trigger" variant="ghost" size="icon" className="lg:hidden text-muted-foreground">
               <Menu className="w-5 h-5" />
             </Button>
           )} />
-          <SheetContent side="right" className="bg-card border-border p-0 w-[280px] text-right font-sans overflow-hidden flex flex-col" dir="rtl">
+          <SheetContent side="right" className="flex h-[100dvh] max-h-[100dvh] min-h-0 w-[280px] flex-col overflow-hidden bg-card p-0 text-right font-sans border-border" dir="rtl">
             <div className="absolute inset-0 bg-gradient-to-b from-primary/5 via-transparent to-transparent pointer-events-none" />
             
             <SheetHeader className="p-6 border-b border-border relative z-10 bg-card/80 backdrop-blur-md">
@@ -223,7 +263,7 @@ export function TopBar() {
               </div>
             </SheetHeader>
 
-            <ScrollArea className="flex-1 relative z-10">
+            <ScrollArea className="relative z-10 min-h-0 flex-1">
               <nav className="p-4 space-y-1.5 focus-visible:outline-none">
                 {menuItems.map((item, idx) => (
                   <motion.div
@@ -236,14 +276,14 @@ export function TopBar() {
                       to={item.path}
                       className={cn(
                         "flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all text-sm group relative overflow-hidden",
-                        location.pathname.startsWith(item.path)
+                        isSidebarItemActive(location.pathname, item.path)
                           ? "bg-primary text-primary-foreground font-black shadow-[0_4px_12px_rgba(37,99,235,0.18)]"
                           : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                       )}
                     >
-                      <item.icon className={cn("w-4 h-4", location.pathname.startsWith(item.path) ? "text-primary-foreground" : "group-hover:text-primary")} />
+                      <item.icon className={cn("w-4 h-4", isSidebarItemActive(location.pathname, item.path) ? "text-primary-foreground" : "group-hover:text-primary")} />
                       <span className="relative z-10">{item.label}</span>
-                      {location.pathname.startsWith(item.path) && (
+                      {isSidebarItemActive(location.pathname, item.path) && (
                         <motion.div 
                           layoutId="active-pill"
                           className="absolute inset-0 bg-white/10"
@@ -255,7 +295,7 @@ export function TopBar() {
               </nav>
             </ScrollArea>
 
-            <div className="mt-auto p-4 border-t border-border bg-card/80 backdrop-blur-xl relative z-10">
+            <div className="relative z-10 mt-auto shrink-0 border-t border-border bg-card/80 p-4 backdrop-blur-xl">
                <div className="bg-muted/40 rounded-3xl p-3 border border-border flex items-center gap-3 group">
                   <div className="relative">
                     <Avatar className="w-10 h-10 border-2 border-primary/20 group-hover:border-primary/50 transition-colors">
@@ -285,19 +325,33 @@ export function TopBar() {
           </SheetContent>
         </Sheet>
 
+        <GlobalSearch />
+
         {/* Global Search - Hidden on very small screens */}
-        <div className="relative w-full max-w-sm hidden sm:block">
+        <div className="hidden">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input placeholder="جستجو پیشرفته..." className="bg-muted border-border pr-10 focus-visible:ring-primary/50 h-9 text-[11px] text-muted-foreground rounded-lg" />
         </div>
         
         {/* Mobile Search Icon only */}
-        <Button variant="ghost" size="icon" className="sm:hidden text-muted-foreground">
+        <Button variant="ghost" size="icon" className="hidden">
           <Search className="w-4 h-4" />
         </Button>
       </div>
 
       <div className="flex items-center gap-2 md:gap-4">
+        {isPlatformAdmin && (
+          <Button
+            data-testid="admin-console-shortcut"
+            variant="outline"
+            className="hidden h-9 rounded-xl px-3 text-xs font-black text-primary sm:inline-flex"
+            onClick={() => navigate("/platform-admin")}
+          >
+            <ShieldCheck className="ml-2 h-4 w-4" />
+            Admin Console
+          </Button>
+        )}
+
         <div className="hidden xl:flex items-center gap-3 text-muted-foreground bg-muted/50 px-4 py-1.5 rounded-full border border-border">
           <span className="text-[11px] font-medium tracking-tight">{dateString}</span>
           <div className="w-[1px] h-3 bg-border" />
@@ -323,7 +377,11 @@ export function TopBar() {
                 <Button 
                   variant="ghost" 
                   className="text-[10px] text-primary h-auto p-0 hover:bg-transparent"
-                  onClick={markAllNotificationsRead}
+                  onClick={() => {
+                    void markAllNotificationsRead().catch((error) => {
+                      console.error("Notifications read update failed:", error);
+                    });
+                  }}
                 >
                   حذف همه
                 </Button>
@@ -356,7 +414,7 @@ export function TopBar() {
                           {notification.type === "SUCCESS" && "تایید"}
                           {notification.type === "URGENT" && "فوری"}
                         </Badge>
-                        <span className="text-[10px] text-muted-foreground font-mono opacity-60">۱۴:۳{notification.id[1]}</span>
+                        <span className="text-[10px] text-muted-foreground font-mono opacity-60">{notificationTime(notification.createdAt)}</span>
                       </div>
                       <p className="text-[11px] font-black text-foreground leading-snug">{notification.title}</p>
                       <p className="text-[10px] text-muted-foreground line-clamp-2 leading-relaxed">{notification.message}</p>

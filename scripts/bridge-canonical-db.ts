@@ -7,6 +7,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { pricingPlans } from "../src/lib/pricing.ts";
+import { DEFAULT_SHIPMENT_FORM_TEMPLATE_DEFINITIONS } from "../src/shared/shipment-form-fields.js";
+import {
+  PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS,
+  SEEDED_SHIPMENT_WORKFLOW_TEMPLATES,
+} from "../src/shared/shipment-workflow-template-presets.js";
+import { SYSTEM_CUSTOMS_STEP_CATALOG } from "../src/shared/shipment-workflow-step-catalog.js";
 import { DEFAULT_SMS_TEMPLATES } from "../src/server/sms-templates.js";
 
 const { Client } = pg;
@@ -27,6 +33,8 @@ const permissionKeys = [
   "shipments.create",
   "shipments.update",
   "shipments.archive",
+  "shipment_forms.manage",
+  "shipment_workflows.manage",
   "shipment_steps.update",
   "customers.view",
   "customers.create",
@@ -42,6 +50,8 @@ const permissionKeys = [
   "changes.view",
   "chat.use",
   "chat.manage_groups",
+  "chat.media.view",
+  "chat.media.delete",
   "users.manage",
   "users.promote",
   "cheques.manage",
@@ -52,55 +62,41 @@ const permissionKeys = [
 ];
 const platformPermissionKeys = ["platform.admin"];
 
+const companyOperationalPermissions = [
+  "archive.view",
+  "changes.view",
+  "chat.use",
+  "compliance.manage",
+  "customer_access.manage",
+  "customers.create",
+  "customers.update",
+  "customers.view",
+  "documents.archive",
+  "documents.upload",
+  "documents.view_all",
+  "documents.view_related",
+  "quotations.manage",
+  "shipment_steps.update",
+  "shipments.archive",
+  "shipments.create",
+  "shipments.update",
+  "shipments.view_all",
+  "shipments.view_assigned",
+  "tasks.assign",
+  "tasks.create",
+  "tasks.view_all",
+  "tasks.view_own",
+];
+
 const rolePermissions = {
   CEO: permissionKeys,
-  MANAGER: permissionKeys.filter((key) => key !== "users.promote"),
-  OPERATIONS: [
-    "dashboard.view",
-    "shipments.view_assigned",
-    "shipment_steps.update",
-    "tasks.view_own",
-    "documents.upload",
-    "documents.view_related",
-    "customers.view",
-    "chat.use",
-  ],
-  CUSTOMER_SERVICE: [
-    "dashboard.view",
-    "shipments.view_assigned",
-    "customers.view",
-    "tasks.view_own",
-    "documents.view_related",
-    "chat.use",
-  ],
-  FINANCE: [
-    "dashboard.view",
-    "tasks.view_own",
-    "documents.upload",
-    "documents.view_related",
-    "customers.view",
-    "cheques.manage",
-    "chat.use",
-  ],
-  QUOTATION_MANAGER: [
-    "dashboard.view",
-    "customers.view",
-    "tasks.create",
-    "tasks.view_own",
-    "documents.upload",
-    "documents.view_related",
-    "quotations.manage",
-    "chat.use",
-  ],
-  COMPLIANCE_STAFF: [
-    "dashboard.view",
-    "tasks.view_own",
-    "documents.upload",
-    "documents.view_related",
-    "compliance.manage",
-    "chat.use",
-  ],
-  EMPLOYEE: ["dashboard.view", "tasks.view_own", "documents.view_related", "chat.use"],
+  MANAGER: permissionKeys.filter((key) => !["users.promote", "chat.media.view", "chat.media.delete", "shipment_workflows.manage"].includes(key)),
+  OPERATIONS: ["dashboard.view", ...companyOperationalPermissions],
+  CUSTOMER_SERVICE: ["dashboard.view", ...companyOperationalPermissions],
+  FINANCE: ["dashboard.view", "cheques.manage", ...companyOperationalPermissions],
+  QUOTATION_MANAGER: ["dashboard.view", ...companyOperationalPermissions],
+  COMPLIANCE_STAFF: ["dashboard.view", ...companyOperationalPermissions],
+  EMPLOYEE: ["dashboard.view", ...companyOperationalPermissions],
   CUSTOMER_VIEWER: [],
 };
 
@@ -126,6 +122,10 @@ function permissionId(permission: string) {
 
 function asJson(value: unknown) {
   return JSON.stringify(value ?? {});
+}
+
+function isLegacyDemoNotification(notification: any) {
+  return ["n1", "n2", "n3", "n4"].includes(String(notification?.id || ""));
 }
 
 const defaultPlans = pricingPlans.map((plan, index) => ({
@@ -281,6 +281,374 @@ async function seedRolesAndPermissions(client: Client) {
       );
     }
   }
+
+  await client.query(
+    `INSERT INTO user_permissions (user_id, permission_id, reason)
+     SELECT $1, id, 'Bridge owner explicit platform admin grant'
+     FROM permissions
+     WHERE key = 'platform.admin'
+     ON CONFLICT (user_id, permission_id) DO NOTHING`,
+    [ownerUserId]
+  );
+}
+
+function shipmentTemplateId(typeCode: string) {
+  return `shipment-form-template-${typeCode.toLowerCase().replace(/_/g, "-")}`;
+}
+
+function shipmentTemplateSectionId(typeCode: string, sectionKey: string) {
+  return `${shipmentTemplateId(typeCode)}-section-${sectionKey}`;
+}
+
+function shipmentTemplateFieldId(typeCode: string, fieldKey: string) {
+  return `${shipmentTemplateId(typeCode)}-field-${fieldKey}`;
+}
+
+function stableSlug(value: string) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function workflowTemplatePhaseId(templateId: string, phaseKey: string) {
+  return `${templateId}-phase-${stableSlug(phaseKey)}`.slice(0, 180);
+}
+
+function workflowTemplateStepId(templateId: string, stepKey: string) {
+  return `${templateId}-step-${stableSlug(stepKey)}`.slice(0, 180);
+}
+
+function workflowTypeMappingId(typeCode: string) {
+  return `stwt-global-${stableSlug(typeCode)}`.slice(0, 180);
+}
+
+async function seedWorkflowStepCatalog(client: Client) {
+  for (const step of SYSTEM_CUSTOMS_STEP_CATALOG) {
+    await client.query(
+      `INSERT INTO shipment_workflow_step_catalog (
+         id, organization_id, code, title, title_fa, description, category, stage_key, stage_title_fa,
+         default_order, default_required, default_customer_visible, default_internal_only,
+         default_checklist, default_required_documents, default_form_fields, metadata, is_system,
+         created_at, updated_at
+       )
+       VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+         $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, TRUE, NOW(), NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         code = EXCLUDED.code,
+         title = EXCLUDED.title,
+         title_fa = EXCLUDED.title_fa,
+         description = EXCLUDED.description,
+         category = EXCLUDED.category,
+         stage_key = EXCLUDED.stage_key,
+         stage_title_fa = EXCLUDED.stage_title_fa,
+         default_order = EXCLUDED.default_order,
+         default_required = EXCLUDED.default_required,
+         default_customer_visible = EXCLUDED.default_customer_visible,
+         default_internal_only = EXCLUDED.default_internal_only,
+         default_checklist = EXCLUDED.default_checklist,
+         default_required_documents = EXCLUDED.default_required_documents,
+         default_form_fields = EXCLUDED.default_form_fields,
+         metadata = EXCLUDED.metadata,
+         is_system = TRUE,
+         archived_at = NULL,
+         archived_by_id = NULL,
+         updated_at = NOW()`,
+      [
+        step.id,
+        step.code,
+        step.title,
+        step.titleFa,
+        step.description || "",
+        step.category,
+        step.stageKey,
+        step.stageTitleFa,
+        step.defaultOrder,
+        step.defaultRequired,
+        step.defaultCustomerVisible,
+        step.defaultInternalOnly,
+        JSON.stringify(step.defaultChecklist || []),
+        JSON.stringify(step.defaultRequiredDocuments || []),
+        JSON.stringify(step.defaultFormFields || []),
+        JSON.stringify(step.metadata || {}),
+      ]
+    );
+  }
+}
+
+async function seedShipmentFormTemplates(client: Client) {
+  for (const template of DEFAULT_SHIPMENT_FORM_TEMPLATE_DEFINITIONS) {
+    const templateId = shipmentTemplateId(template.shipmentTypeCode);
+    await client.query(
+      `INSERT INTO shipment_form_templates (
+         id, organization_id, code, shipment_type_code, title_fa, description,
+         is_system, is_active, version, created_at, updated_at
+       )
+       VALUES ($1, NULL, $2, $3, $4, $5, TRUE, TRUE, 1, NOW(), NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         code = EXCLUDED.code,
+         shipment_type_code = EXCLUDED.shipment_type_code,
+         title_fa = EXCLUDED.title_fa,
+         description = EXCLUDED.description,
+         is_system = TRUE,
+         is_active = TRUE,
+         archived_at = NULL,
+         updated_at = NOW()`,
+      [
+        templateId,
+        template.code,
+        template.shipmentTypeCode,
+        template.titleFa,
+        template.description || "",
+      ]
+    );
+
+    for (const section of template.sections) {
+      const sectionId = shipmentTemplateSectionId(template.shipmentTypeCode, section.sectionKey);
+      await client.query(
+        `INSERT INTO shipment_form_template_sections (
+           id, template_id, section_key, title_fa, description, sort_order,
+           is_collapsed_by_default, created_at, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+         ON CONFLICT (template_id, section_key) DO UPDATE SET
+           title_fa = EXCLUDED.title_fa,
+           description = EXCLUDED.description,
+           sort_order = EXCLUDED.sort_order,
+           is_collapsed_by_default = EXCLUDED.is_collapsed_by_default,
+           updated_at = NOW()`,
+        [
+          sectionId,
+          templateId,
+          section.sectionKey,
+          section.titleFa,
+          section.description || "",
+          section.sortOrder || 0,
+          Boolean(section.isCollapsedByDefault),
+        ]
+      );
+
+      for (const field of section.fields) {
+        await client.query(
+          `INSERT INTO shipment_form_template_fields (
+             id, template_id, section_id, field_key, field_source, field_type, label_fa,
+             helper_text, placeholder, sort_order, is_visible, is_required, is_important,
+             show_in_shipment_detail, show_in_daily_status, show_in_create_form,
+             validation_json, options_json, created_at, updated_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18::jsonb, NOW(), NOW())
+           ON CONFLICT (template_id, field_key) DO UPDATE SET
+             section_id = EXCLUDED.section_id,
+             field_source = EXCLUDED.field_source,
+             field_type = EXCLUDED.field_type,
+             label_fa = EXCLUDED.label_fa,
+             helper_text = EXCLUDED.helper_text,
+             placeholder = EXCLUDED.placeholder,
+             sort_order = EXCLUDED.sort_order,
+             is_visible = EXCLUDED.is_visible,
+             is_required = EXCLUDED.is_required,
+             is_important = EXCLUDED.is_important,
+             show_in_shipment_detail = EXCLUDED.show_in_shipment_detail,
+             show_in_daily_status = EXCLUDED.show_in_daily_status,
+             show_in_create_form = EXCLUDED.show_in_create_form,
+             validation_json = EXCLUDED.validation_json,
+             options_json = EXCLUDED.options_json,
+             archived_at = NULL,
+             updated_at = NOW()`,
+          [
+            shipmentTemplateFieldId(template.shipmentTypeCode, field.fieldKey),
+            templateId,
+            sectionId,
+            field.fieldKey,
+            field.fieldSource,
+            field.fieldType,
+            field.labelFa,
+            field.helperText || "",
+            field.placeholder || "",
+            field.sortOrder || 0,
+            field.isVisible !== false,
+            Boolean(field.isRequired),
+            Boolean(field.isImportant),
+            field.showInShipmentDetail !== false,
+            field.showInDailyStatus !== false,
+            Boolean(field.showInCreateForm),
+            JSON.stringify(field.validationJson || {}),
+            JSON.stringify(field.optionsJson || []),
+          ]
+        );
+      }
+    }
+  }
+}
+
+async function seedPredefinedShipmentWorkflowTemplates(client: Client) {
+  for (const template of SEEDED_SHIPMENT_WORKFLOW_TEMPLATES) {
+    await client.query(
+      `INSERT INTO shipment_workflow_templates (
+         id, organization_id, code, shipment_direction, transport_mode, shipment_type_hint,
+         title_fa, title_en, description, is_system, is_active, version, published_at,
+         created_at, updated_at
+       )
+       VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, TRUE, TRUE, $9, NOW(), NOW(), NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         code = EXCLUDED.code,
+         shipment_direction = EXCLUDED.shipment_direction,
+         transport_mode = EXCLUDED.transport_mode,
+         shipment_type_hint = EXCLUDED.shipment_type_hint,
+         title_fa = EXCLUDED.title_fa,
+         title_en = EXCLUDED.title_en,
+         description = EXCLUDED.description,
+         is_system = TRUE,
+         is_active = TRUE,
+         archived_at = NULL,
+         archived_by_id = NULL,
+         archived_reason = NULL,
+         updated_at = NOW()`,
+      [
+        template.id,
+        template.code,
+        template.shipmentDirection,
+        template.transportMode,
+        template.shipmentTypeHint,
+        template.titleFa,
+        template.titleEn,
+        template.description,
+        template.version,
+      ]
+    );
+
+    for (const phase of template.phases) {
+      await client.query(
+        `INSERT INTO shipment_workflow_template_phases (
+           id, template_id, phase_key, label_fa, label_en, sort_order, is_visible, created_at, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, TRUE, NOW(), NOW())
+         ON CONFLICT (template_id, phase_key) DO UPDATE SET
+           label_fa = EXCLUDED.label_fa,
+           label_en = EXCLUDED.label_en,
+           sort_order = EXCLUDED.sort_order,
+           is_visible = TRUE,
+           updated_at = NOW()`,
+        [
+          workflowTemplatePhaseId(template.id, phase.phaseKey),
+          template.id,
+          phase.phaseKey,
+          phase.labelFa,
+          phase.labelEn,
+          phase.sortOrder,
+        ]
+      );
+    }
+
+    for (const step of template.steps) {
+      await client.query(
+        `INSERT INTO shipment_workflow_template_steps (
+           id, template_id, phase_id, phase_key, step_key, catalog_step_id, label_fa, label_en, public_label,
+           sort_order, is_required, is_visible, is_customer_visible, role_suggestion,
+           expected_duration_hours, task_policy_json, checklist_json, expected_documents_json,
+           expected_form_fields_json, next_step_rules_json, visibility_rule_json, created_at, updated_at
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9,
+           $10, $11, $12, $13, $14, $15, $16::jsonb, $17::jsonb, $18::jsonb,
+           $19::jsonb, $20::jsonb, $21::jsonb, NOW(), NOW()
+         )
+         ON CONFLICT (template_id, step_key) WHERE archived_at IS NULL DO UPDATE SET
+           phase_id = EXCLUDED.phase_id,
+           phase_key = EXCLUDED.phase_key,
+           catalog_step_id = EXCLUDED.catalog_step_id,
+           label_fa = EXCLUDED.label_fa,
+           label_en = EXCLUDED.label_en,
+           public_label = EXCLUDED.public_label,
+           sort_order = EXCLUDED.sort_order,
+           is_required = EXCLUDED.is_required,
+           is_visible = EXCLUDED.is_visible,
+           is_customer_visible = EXCLUDED.is_customer_visible,
+           role_suggestion = EXCLUDED.role_suggestion,
+           expected_duration_hours = EXCLUDED.expected_duration_hours,
+           task_policy_json = EXCLUDED.task_policy_json,
+           checklist_json = EXCLUDED.checklist_json,
+           expected_documents_json = EXCLUDED.expected_documents_json,
+           expected_form_fields_json = EXCLUDED.expected_form_fields_json,
+           next_step_rules_json = EXCLUDED.next_step_rules_json,
+           visibility_rule_json = EXCLUDED.visibility_rule_json,
+           archived_at = NULL,
+           updated_at = NOW()`,
+        [
+          workflowTemplateStepId(template.id, step.stepKey),
+          template.id,
+          workflowTemplatePhaseId(template.id, step.phaseKey),
+          step.phaseKey,
+          step.stepKey,
+          step.catalogStepId || null,
+          step.labelFa,
+          step.labelEn,
+          step.publicLabel || step.labelFa,
+          step.sortOrder,
+          step.isRequired !== false,
+          step.isVisible !== false,
+          step.isCustomerVisible !== false,
+          step.roleSuggestion || null,
+          step.expectedDurationHours,
+          JSON.stringify(step.taskPolicy || { mode: "suggested" }),
+          JSON.stringify(step.checklist || []),
+          JSON.stringify(step.expectedDocuments || []),
+          JSON.stringify(step.expectedFormFields || []),
+          JSON.stringify(step.nextStepRules || {}),
+          JSON.stringify(step.visibilityRule || {}),
+        ]
+      );
+    }
+  }
+
+  for (const mapping of PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS) {
+    await client.query(
+      `UPDATE shipment_type_workflow_templates
+       SET workflow_template_id = $2,
+           workflow_template_code = $3,
+           workflow_template_version = $4,
+           archived_at = NULL,
+           updated_at = NOW()
+       WHERE organization_id IS NULL
+         AND shipment_type_code = $1
+         AND archived_at IS NULL`,
+      [
+        mapping.shipmentTypeCode,
+        mapping.templateId,
+        mapping.workflowTemplateCode,
+        mapping.workflowTemplateVersion,
+      ]
+    );
+    await client.query(
+      `INSERT INTO shipment_type_workflow_templates (
+         id, organization_id, shipment_type_code, workflow_template_id,
+         workflow_template_code, workflow_template_version, created_at, updated_at
+       )
+       SELECT $1, NULL, $2, $3, $4, $5, NOW(), NOW()
+       WHERE NOT EXISTS (
+         SELECT 1
+         FROM shipment_type_workflow_templates
+         WHERE organization_id IS NULL
+           AND shipment_type_code = $2
+           AND archived_at IS NULL
+       )
+       ON CONFLICT (id) DO UPDATE SET
+         workflow_template_id = EXCLUDED.workflow_template_id,
+         workflow_template_code = EXCLUDED.workflow_template_code,
+         workflow_template_version = EXCLUDED.workflow_template_version,
+         archived_at = NULL,
+         updated_at = NOW()`,
+      [
+        workflowTypeMappingId(mapping.shipmentTypeCode),
+        mapping.shipmentTypeCode,
+        mapping.templateId,
+        mapping.workflowTemplateCode,
+        mapping.workflowTemplateVersion,
+      ]
+    );
+  }
+}
+
+async function seedShipmentWorkflowTemplates(client: Client) {
+  await seedWorkflowStepCatalog(client);
+  await seedPredefinedShipmentWorkflowTemplates(client);
 }
 
 async function bridgeUsers(client: Client, users: any[]) {
@@ -459,6 +827,7 @@ async function bridgeDocuments(client: Client, documents: any[]) {
 
 async function bridgeNotifications(client: Client, notifications: any[]) {
   for (const notification of notifications) {
+    if (isLegacyDemoNotification(notification)) continue;
     await client.query(
       `INSERT INTO notifications (
          id, user_id, title, body, type, source_type, source_id, legacy_data, read_at, created_at
@@ -667,65 +1036,11 @@ async function bridgeQuotations(client: Client, quotes: any[]) {
 }
 
 async function bridgeChat(client: Client, channels: any[], messages: any[]) {
-  const users = await client.query("SELECT id, role FROM app_users WHERE status = 'active'");
-  for (const channel of channels) {
-    await client.query(
-      `INSERT INTO chat_threads (id, owner_user_id, type, name, description, role_limit, icon, legacy_channel_id, updated_at)
-       VALUES ($1, $2, 'CHANNEL', $3, $4, $5, $6, $1, NOW())
-       ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name,
-         description = EXCLUDED.description,
-         role_limit = EXCLUDED.role_limit,
-         icon = EXCLUDED.icon,
-         updated_at = NOW()`,
-      [channel.id, ownerUserId, channel.name, channel.description || null, channel.roleLimit || null, channel.icon || null]
-    );
-    for (const user of users.rows) {
-      if (!channel.roleLimit || user.role === "CEO" || user.role === channel.roleLimit) {
-        await client.query(
-          `INSERT INTO chat_thread_members (id, thread_id, user_id)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (thread_id, user_id) DO NOTHING`,
-          [crypto.randomUUID(), channel.id, user.id]
-        );
-      }
-    }
-  }
-
-  for (const message of messages) {
-    const threadId = message.isGroup
-      ? message.groupId
-      : `dm-${[message.senderId, message.receiverId].sort().join("-")}`;
-    if (!threadId) continue;
-    await client.query(
-      `INSERT INTO chat_threads (id, type, name, updated_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (id) DO NOTHING`,
-      [threadId, message.isGroup ? "CHANNEL" : "DM", message.isGroup ? "Channel" : "Direct chat"]
-    );
-    for (const userId of [message.senderId, message.receiverId].filter(Boolean)) {
-      await client.query(
-        `INSERT INTO chat_thread_members (id, thread_id, user_id)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (thread_id, user_id) DO NOTHING`,
-        [crypto.randomUUID(), threadId, userId]
-      );
-    }
-    await client.query(
-      `INSERT INTO chat_messages (id, thread_id, sender_id, sender_name, content, legacy_data, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, COALESCE($7, NOW()))
-       ON CONFLICT (id) DO UPDATE SET content = EXCLUDED.content, legacy_data = EXCLUDED.legacy_data`,
-      [
-        message.id,
-        threadId,
-        message.senderId,
-        message.senderName || "User",
-        message.content || "",
-        asJson(message),
-        parseLegacyDate(message.createdAt),
-      ]
-    );
-  }
+  // Live chat is now a canonical, tenant-scoped feature. Do not import legacy
+  // channels/messages into chat tables; that can resurrect demo-era data.
+  void client;
+  void channels;
+  void messages;
 }
 
 async function bridgeActivityLogs(client: Client, logs: any[]) {
@@ -771,6 +1086,8 @@ async function bridge() {
     await client.query(schema);
     await seedSaasFoundation(client);
     await seedRolesAndPermissions(client);
+    await seedShipmentFormTemplates(client);
+    await seedShipmentWorkflowTemplates(client);
 
     const users = await getCollection(client, "users");
     const customers = await getCollection(client, "customers");

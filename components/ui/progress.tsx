@@ -8,9 +8,14 @@ function Progress({
   value,
   ...props
 }: ProgressPrimitive.Root.Props) {
+  const safeValue =
+    typeof value === "number" && Number.isFinite(value)
+      ? Math.max(0, Math.min(100, value))
+      : 0
+
   return (
     <ProgressPrimitive.Root
-      value={value}
+      value={safeValue}
       data-slot="progress"
       className={cn("flex flex-wrap gap-3", className)}
       {...props}

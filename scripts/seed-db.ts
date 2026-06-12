@@ -16,7 +16,6 @@ import {
   mockDemurrage,
   mockDocuments,
   mockMessages,
-  mockNotifications,
   mockQuotes,
   mockShipments,
   mockTasks,
@@ -113,7 +112,7 @@ function buildCollections() {
     demurrageRecords: mockDemurrage,
     documents: mockDocuments,
     channels: mockChannels,
-    notifications: mockNotifications,
+    notifications: [],
     appointments: mockAppointments,
     cheques: mockCheques,
     quotes: mockQuotes,
@@ -161,6 +160,20 @@ async function seed() {
         ownerUser.isOnline,
         ownerUser.phone,
       ]
+    );
+
+    await client.query(
+      `INSERT INTO permissions (id, key, description)
+       VALUES ('perm-platform-admin', 'platform.admin', 'Access platform-wide administration APIs')
+       ON CONFLICT (key) DO UPDATE SET description = EXCLUDED.description`
+    );
+    await client.query(
+      `INSERT INTO user_permissions (user_id, permission_id, reason)
+       SELECT $1, id, 'Seed owner explicit platform admin grant'
+       FROM permissions
+       WHERE key = 'platform.admin'
+       ON CONFLICT (user_id, permission_id) DO NOTHING`,
+      [ownerUser.id]
     );
 
     await client.query("DELETE FROM user_records WHERE owner_user_id = $1", [
