@@ -142,6 +142,7 @@
 
 .ai-chat-message-text {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   unicode-bidi: plaintext;
   line-height: 1.8;
 }

@@ -13,6 +13,9 @@ export const BUSINESS_ENTITY_TYPES = {
   SHIPMENT: "shipment",
   CUSTOMER: "customer",
   COMMERCIAL_CARD: "commercial_card",
+  DOCUMENT: "document",
+  WORKFLOW_ITEM: "workflow_item",
+  CHEQUE: "cheque",
 };
 
 export const BUSINESS_REQUESTED_FIELDS = {
@@ -119,6 +122,19 @@ const STOP_WORDS = new Set([
   "وضعیت",
   "وضعیتش",
   "شماره",
+  "سند",
+  "اسناد",
+  "مدرک",
+  "مدارک",
+  "وظیفه",
+  "وظایف",
+  "تسک",
+  "کار",
+  "اقدام",
+  "مرحله",
+  "مانع",
+  "چک",
+  "چک‌ها",
   "کد",
   "خلاصه",
   "آخرین",
@@ -160,6 +176,9 @@ const BUSINESS_FIELD_STOP_WORDS = new Set([
 
 const SHIPMENT_TERMS = ["shipment", "cargo", "load", "tracking", "بار", "محموله", "پرونده"];
 const CUSTOMER_TERMS = ["customer", "client", "مشتری", "صاحب", "مالک", "طرف حساب", "شرکت"];
+const DOCUMENT_TERMS = ["document", "file", "سند", "اسناد", "مدرک", "مدارک", "فایل", "بارنامه", "قبض"];
+const WORKFLOW_TERMS = ["workflow", "task", "blocker", "کار", "وظیفه", "وظایف", "تسک", "اقدام", "پیگیری", "مرحله", "مانع", "موانع"];
+const CHEQUE_TERMS = ["cheque", "check", "payment", "چک", "چک‌ها", "چکهای", "پرداخت", "سررسید", "وصول", "بانک"];
 const COMMERCIAL_CARD_TERMS = [
   "commercial card",
   "کارت بازرگانی",
@@ -372,6 +391,9 @@ function candidateTypesFor(message = "", requestedField = BUSINESS_REQUESTED_FIE
   const hasShipment = includesAny(normalized, SHIPMENT_TERMS);
   const hasCustomer = includesAny(normalized, CUSTOMER_TERMS) || [...HONORIFICS].some((term) => normalized.includes(term));
   const hasCard = includesAny(normalized, CARD_TERMS) || includesAny(normalized, COMMERCIAL_CARD_TERMS);
+  const hasDocument = includesAny(normalized, DOCUMENT_TERMS);
+  const hasWorkflow = includesAny(normalized, WORKFLOW_TERMS);
+  const hasCheque = includesAny(normalized, CHEQUE_TERMS);
   const hasStatus = includesAny(normalized, SUMMARY_TERMS) || requestedField === BUSINESS_REQUESTED_FIELDS.STATUS;
   const needsCustomerField = [
     BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE,
@@ -381,8 +403,14 @@ function candidateTypesFor(message = "", requestedField = BUSINESS_REQUESTED_FIE
   ].includes(requestedField);
   const types = [];
 
-  if (hasCard || requestedField === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD || requestedField === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD_NUMBER) {
+  if (hasCheque) {
+    types.push(BUSINESS_ENTITY_TYPES.CHEQUE, BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.SHIPMENT);
+  } else if (hasDocument) {
+    types.push(BUSINESS_ENTITY_TYPES.DOCUMENT, BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.CUSTOMER);
+  } else if (hasCard || requestedField === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD || requestedField === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD_NUMBER) {
     types.push(BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD, BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.SHIPMENT);
+  } else if (hasWorkflow) {
+    types.push(BUSINESS_ENTITY_TYPES.WORKFLOW_ITEM, BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.CUSTOMER);
   } else if (needsCustomerField) {
     types.push(BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD);
   } else if (hasShipment && hasCustomer) {
@@ -390,9 +418,16 @@ function candidateTypesFor(message = "", requestedField = BUSINESS_REQUESTED_FIE
   } else if (hasShipment || hasStatus) {
     types.push(BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.CUSTOMER);
   } else if (hasCustomer) {
-    types.push(BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD);
+    types.push(BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD, BUSINESS_ENTITY_TYPES.CHEQUE, BUSINESS_ENTITY_TYPES.DOCUMENT);
   } else {
-    types.push(BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD);
+    types.push(
+      BUSINESS_ENTITY_TYPES.SHIPMENT,
+      BUSINESS_ENTITY_TYPES.CUSTOMER,
+      BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD,
+      BUSINESS_ENTITY_TYPES.DOCUMENT,
+      BUSINESS_ENTITY_TYPES.WORKFLOW_ITEM,
+      BUSINESS_ENTITY_TYPES.CHEQUE
+    );
   }
 
   return unique(types).filter((type) => SUPPORTED_ENTITY_TYPES.has(type));
@@ -444,6 +479,9 @@ export function planBusinessSearch(message = "") {
     includesAny(normalized, SHIPMENT_TERMS) ||
     includesAny(normalized, CUSTOMER_TERMS) ||
     includesAny(normalized, CARD_TERMS) ||
+    includesAny(normalized, DOCUMENT_TERMS) ||
+    includesAny(normalized, WORKFLOW_TERMS) ||
+    includesAny(normalized, CHEQUE_TERMS) ||
     includesAny(normalized, SUMMARY_TERMS) ||
     includesAny(normalized, NUMBER_TERMS) ||
     includesAny(normalized, PHONE_TERMS) ||

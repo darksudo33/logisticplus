@@ -1,4 +1,5 @@
 import { listCustomerPhoneNumbers } from "../repositories/customers.js";
+import { AI_BUSINESS_SEARCH_ENTITY_TYPES, searchAiBusinessIndex } from "./ai-search-index.js";
 
 const CEO_ONLY_MESSAGE = "دسترسی به همیار لاجستیک در حال حاضر فقط برای مدیرعامل فعال است.";
 const PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹";
@@ -1683,6 +1684,32 @@ export async function searchBusinessContext(
     };
   }
 
+  const allowedTypes = new Set(AI_BUSINESS_SEARCH_ENTITY_TYPES);
+  const requestedTypes = Array.isArray(candidateTypes) && candidateTypes.length
+    ? candidateTypes.filter((type) => allowedTypes.has(type))
+    : [...AI_BUSINESS_SEARCH_ENTITY_TYPES];
+  const boundedLimit = Math.min(Math.max(Number(limit) || 8, 1), 12);
+
+  const indexedResult = await searchAiBusinessIndex(pool, context, {
+    queryTerms: terms,
+    candidateTypes: requestedTypes,
+    limit: boundedLimit,
+  });
+  if (indexedResult.indexAvailable && indexedResult.candidates.length) {
+    return {
+      candidates: indexedResult.candidates,
+      searched: { queryTerms: terms, candidateTypes: requestedTypes, requestedField, requestedFields: requestedFieldList },
+    };
+  }
+
+  const legacyTypes = requestedTypes.filter((type) => ["shipment", "customer", "commercial_card"].includes(type));
+  if (!legacyTypes.length) {
+    return {
+      candidates: [],
+      searched: { queryTerms: terms, candidateTypes: requestedTypes, requestedField, requestedFields: requestedFieldList },
+    };
+  }
+
   const patternTerms = [...new Set(terms.flatMap((term) => [
     term,
     term.replace(/ی/g, "ي").replace(/ک/g, "ك"),
@@ -1691,30 +1718,25 @@ export async function searchBusinessContext(
   if (!patterns.length) {
     return {
       candidates: [],
-      searched: { queryTerms: terms, candidateTypes: [], requestedField, requestedFields: requestedFieldList },
+      searched: { queryTerms: terms, candidateTypes: requestedTypes, requestedField, requestedFields: requestedFieldList },
     };
   }
 
-  const allowedTypes = new Set(["shipment", "customer", "commercial_card"]);
-  const requestedTypes = Array.isArray(candidateTypes) && candidateTypes.length
-    ? candidateTypes.filter((type) => allowedTypes.has(type))
-    : ["shipment", "customer", "commercial_card"];
-  const boundedLimit = Math.min(Math.max(Number(limit) || 8, 1), 12);
   const perTypeLimit = Math.min(Math.max(boundedLimit, 5), 12);
   const compactTerms = terms.map(compactCode).filter(Boolean);
   const typePriority = (type) => {
-    const index = requestedTypes.indexOf(type);
+    const index = legacyTypes.indexOf(type);
     return index < 0 ? 0 : Math.max(0, 0.09 - index * 0.03);
   };
 
   const [shipments, customers, commercialCards] = await Promise.all([
-    requestedTypes.includes("shipment")
+    legacyTypes.includes("shipment")
       ? searchBusinessShipments(pool, context, { terms, patterns, compactTerms, limit: perTypeLimit, typePriority: typePriority("shipment") })
       : Promise.resolve([]),
-    requestedTypes.includes("customer")
+    legacyTypes.includes("customer")
       ? searchBusinessCustomers(pool, context, { terms, patterns, compactTerms, limit: perTypeLimit, typePriority: typePriority("customer"), requestedField, requestedFields: requestedFieldList })
       : Promise.resolve([]),
-    requestedTypes.includes("commercial_card")
+    legacyTypes.includes("commercial_card")
       ? searchBusinessCommercialCards(pool, context, { terms, patterns, limit: perTypeLimit, typePriority: typePriority("commercial_card") })
       : Promise.resolve([]),
   ]);
@@ -2256,6 +2278,66 @@ export async function getTasksByCustomer(pool, context, { customerId, limit = 10
     [context.organizationId, customerId, Math.min(Math.max(Number(limit) || 10, 1), 20)]
   );
   return result.rows.map(taskDto);
+}
+
+export async function getTaskBasicInfo(pool, context, { taskId } = {}) {
+  requireCeoToolContext(context);
+  if (!taskId) return null;
+  const result = await pool.query(
+    `SELECT id, title, description, status, priority, assigned_to_name, due_at, shipment_id, customer_id,
+            workflow_instance_id, workflow_step_code, workflow_blocker_id, blocker_code, updated_at
+     FROM tasks
+     WHERE id = $1 AND organization_id = $2
+     LIMIT 1`,
+    [taskId, context.organizationId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    ...taskDto(row),
+    description: cleanText(row.description),
+    workflowInstanceId: cleanText(row.workflow_instance_id),
+    workflowStepCode: cleanText(row.workflow_step_code),
+    workflowBlockerId: cleanText(row.workflow_blocker_id),
+    blockerCode: cleanText(row.blocker_code),
+  };
+}
+
+export async function getWorkflowBlockerBasicInfo(pool, context, { blockerId } = {}) {
+  requireCeoToolContext(context);
+  if (!blockerId) return null;
+  const result = await pool.query(
+    `SELECT b.id, b.blocker_code, b.status, b.step_code, b.internal_note, b.public_note,
+            b.shipment_id, b.workflow_instance_id, b.updated_at,
+            s.shipment_code,
+            c.id AS customer_id,
+            c.customer_code,
+            c.company_name AS customer_company_name,
+            c.contact_name AS customer_contact_name
+     FROM shipment_workflow_blockers b
+     JOIN shipments s ON s.id = b.shipment_id AND s.organization_id = b.organization_id
+     LEFT JOIN customers c ON c.id = s.customer_id AND c.organization_id = s.organization_id
+     WHERE b.id = $1 AND b.organization_id = $2
+     LIMIT 1`,
+    [blockerId, context.organizationId]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    blockerCode: cleanText(row.blocker_code),
+    status: cleanText(row.status),
+    stepCode: cleanText(row.step_code),
+    internalNote: cleanText(row.internal_note),
+    publicNote: cleanText(row.public_note),
+    shipmentId: cleanText(row.shipment_id),
+    shipmentCode: cleanText(row.shipment_code),
+    customerId: cleanText(row.customer_id),
+    customerCode: cleanText(row.customer_code),
+    customerName: cleanText(row.customer_company_name) || cleanText(row.customer_contact_name),
+    updatedAt: isoTimestamp(row.updated_at),
+    actionUrl: row.shipment_id ? `/shipments/${row.shipment_id}` : "/tasks",
+  };
 }
 
 export async function getOverdueTasks(pool, context, { limit = 10 } = {}) {
