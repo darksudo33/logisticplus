@@ -169,6 +169,10 @@ function createChatMessageId(prefix: string) {
   return `${prefix}-${random}`;
 }
 
+function hasPersianText(value: string) {
+  return /[\u0600-\u06ff]/.test(value);
+}
+
 function statusText(status: string) {
   return statusLabels[String(status || "").toUpperCase()] || status || "ثبت نشده";
 }
@@ -472,6 +476,7 @@ function AiAssistantCard({ assistant }: { assistant: DashboardHomeData["aiAssist
             {messages.map((item) => {
               const isUser = item.role === "user";
               const isLatestAssistant = item.id === latestAssistantId;
+              const isPersianAssistantText = !isUser && hasPersianText(item.content);
               return (
                 <div
                   key={item.id}
@@ -483,8 +488,10 @@ function AiAssistantCard({ assistant }: { assistant: DashboardHomeData["aiAssist
                       "max-w-[88%] break-words rounded-lg px-3 py-2 text-sm font-bold leading-7 shadow-none",
                       isUser
                         ? "bg-primary text-primary-foreground"
-                        : "border border-border bg-muted/40 text-foreground"
+                        : "ai-chat-message-text border border-border bg-muted/40 text-foreground",
+                      !isUser && (isPersianAssistantText ? "ai-chat-message-text-rtl" : "ai-chat-message-text-ltr")
                     )}
+                    dir={!isUser ? (isPersianAssistantText ? "rtl" : "ltr") : undefined}
                     data-testid={isLatestAssistant ? "dashboard-ai-answer" : undefined}
                   >
                     {item.content}

@@ -18,6 +18,7 @@ export const BUSINESS_ENTITY_TYPES = {
 export const BUSINESS_REQUESTED_FIELDS = {
   SUMMARY: "summary",
   STATUS: "status",
+  PHONE: "phone",
   CUSTOMER: "customer",
   CUSTOMER_PHONE: "customer_phone",
   CUSTOMER_NUMBER: "customer_number",
@@ -25,6 +26,8 @@ export const BUSINESS_REQUESTED_FIELDS = {
   COMMERCIAL_CARD_NUMBER: "commercial_card_number",
   SHIPMENT_NUMBER: "shipment_number",
   LOCATION: "location",
+  ADDRESS: "address",
+  ACCOUNTING: "accounting",
 };
 
 const SUPPORTED_RELATION_INTENTS = new Set(Object.values(RELATION_INTENTS));
@@ -124,6 +127,37 @@ const STOP_WORDS = new Set([
   "حالش",
 ]);
 
+const BUSINESS_FIELD_STOP_WORDS = new Set([
+  "شماره",
+  "تلفن",
+  "موبایل",
+  "همراه",
+  "تماس",
+  "کانتکت",
+  "آدرس",
+  "نشانی",
+  "محل",
+  "وضعیت",
+  "کجاست",
+  "رسیده",
+  "ارسال",
+  "تحویل",
+  "حسابداری",
+  "مالی",
+  "مانده",
+  "بدهی",
+  "طلب",
+  "به",
+  "گزینه",
+  "phone",
+  "mobile",
+  "contact",
+  "address",
+  "status",
+  "accounting",
+  "balance",
+]);
+
 const SHIPMENT_TERMS = ["shipment", "cargo", "load", "tracking", "بار", "محموله", "پرونده"];
 const CUSTOMER_TERMS = ["customer", "client", "مشتری", "صاحب", "مالک", "طرف حساب", "شرکت"];
 const COMMERCIAL_CARD_TERMS = [
@@ -146,10 +180,13 @@ const SHIPMENT_LIST_TERMS = [
   "چند پرونده",
 ];
 const SUMMARY_TERMS = ["summary", "status", "where", "وضعیت", "خلاصه", "کجاست", "کجاس", "الان", "آخرین وضعیت", "چی شد", "در چه حال"];
+const SHIPMENT_STATUS_TERMS = ["وضعیت", "کجاست", "کجاس", "رسیده", "ارسال", "تحویل", "مرحله", "status", "where", "arrived", "sent", "delivered"];
 const CUSTOMER_OWNER_TERMS = ["مشتری", "صاحب", "مالک", "مال کی", "برای کی", "کدوم مشتری", "کدام مشتری", "who", "customer"];
 const NUMBER_TERMS = ["شماره", "number", "phone", "code", "کد", "تلفن", "تماس", "موبایل"];
-const PHONE_TERMS = ["تلفن", "تماس", "موبایل", "شماره تماس", "phone", "mobile"];
+const PHONE_TERMS = ["شماره", "تلفن", "موبایل", "همراه", "تماس", "کانتکت", "شماره تماس", "phone", "mobile", "contact"];
 const LOCATION_TERMS = ["کجاست", "کجاس", "لوکیشن", "محل", "بندر", "مسیر", "location", "where"];
+const ADDRESS_TERMS = ["آدرس", "نشانی", "محل", "address"];
+const ACCOUNTING_TERMS = ["حسابداری", "مالی", "مانده", "بدهی", "طلب", "accounting", "balance", "finance"];
 const IDENTITY_TERMS = [
   "تو کی هستی",
   "تو چی هستی",
@@ -195,7 +232,7 @@ function tokenized(text = "") {
 }
 
 function isStopToken(token = "") {
-  return STOP_WORDS.has(token) || HONORIFICS.has(token) || /^(ها|های|اش|ش)$/.test(token);
+  return STOP_WORDS.has(token) || BUSINESS_FIELD_STOP_WORDS.has(token) || HONORIFICS.has(token) || /^(ها|های|اش|ش)$/.test(token);
 }
 
 function candidateRefs(message = "") {
@@ -279,26 +316,39 @@ export function detectRelationIntent(message = "") {
   };
 }
 
-export function detectBusinessRequestedField(message = "") {
+export function detectBusinessRequestedFields(message = "") {
   const normalized = normalizeAgentText(message);
   const hasNumber = includesAny(normalized, NUMBER_TERMS);
   const hasPhone = includesAny(normalized, PHONE_TERMS);
   const hasShipment = includesAny(normalized, SHIPMENT_TERMS);
   const hasCustomer = includesAny(normalized, CUSTOMER_TERMS);
   const hasCard = includesAny(normalized, CARD_TERMS) || includesAny(normalized, COMMERCIAL_CARD_TERMS);
-  const hasStatus = includesAny(normalized, SUMMARY_TERMS);
+  const hasStatus = includesAny(normalized, SUMMARY_TERMS) || includesAny(normalized, SHIPMENT_STATUS_TERMS);
   const hasLocation = includesAny(normalized, LOCATION_TERMS);
+  const hasAddress = includesAny(normalized, ADDRESS_TERMS);
+  const hasAccounting = includesAny(normalized, ACCOUNTING_TERMS);
   const asksOwner = includesAny(normalized, CUSTOMER_OWNER_TERMS);
+  const hasPersonCue = [...HONORIFICS].some((term) => normalized.includes(term));
 
-  if (hasCard && hasNumber) return BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD_NUMBER;
-  if (hasCard) return BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD;
-  if (hasPhone || (hasNumber && hasCustomer && !hasShipment)) return BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE;
-  if (hasNumber && hasShipment) return BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER;
-  if (hasNumber && hasCustomer) return BUSINESS_REQUESTED_FIELDS.CUSTOMER_NUMBER;
-  if (asksOwner && hasShipment) return BUSINESS_REQUESTED_FIELDS.CUSTOMER;
-  if (hasLocation) return BUSINESS_REQUESTED_FIELDS.LOCATION;
-  if (hasStatus) return BUSINESS_REQUESTED_FIELDS.STATUS;
-  return BUSINESS_REQUESTED_FIELDS.SUMMARY;
+  if (hasAccounting) return [BUSINESS_REQUESTED_FIELDS.ACCOUNTING];
+  if (hasAddress) return [BUSINESS_REQUESTED_FIELDS.ADDRESS];
+  if (hasCard && hasNumber) return [BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD_NUMBER];
+  if (hasCard) return [BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD];
+  if ((hasPhone && !hasShipment) || (hasPhone && (hasCustomer || hasPersonCue)) || (hasNumber && (hasCustomer || hasPersonCue) && !hasShipment)) {
+    return [BUSINESS_REQUESTED_FIELDS.PHONE];
+  }
+  if (hasNumber && hasShipment) return [BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER];
+  if (hasNumber && hasCustomer) return [BUSINESS_REQUESTED_FIELDS.PHONE];
+  if (asksOwner && hasShipment) return [BUSINESS_REQUESTED_FIELDS.CUSTOMER];
+  if (hasLocation) return [BUSINESS_REQUESTED_FIELDS.LOCATION];
+  if (hasStatus) return [BUSINESS_REQUESTED_FIELDS.STATUS];
+  return [BUSINESS_REQUESTED_FIELDS.SUMMARY];
+}
+
+export function detectBusinessRequestedField(message = "") {
+  const [requestedField = BUSINESS_REQUESTED_FIELDS.SUMMARY] = detectBusinessRequestedFields(message);
+  if (requestedField === BUSINESS_REQUESTED_FIELDS.PHONE) return BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE;
+  return requestedField;
 }
 
 export function extractBusinessSearchTerms(message = "", { maxTerms = 8 } = {}) {
@@ -323,10 +373,18 @@ function candidateTypesFor(message = "", requestedField = BUSINESS_REQUESTED_FIE
   const hasCustomer = includesAny(normalized, CUSTOMER_TERMS) || [...HONORIFICS].some((term) => normalized.includes(term));
   const hasCard = includesAny(normalized, CARD_TERMS) || includesAny(normalized, COMMERCIAL_CARD_TERMS);
   const hasStatus = includesAny(normalized, SUMMARY_TERMS) || requestedField === BUSINESS_REQUESTED_FIELDS.STATUS;
+  const needsCustomerField = [
+    BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE,
+    BUSINESS_REQUESTED_FIELDS.CUSTOMER_NUMBER,
+    BUSINESS_REQUESTED_FIELDS.ADDRESS,
+    BUSINESS_REQUESTED_FIELDS.ACCOUNTING,
+  ].includes(requestedField);
   const types = [];
 
   if (hasCard || requestedField === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD || requestedField === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD_NUMBER) {
     types.push(BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD, BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.SHIPMENT);
+  } else if (needsCustomerField) {
+    types.push(BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD);
   } else if (hasShipment && hasCustomer) {
     types.push(BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.CUSTOMER);
   } else if (hasShipment || hasStatus) {
@@ -359,6 +417,7 @@ export function planBusinessSearch(message = "") {
       alternateQueryTerms: [],
       candidateTypes: [],
       requestedField: BUSINESS_REQUESTED_FIELDS.SUMMARY,
+      requestedFields: [BUSINESS_REQUESTED_FIELDS.SUMMARY],
       confidence: 0,
     };
   }
@@ -372,10 +431,12 @@ export function planBusinessSearch(message = "") {
       alternateQueryTerms: [],
       candidateTypes: [],
       requestedField: BUSINESS_REQUESTED_FIELDS.SUMMARY,
+      requestedFields: [BUSINESS_REQUESTED_FIELDS.SUMMARY],
       confidence: 1,
     };
   }
 
+  const requestedFields = detectBusinessRequestedFields(message);
   const requestedField = detectBusinessRequestedField(message);
   const queryTerms = extractBusinessSearchTerms(message);
   const candidateTypes = candidateTypesFor(message, requestedField);
@@ -385,6 +446,9 @@ export function planBusinessSearch(message = "") {
     includesAny(normalized, CARD_TERMS) ||
     includesAny(normalized, SUMMARY_TERMS) ||
     includesAny(normalized, NUMBER_TERMS) ||
+    includesAny(normalized, PHONE_TERMS) ||
+    includesAny(normalized, ADDRESS_TERMS) ||
+    includesAny(normalized, ACCOUNTING_TERMS) ||
     [...HONORIFICS].some((term) => normalized.includes(term));
 
   return {
@@ -395,6 +459,7 @@ export function planBusinessSearch(message = "") {
     alternateQueryTerms: alternateTermsFor(queryTerms),
     candidateTypes,
     requestedField,
+    requestedFields,
     confidence: queryTerms.length >= 2 ? 0.86 : hasBusinessCue ? 0.72 : 0.35,
   };
 }

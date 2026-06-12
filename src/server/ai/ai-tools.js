@@ -747,7 +747,10 @@ export async function getCustomerDetailContext(pool, context, { customerId } = {
       customerCode: customer.customerCode,
       companyName: customer.companyName,
       contactName: customer.contactName,
+      email: customer.email,
       phone: customer.phone,
+      phoneNumbers: customer.phoneNumbers,
+      address: customer.address,
       status: customer.status,
       actionUrl: customer.actionUrl,
     },
@@ -977,6 +980,34 @@ function businessCandidateScore({ fields = {}, terms = [], typePriority = 0 }) {
   return Math.min(0.99, Number(score.toFixed(2)));
 }
 
+function fieldIncludesAnyTerm(value, terms = []) {
+  const text = fieldText(value);
+  return Boolean(text && terms.some((term) => text.includes(term)));
+}
+
+function fieldExactlyMatchesAnyTerm(value, terms = []) {
+  const text = fieldText(value);
+  if (!text) return false;
+  const compactText = compactCode(text);
+  return terms.some((term) => text === term || compactText === compactCode(term));
+}
+
+function customerBusinessCandidateScore({ fields = {}, terms = [], typePriority = 0, requestedField = "summary", requestedFields = [] }) {
+  let score = businessCandidateScore({ fields, terms, typePriority });
+  if (fieldExactlyMatchesAnyTerm(fields.contact_name, terms)) score += 0.34;
+  else if (fieldIncludesAnyTerm(fields.contact_name, terms)) score += 0.24;
+
+  if (fieldExactlyMatchesAnyTerm(fields.customer_code, terms)) score += 0.3;
+  else if (fieldExactlyMatchesAnyTerm(fields.company_name, terms)) score += 0.22;
+  else if (fieldIncludesAnyTerm(fields.company_name, terms)) score += 0.14;
+
+  if (fieldIncludesAnyTerm(fields.phone, terms)) score += 0.07;
+  if (fieldIncludesAnyTerm(fields.referrer, terms) || fieldIncludesAnyTerm(fields.notes, terms)) score += 0.04;
+
+  if ((requestedField === "customer_phone" || requestedFields.includes("phone")) && cleanText(fields.phone)) score += 0.05;
+  return Math.min(0.99, Number(score.toFixed(2)));
+}
+
 function shipmentBusinessCandidate(row = {}, terms = [], typePriority = 0) {
   const goodsDescription = cleanText(row.profile_goods_text) || cleanText(row.legacy_goods_text);
   const currentStatus = cleanText(row.status_text) || cleanText(row.current_stage) || cleanText(row.status);
@@ -1019,7 +1050,7 @@ function shipmentBusinessCandidate(row = {}, terms = [], typePriority = 0) {
   };
 }
 
-function customerBusinessCandidate(row = {}, terms = [], typePriority = 0, requestedField = "summary") {
+function customerBusinessCandidate(row = {}, terms = [], typePriority = 0, requestedField = "summary", requestedFields = []) {
   const name = cleanText(row.company_name) || cleanText(row.contact_name) || cleanText(row.customer_code) || cleanText(row.id);
   const fields = {
     customer_code: row.customer_code,
@@ -1027,6 +1058,8 @@ function customerBusinessCandidate(row = {}, terms = [], typePriority = 0, reque
     contact_name: row.contact_name,
     phone: row.phone,
     referrer: row.referrer,
+    address: row.address,
+    notes: row.notes,
     status: row.status,
   };
   return {
@@ -1034,12 +1067,12 @@ function customerBusinessCandidate(row = {}, terms = [], typePriority = 0, reque
     id: cleanText(row.id),
     label: [`مشتری ${name}`, cleanText(row.customer_code)].filter(Boolean).join(" / "),
     matchedFields: businessMatchedFields(fields, terms),
-    score: businessCandidateScore({ fields, terms, typePriority }),
+    score: customerBusinessCandidateScore({ fields, terms, typePriority, requestedField, requestedFields }),
     safeSummary: {
       customerCode: cleanText(row.customer_code),
       customerName: name,
       status: cleanText(row.status),
-      ...(requestedField === "customer_phone" ? { phone: cleanText(row.phone) } : {}),
+      ...(requestedField === "customer_phone" || requestedFields.includes("phone") ? { phone: cleanText(row.phone) } : {}),
     },
   };
 }
@@ -1570,9 +1603,9 @@ async function searchBusinessShipments(pool, context, { terms, patterns, compact
   return result.rows.map((row) => shipmentBusinessCandidate(row, terms, typePriority));
 }
 
-async function searchBusinessCustomers(pool, context, { terms, patterns, compactTerms, limit, typePriority, requestedField }) {
+async function searchBusinessCustomers(pool, context, { terms, patterns, compactTerms, limit, typePriority, requestedField, requestedFields }) {
   const result = await pool.query(
-    `SELECT id, customer_code, company_name, contact_name, phone, referrer, status, updated_at
+    `SELECT id, customer_code, company_name, contact_name, phone, address, referrer, notes, status, updated_at
      FROM customers
      WHERE organization_id = $1
        AND archived_at IS NULL
@@ -1581,16 +1614,28 @@ async function searchBusinessCustomers(pool, context, { terms, patterns, compact
          OR lower(COALESCE(customer_code, '')) = ANY($2::text[])
          OR regexp_replace(lower(COALESCE(customer_code, '')), '[^a-z0-9]', '', 'g') = ANY($4::text[])
          OR COALESCE(customer_code, '') ILIKE ANY($3::text[])
-         OR COALESCE(company_name, '') ILIKE ANY($3::text[])
-         OR COALESCE(contact_name, '') ILIKE ANY($3::text[])
-         OR COALESCE(phone, '') ILIKE ANY($3::text[])
-         OR COALESCE(referrer, '') ILIKE ANY($3::text[])
-       )
-     ORDER BY updated_at DESC
-     LIMIT $5`,
+          OR COALESCE(company_name, '') ILIKE ANY($3::text[])
+          OR COALESCE(contact_name, '') ILIKE ANY($3::text[])
+          OR COALESCE(phone, '') ILIKE ANY($3::text[])
+          OR COALESCE(address, '') ILIKE ANY($3::text[])
+          OR COALESCE(referrer, '') ILIKE ANY($3::text[])
+          OR COALESCE(notes, '') ILIKE ANY($3::text[])
+        )
+      ORDER BY
+        CASE
+          WHEN lower(COALESCE(contact_name, '')) = ANY($2::text[]) THEN 0
+          WHEN COALESCE(contact_name, '') ILIKE ANY($3::text[]) THEN 1
+          WHEN lower(COALESCE(customer_code, '')) = ANY($2::text[]) THEN 2
+          WHEN COALESCE(company_name, '') ILIKE ANY($3::text[]) THEN 3
+          WHEN COALESCE(phone, '') ILIKE ANY($3::text[]) THEN 4
+          WHEN COALESCE(referrer, '') ILIKE ANY($3::text[]) OR COALESCE(notes, '') ILIKE ANY($3::text[]) THEN 5
+          ELSE 6
+        END,
+        updated_at DESC
+      LIMIT $5`,
     [context.organizationId, terms, patterns, compactTerms, limit]
   );
-  return result.rows.map((row) => customerBusinessCandidate(row, terms, typePriority, requestedField));
+  return result.rows.map((row) => customerBusinessCandidate(row, terms, typePriority, requestedField, requestedFields));
 }
 
 async function searchBusinessCommercialCards(pool, context, { terms, patterns, limit, typePriority }) {
@@ -1626,14 +1671,15 @@ async function searchBusinessCommercialCards(pool, context, { terms, patterns, l
 export async function searchBusinessContext(
   pool,
   context,
-  { queryTerms = [], candidateTypes = [], requestedField = "summary", limit = 8 } = {}
+  { queryTerms = [], candidateTypes = [], requestedField = "summary", requestedFields = [], limit = 8 } = {}
 ) {
   requireCeoToolContext(context);
+  const requestedFieldList = Array.isArray(requestedFields) ? requestedFields.map((field) => cleanText(field)).filter(Boolean) : [];
   const terms = businessSearchTerms(queryTerms);
   if (!terms.length) {
     return {
       candidates: [],
-      searched: { queryTerms: [], candidateTypes: [], requestedField },
+      searched: { queryTerms: [], candidateTypes: [], requestedField, requestedFields: requestedFieldList },
     };
   }
 
@@ -1645,7 +1691,7 @@ export async function searchBusinessContext(
   if (!patterns.length) {
     return {
       candidates: [],
-      searched: { queryTerms: terms, candidateTypes: [], requestedField },
+      searched: { queryTerms: terms, candidateTypes: [], requestedField, requestedFields: requestedFieldList },
     };
   }
 
@@ -1666,7 +1712,7 @@ export async function searchBusinessContext(
       ? searchBusinessShipments(pool, context, { terms, patterns, compactTerms, limit: perTypeLimit, typePriority: typePriority("shipment") })
       : Promise.resolve([]),
     requestedTypes.includes("customer")
-      ? searchBusinessCustomers(pool, context, { terms, patterns, compactTerms, limit: perTypeLimit, typePriority: typePriority("customer"), requestedField })
+      ? searchBusinessCustomers(pool, context, { terms, patterns, compactTerms, limit: perTypeLimit, typePriority: typePriority("customer"), requestedField, requestedFields: requestedFieldList })
       : Promise.resolve([]),
     requestedTypes.includes("commercial_card")
       ? searchBusinessCommercialCards(pool, context, { terms, patterns, limit: perTypeLimit, typePriority: typePriority("commercial_card") })
@@ -1680,7 +1726,7 @@ export async function searchBusinessContext(
 
   return {
     candidates,
-    searched: { queryTerms: terms, candidateTypes: requestedTypes, requestedField },
+    searched: { queryTerms: terms, candidateTypes: requestedTypes, requestedField, requestedFields: requestedFieldList },
   };
 }
 
