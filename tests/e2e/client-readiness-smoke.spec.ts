@@ -94,7 +94,6 @@ test.describe.serial("client-readiness route smoke", () => {
       "/signup/pending",
       "/billing/callback/zarinpal",
       `/track/${encodeURIComponent(access.token)}`,
-      "/track/search",
     ];
 
     try {

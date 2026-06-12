@@ -10,6 +10,7 @@ import { ProtectedShellSkeleton, PublicRouteSkeleton } from "./components/Skelet
 import { QUOTATIONS_UI_ENABLED, SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED } from "./config/features";
 import { installClientErrorReporting } from "./lib/errorReporting";
 import { installClientPerformanceMonitoring } from "./lib/clientPerformance";
+import { useMockStore } from "./store/useMockStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 const LazyToaster = lazy(() =>
@@ -19,11 +20,6 @@ const LazyToaster = lazy(() =>
 );
 const ProtectedAppLayout = lazy(() => import("./components/layout/ProtectedAppLayout"));
 const LoginPage = lazy(() => import("./app/LoginPage"));
-const LandingPage = lazy(() => import("./app/LandingPage"));
-const ContactPage = lazy(() => import("./app/ContactPage"));
-const PricingPage = lazy(() => import("./app/SaasSignup").then((module) => ({ default: module.PricingPage })));
-const SignupPage = lazy(() => import("./app/SaasSignup").then((module) => ({ default: module.SignupPage })));
-const SignupPendingPage = lazy(() => import("./app/SaasSignup").then((module) => ({ default: module.SignupPendingPage })));
 const Dashboard = lazy(() => import("./app/Dashboard"));
 const Shipments = lazy(() => import("./app/Shipments"));
 const ExitedShipments = lazy(() => import("./app/ExitedShipments"));
@@ -32,7 +28,6 @@ const Customers = lazy(() => import("./app/Customers"));
 const Tasks = lazy(() => import("./app/Tasks"));
 const Chat = lazy(() => import("./app/Chat"));
 const PublicTrack = lazy(() => import("./app/PublicTrack"));
-const PublicTrackSearch = lazy(() => import("./app/PublicTrack").then((module) => ({ default: module.PublicTrackSearch })));
 const Profile = lazy(() => import("./app/Profile"));
 const Settings = lazy(() => import("./app/Settings"));
 const UserManagement = lazy(() => import("./app/UserManagement"));
@@ -84,6 +79,11 @@ const protectedRoutePrefixes = [
 const isProtectedPath = (pathname: string) =>
   protectedRoutePrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 
+function PublicLoginEntry() {
+  const currentUser = useMockStore((state) => state.currentUser);
+  return currentUser ? <Navigate to="/dashboard" replace /> : <LoginPage />;
+}
+
 function AppRoutes() {
   const location = useLocation();
   const routeFallback = isProtectedPath(location.pathname) ? <ProtectedShellSkeleton /> : <PublicRouteSkeleton />;
@@ -91,15 +91,15 @@ function AppRoutes() {
   return (
     <Suspense fallback={routeFallback}>
       <Routes>
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/contact" element={<ContactPage />} />
-        <Route path="/pricing" element={<PricingPage />} />
-        <Route path="/signup" element={<SignupPage />} />
-        <Route path="/signup/pending" element={<SignupPendingPage />} />
-        <Route path="/billing/callback/zarinpal" element={<SignupPendingPage />} />
+        <Route path="/" element={<PublicLoginEntry />} />
+        <Route path="/login" element={<PublicLoginEntry />} />
+        <Route path="/contact" element={<Navigate to="/login" replace />} />
+        <Route path="/pricing" element={<Navigate to="/login" replace />} />
+        <Route path="/signup" element={<Navigate to="/login" replace />} />
+        <Route path="/signup/pending" element={<Navigate to="/login" replace />} />
+        <Route path="/billing/callback/zarinpal" element={<Navigate to="/login" replace />} />
+        <Route path="/track/search" element={<Navigate to="/login" replace />} />
         <Route path="/track/:token" element={<PublicTrack />} />
-        <Route path="/track/search" element={<PublicTrackSearch />} />
 
         <Route path="/dashboard" element={<ProtectedAppLayout><Dashboard /></ProtectedAppLayout>} />
         <Route path="/daily-status" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><DailyStatus /></ProtectedAppLayout>} />
@@ -162,7 +162,7 @@ function AppRoutes() {
         <Route path="/admin" element={<Navigate to="/platform-admin" replace />} />
         <Route path="/platform-admin" element={<AdminConsoleRoute />} />
 
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </Suspense>
   );

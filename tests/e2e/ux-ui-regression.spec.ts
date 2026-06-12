@@ -384,7 +384,7 @@ test.describe.serial("UX/UI regression sweep", () => {
   });
 
   test("core public and protected routes have no obvious desktop/mobile UI breakage", async ({ browser }) => {
-    const publicRoutes = ["/", "/pricing", "/signup", "/contact", "/login", "/track/search"];
+    const publicRoutes = ["/", "/pricing", "/signup", "/contact", "/login"];
     const protectedRoutes = ["/dashboard", "/daily-status", "/shipments", "/customers", "/tasks", "/documents", "/cheques", "/commercial-cards", "/compliance-meetings", "/archive", "/management"];
     const viewports = [
       { width: 1280, height: 800 },

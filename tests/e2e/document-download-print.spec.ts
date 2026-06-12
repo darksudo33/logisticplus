@@ -401,7 +401,7 @@ test.describe.serial("document download, public access, archive, and print/expor
       if (!isIgnorableDevServerMessage(error.message)) consoleErrors.push(error.message);
     });
     await loginViaUi(page);
-    for (const route of ["/documents", "/shipments/s1", "/track/search"]) {
+    for (const route of ["/documents", "/shipments/s1", "/login"]) {
       await page.goto(route);
       await expect(page.locator("h1").first()).toBeVisible();
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);

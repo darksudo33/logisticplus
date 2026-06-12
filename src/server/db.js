@@ -5,7 +5,6 @@ import {
   getPublicDocumentByTrackingToken as getPublicDocumentByTrackingTokenFromRepository,
   getPublicTrackingTokenAuditState as getPublicTrackingTokenAuditStateFromRepository,
   getPublicTrackingByToken as getPublicTrackingByTokenFromRepository,
-  searchPublicTracking as searchPublicTrackingFromRepository,
 } from "./public-tracking.js";
 import {
   markPaymentVerifiedByAuthority as markPaymentVerifiedByAuthorityInRepository,
@@ -9661,10 +9660,6 @@ export async function getPublicTrackingByToken(token) {
 
 export async function getPublicTrackingTokenAuditState(token) {
   return getPublicTrackingTokenAuditStateFromRepository(pool, token);
-}
-
-export async function searchPublicTracking({ shipmentCode, verification }) {
-  return searchPublicTrackingFromRepository(pool, { shipmentCode, verification });
 }
 
 export async function getPublicDocument(documentId, access = {}) {

@@ -3,7 +3,6 @@ import "dotenv/config";
 
 const DEFAULT_OWNER_EMAIL = "darksudo22@gmail.com";
 const DEFAULT_SHIPMENT_ID = "s1";
-const ZARINPAL_GATEWAY_PREFIX = "https://www.zarinpal.com/pg/StartPay/";
 
 function envFlag(name, defaultValue = false) {
   const value = process.env[name];
@@ -30,7 +29,6 @@ const ownerEmail = process.env.STAGING_OWNER_EMAIL || DEFAULT_OWNER_EMAIL;
 const ownerPassword = process.env.STAGING_OWNER_PASSWORD || "";
 const shipmentId = process.env.STAGING_SMOKE_SHIPMENT_ID || DEFAULT_SHIPMENT_ID;
 const skipAuthSmoke = envFlag("STAGING_SKIP_AUTH_SMOKE", false);
-const skipZarinpalHandoff = envFlag("STAGING_SKIP_ZARINPAL_HANDOFF", false);
 
 let sessionCookie = "";
 
@@ -105,7 +103,7 @@ async function checkPublicPages() {
   const checks = [
     { path: "/" },
     { path: "/login" },
-    { path: "/signup" },
+    { path: "/contact" },
     { path: "/admin" },
   ];
 
@@ -117,6 +115,24 @@ async function checkPublicPages() {
   }
 
   pass("Public/app shell pages load.");
+}
+
+async function checkRemovedPublicEndpoints() {
+  log("Checking removed public self-serve/payment/SMS endpoints.");
+  const checks = [
+    { path: "/api/contact-requests", init: { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" } },
+    { path: "/api/signup", init: { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" } },
+    { path: "/api/billing/payments/staging-smoke/start", init: { method: "POST" } },
+    { path: "/api/billing/zarinpal/callback?Authority=STAGING&Status=NOK", init: { redirect: "manual" } },
+    { path: "/api/auth/phone/request-code", init: { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" } },
+  ];
+
+  for (const check of checks) {
+    const response = await fetchRaw(check.path, check.init);
+    assert(response.status === 404, `${check.path} should return 404 after public-release cleanup, got ${response.status}.`);
+  }
+
+  pass("Removed public endpoints return 404.");
 }
 
 async function loginOwner() {
@@ -201,84 +217,13 @@ async function checkDocumentAndTrackingSmoke() {
   pass("Customer-visible document appears through safe public tracking.");
 }
 
-async function checkZarinpalHandoff() {
-  if (skipZarinpalHandoff) {
-    skip("Zarinpal handoff skipped by STAGING_SKIP_ZARINPAL_HANDOFF.");
-    return null;
-  }
-
-  log("Creating a staging signup and requesting a live Zarinpal gateway URL without completing payment.");
-  const unique = Date.now();
-  const signup = await fetchJson("/api/signup", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      planId: "starter",
-      billingCycle: "monthly",
-      companyName: `STAGING QA Gateway ${unique}`,
-      ownerName: "STAGING QA Owner",
-      ownerEmail: `staging.qa.${unique}@example.com`,
-      contactPhone: "09120000000",
-      companySize: "STAGING QA",
-      expectedVolume: "۱ محموله تست",
-      password: `Staging-${unique}!`,
-      notes: "Created by scripts/validate-liara-staging.ts. Do not approve.",
-    }),
-  });
-
-  const paymentId = signup.payload?.data?.paymentId;
-  const signupRequestId = signup.payload?.data?.signupRequestId;
-  assert(paymentId, "Signup did not return a payment id.");
-
-  const started = await fetchJson(`/api/billing/payments/${encodeURIComponent(paymentId)}/start`, { method: "POST" });
-  const gatewayUrl = started.payload?.data?.gatewayUrl;
-  const authority = started.payload?.data?.authority;
-  assert(gatewayUrl?.startsWith(ZARINPAL_GATEWAY_PREFIX), `Expected a live Zarinpal gateway URL, got: ${gatewayUrl || "<empty>"}`);
-  assert(authority && !String(authority).startsWith("SANDBOX-"), "Expected a live Zarinpal authority, not a sandbox authority.");
-  pass(`Live Zarinpal gateway handoff returned ${gatewayUrl}`);
-
-  log("Calling the callback with Status=NOK to validate the no-charge failure path.");
-  const callback = await fetchRaw(
-    `/api/billing/zarinpal/callback?Authority=${encodeURIComponent(authority)}&Status=NOK`,
-    { redirect: "manual" }
-  );
-  const location = callback.headers.get("location") || "";
-  assert([301, 302, 303, 307, 308].includes(callback.status), `Expected callback redirect, got ${callback.status}.`);
-  assert(location.includes("/signup/pending?payment=failed"), `Expected failed pending redirect, got ${location}.`);
-
-  const pendingPage = await fetchRaw(location.startsWith("http") ? new URL(location).pathname + new URL(location).search : location);
-  assert(pendingPage.ok, "Failed pending page did not render.");
-  pass("Zarinpal NOK callback marks the payment failed without a charge.");
-
-  return { paymentId, signupRequestId };
-}
-
-async function checkAdminBillingState(paymentState) {
-  if (!sessionCookie || !paymentState?.paymentId) return;
-
-  log("Confirming admin billing state has no receipt and no approved signup.");
-  const payments = await fetchJson("/api/admin/payments", {}, true);
-  const payment = payments.payload?.data?.find((item) => item.id === paymentState.paymentId);
-  assert(payment, "Admin payments did not include the staging payment.");
-  assert(payment.status === "failed", `Expected failed payment, got ${payment.status}.`);
-  assert(!payment.receiptId, "Failed payment should not have a receipt.");
-
-  const requests = await fetchJson("/api/admin/signup-requests", {}, true);
-  const request = requests.payload?.data?.find((item) => item.id === paymentState.signupRequestId);
-  assert(request, "Admin signup requests did not include the staging request.");
-  assert(request.status !== "approved", `No-charge staging signup should not be approved; got ${request.status}.`);
-  assert(request.paymentStatus === "failed", `Expected failed payment status, got ${request.paymentStatus}.`);
-  pass("Admin billing state is safe after no-charge Zarinpal validation.");
-}
-
 async function main() {
   console.log(`Liara staging validation target: ${baseUrl}`);
   await checkHealth();
   await checkPublicPages();
+  await checkRemovedPublicEndpoints();
   const loggedIn = await loginOwner();
   if (loggedIn) await checkDocumentAndTrackingSmoke();
-  const paymentState = await checkZarinpalHandoff();
-  await checkAdminBillingState(paymentState);
   console.log("\nLiara staging validation passed.");
 }
 

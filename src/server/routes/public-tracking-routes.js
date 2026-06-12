@@ -3,7 +3,6 @@ import {
   publicDocumentParamsSchema,
   publicTrackDocumentParamsSchema,
   publicTrackParamsSchema,
-  publicTrackSearchBodySchema,
 } from "../request-schemas.js";
 import { parseRequestValue } from "../validation.js";
 
@@ -19,9 +18,7 @@ export function registerPublicTrackingRoutes(
     getPublicTrackingTokenAuditState,
     publicDocumentDownloadLimit,
     publicTrackLookupLimit,
-    publicTrackSearchLimit,
     requestContext,
-    searchPublicTracking,
     sendStoredDocument,
   }
 ) {
@@ -88,40 +85,6 @@ export function registerPublicTrackingRoutes(
     } catch (error) {
       console.error("Public track failed:", error);
       createApiError(res, 500, "PUBLIC_TRACK_FAILED", "Could not load tracking.");
-    }
-  });
-
-  app.post("/api/public/track/search", async (req, res) => {
-    try {
-      const body = parseRequestValue(res, publicTrackSearchBodySchema, req.body || {});
-      if (!body) return;
-      if (!(await consumeRateLimit(req, res, "public-track-search", {
-        ...publicTrackSearchLimit,
-        discriminator: body.shipmentCode,
-      }))) return;
-      const data = await searchPublicTracking({
-        shipmentCode: body.shipmentCode,
-        verification: body.verification,
-      });
-      if (!data) {
-        await auditLog?.({
-          actorType: "public",
-          action: "public_tracking.search_failed",
-          entityType: "PUBLIC_TRACKING_SEARCH",
-          entityId: body.shipmentCode,
-          summary: "Public tracking search failed verification.",
-          metadata: {
-            reason: "verification_failed",
-            shipmentCode: body.shipmentCode,
-          },
-          requestContext: requestContext?.(req),
-        });
-        return createApiError(res, 404, "TRACKING_UNAVAILABLE", "Tracking is unavailable for the provided details.");
-      }
-      res.json({ ok: true, data });
-    } catch (error) {
-      console.error("Public track search failed:", error);
-      createApiError(res, 500, "PUBLIC_TRACK_SEARCH_FAILED", "Could not search tracking.");
     }
   });
 

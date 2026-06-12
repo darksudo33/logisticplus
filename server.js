@@ -127,7 +127,6 @@ import {
   revokeUserPermission,
   normalizeOperationalSearchQuery,
   searchOperationalRecords,
-  searchPublicTracking,
   setQuotationStatus,
   setTaskStatus,
   updateDocumentMetadata,
@@ -258,7 +257,7 @@ import {
   rateLimitKey,
 } from "./src/server/rate-limit.js";
 import { runStartupChecks, shouldTrustProxy } from "./src/server/startup-checks.js";
-import { runSmsWorkerOnce, startSmsWorker } from "./src/server/sms-worker.js";
+import { runSmsWorkerOnce } from "./src/server/sms-worker.js";
 import { startCurrencyRatesWorker } from "./src/server/rates-worker.js";
 import { sendSmsMessage } from "./src/server/sms-provider.js";
 import { AI_MESSAGES, runAiChat } from "./src/server/ai/ai-orchestrator.js";
@@ -303,7 +302,6 @@ const PHONE_LOGIN_VERIFY_LIMIT = { limit: 6, windowMs: 15 * 60 * 1000 };
 const DOCUMENT_DOWNLOAD_LIMIT = { limit: 60, windowMs: 10 * 60 * 1000 };
 const PUBLIC_DOCUMENT_DOWNLOAD_LIMIT = { limit: 30, windowMs: 10 * 60 * 1000 };
 const PUBLIC_TRACK_LOOKUP_LIMIT = { limit: 60, windowMs: 10 * 60 * 1000 };
-const PUBLIC_TRACK_SEARCH_LIMIT = { limit: 20, windowMs: 15 * 60 * 1000 };
 const CHAT_THREAD_CREATE_LIMIT = { limit: 20, windowMs: 60 * 60 * 1000 };
 const CHAT_PARTICIPANT_CHANGE_LIMIT = { limit: 60, windowMs: 60 * 60 * 1000 };
 const CHAT_ATTACHMENT_UPLOAD_LIMIT = { limit: 20, windowMs: 15 * 60 * 1000 };
@@ -1209,6 +1207,23 @@ async function startServer() {
       });
     }
   });
+
+  const unavailablePublicReleaseEndpoint = (_req, res) =>
+    createApiError(res, 404, "NOT_FOUND", "This endpoint is not available in the public release app.");
+
+  [
+    "/api/contact-requests",
+    "/api/signup",
+    "/api/billing/payments/:id/start",
+    "/api/billing/zarinpal/callback",
+    "/api/auth/phone/request-code",
+    "/api/auth/phone/verify",
+    "/api/admin/sms-deliveries",
+    "/api/admin/sms-analytics",
+    "/api/admin/sms-templates",
+    "/api/admin/sms-templates/:key",
+    "/api/admin/sms-deliveries/run-worker",
+  ].forEach((route) => app.all(route, unavailablePublicReleaseEndpoint));
 
   app.get("/api/plans", async (_req, res) => {
     try {
@@ -5371,9 +5386,7 @@ async function startServer() {
     getPublicTrackingTokenAuditState,
     publicDocumentDownloadLimit: PUBLIC_DOCUMENT_DOWNLOAD_LIMIT,
     publicTrackLookupLimit: PUBLIC_TRACK_LOOKUP_LIMIT,
-    publicTrackSearchLimit: PUBLIC_TRACK_SEARCH_LIMIT,
     requestContext,
-    searchPublicTracking,
     sendStoredDocument,
   });
 
@@ -5702,7 +5715,6 @@ async function startServer() {
   });
 
   httpServer.listen(PORT, "0.0.0.0", () => {
-    startSmsWorker();
     startCurrencyRatesWorker(pool);
     console.log(`Server running on http://localhost:${PORT}`);
   });
