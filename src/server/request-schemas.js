@@ -1189,6 +1189,26 @@ export const chatTypingBodySchema = z.object({
   threadId: requiredId,
 }).strict();
 
+const aiRecentMessageSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string().trim().min(1, "Message content is required.").max(1000, "Message content is too long."),
+}).strict();
+
+const aiActiveEntitySchema = z.object({
+  type: z.enum(["shipment", "customer"]),
+  id: requiredId,
+  code: optionalTrimmedText(120),
+  label: optionalTrimmedText(180),
+}).strict();
+
+export const aiChatBodySchema = z.object({
+  message: z.string().trim().min(1, "Message is required.").max(2000, "Message is too long."),
+  context: z.enum(["dashboard", "ai_chat"]).optional().default("dashboard"),
+  conversationId: optionalTrimmedText(128),
+  recentMessages: z.array(aiRecentMessageSchema).max(10, "Too many recent messages.").optional().default([]),
+  activeEntity: aiActiveEntitySchema.optional(),
+}).strict();
+
 const appUserRole = z.enum(["CEO", "MANAGER", "OPERATIONS", "CUSTOMER_SERVICE", "FINANCE"]);
 const appUserStatus = z.enum(["active", "suspended", "pending"]);
 

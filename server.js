@@ -180,6 +180,7 @@ import {
   uploadSingle,
 } from "./src/server/document-storage.js";
 import {
+  aiChatBodySchema,
   archiveEntityParamsSchema,
   billingPaymentStartParamsSchema,
   chatDirectBodySchema,
@@ -250,6 +251,7 @@ import { runStartupChecks, shouldTrustProxy } from "./src/server/startup-checks.
 import { runSmsWorkerOnce, startSmsWorker } from "./src/server/sms-worker.js";
 import { startCurrencyRatesWorker } from "./src/server/rates-worker.js";
 import { sendSmsMessage } from "./src/server/sms-provider.js";
+import { AI_MESSAGES, runAiChat } from "./src/server/ai/ai-orchestrator.js";
 
 const SESSION_COOKIE = "logisticplus_session";
 const PASSWORD_LOGIN_LIMIT = { limit: 5, windowMs: 15 * 60 * 1000 };
@@ -274,6 +276,7 @@ const CHAT_TYPING_LIMIT = { limit: 1, windowMs: 2 * 1000 };
 const CHAT_SOCKET_EVENT_LIMIT = { limit: 180, windowMs: 60 * 1000 };
 const CHAT_SOCKET_CONNECTION_LIMIT = { limit: 12, windowMs: 60 * 1000 };
 const CHAT_SOCKET_MAX_BYTES = 8 * 1024;
+const AI_CHAT_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
 const ZARINPAL_MIN_AMOUNT_IRR = 10000;
 
 const chatClients = new Map();
@@ -1024,6 +1027,85 @@ async function canAccessShipment(user, shipment) {
   const ownerUserId = shipment.owner_user_id || shipment.ownerUserId;
   const assignedManagerId = shipment.assigned_manager_id || shipment.assignedManagerId;
   return ownerUserId === user.id || assignedManagerId === user.id;
+}
+
+function safeCount(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+}
+
+function toDashboardHomeDto(user, dashboardData = {}) {
+  const summary = dashboardData.summary || {};
+  const users = Array.isArray(dashboardData.management?.users) ? dashboardData.management.users : [];
+  const activeEmployees = users.filter((item) => {
+    const status = String(item.status || "active").toLowerCase();
+    return status === "active" || item.is_online === true;
+  }).length;
+
+  const myActiveTasks = (dashboardData.myTasks || [])
+    .filter((task) => !["DONE", "CANCELLED"].includes(String(task.status || "").toUpperCase()))
+    .slice(0, 5)
+    .map((task) => ({
+      id: task.id,
+      title: task.title || "وظیفه",
+      status: task.status || "TODO",
+      priority: task.priority || "MEDIUM",
+      dueDate: task.dueDate || "",
+      shipmentId: task.shipmentId || null,
+      actionUrl: task.shipmentId ? `/shipments/${task.shipmentId}` : "/tasks",
+    }));
+
+  const lastUpdatedShipments = (dashboardData.latestShipments || []).slice(0, 5).map((shipment) => ({
+    id: shipment.id,
+    shipmentCode: shipment.trackingNumber || shipment.shipmentCode || shipment.id,
+    customerCode: shipment.customerCode || shipment.customerId || "",
+    status: shipment.status || "PENDING",
+    destination: shipment.destination || "",
+    estimatedDelivery: shipment.estimatedDelivery || "",
+    updatedAt: shipment.updatedAt || "",
+    actionUrl: `/shipments/${shipment.id}`,
+  }));
+
+  return {
+    currentUser: {
+      id: user.id,
+      name: user.name || user.email || "کاربر",
+      role: user.role || "",
+    },
+    metrics: [
+      {
+        key: "activeShipments",
+        label: "محموله‌های فعال",
+        value: safeCount(summary.activeShipments),
+        actionUrl: "/shipments",
+      },
+      {
+        key: "documents",
+        label: "اسناد",
+        value: safeCount(summary.documents),
+        actionUrl: "/documents",
+      },
+      {
+        key: "activeEmployees",
+        label: "کارمندان فعال",
+        value: activeEmployees,
+        actionUrl: null,
+      },
+      {
+        key: "tasks",
+        label: "وظایف",
+        value: safeCount(summary.openTasks),
+        actionUrl: "/tasks",
+      },
+    ],
+    myActiveTasks,
+    lastUpdatedShipments,
+    aiAssistant: {
+      name: AI_MESSAGES.ASSISTANT_NAME,
+      status: "ready",
+      subtitle: "از وضعیت محموله‌ها، اسناد و وظایف بپرسید",
+    },
+  };
 }
 
 async function startServer() {
@@ -4645,18 +4727,82 @@ async function startServer() {
 
   app.get("/api/dashboard", async (req, res) => {
     try {
-      const user = await requireAuthenticatedUser(req, res);
-      if (!user) return;
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "dashboard API");
+      if (!tenantRequest) return;
+      const { user } = tenantRequest;
       const permissions = await requirePermission(user, "dashboard.view");
       const data = await getDashboardData(user, permissions);
-      if (!(permissions.includes("tasks.view_all") || user.role === "CEO" || user.role === "MANAGER")) {
-        delete data.management;
-      }
-      res.json({ ok: true, data });
+      res.json({ ok: true, data: toDashboardHomeDto(user, data) });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       console.error("Dashboard failed:", error);
       createApiError(res, 500, "DASHBOARD_FAILED", "Could not load dashboard data.");
+    }
+  });
+
+  app.post("/api/ai/chat", async (req, res) => {
+    try {
+      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "AI assistant chat API");
+      if (!tenantRequest) return;
+      const { user, organizationId } = tenantRequest;
+      await requirePermission(user, "dashboard.view");
+      if (String(user.role || "").toUpperCase() !== "CEO") {
+        return createApiError(res, 403, "FORBIDDEN", AI_MESSAGES.CEO_ONLY_MESSAGE);
+      }
+      if (!(await consumeRateLimit(req, res, "ai-chat", { ...AI_CHAT_LIMIT, discriminator: user.id }))) return;
+      const body = parseRequestValue(res, aiChatBodySchema, req.body || {});
+      if (!body) return;
+
+      const result = await runAiChat({
+        pool,
+        user,
+        organizationId,
+        message: body.message,
+        context: body.context,
+        conversationId: body.conversationId,
+        recentMessages: body.recentMessages,
+        activeEntity: body.activeEntity,
+      });
+      const responseId = crypto.randomUUID();
+      const createdAt = new Date().toISOString();
+      const responseData = {
+        id: responseId,
+        assistantName: AI_MESSAGES.ASSISTANT_NAME,
+        status: result.audit?.success ? "answered" : "ready",
+        answer: result.data?.answer || AI_MESSAGES.NO_CODE_DETECTED,
+        tone: result.data?.tone || "direct",
+        responseMode: result.data?.responseMode || "direct_answer",
+        activeEntity: result.data?.activeEntity,
+        suggestions: result.data?.suggestions || [],
+        sources: result.data?.sources || [],
+        createdAt,
+      };
+
+      await auditLog({
+        organizationId,
+        actorUserId: user.id,
+        action: "ai.chat.ask",
+        entityType: "AI_ASSISTANT",
+        entityId: responseId,
+        summary: "AI assistant read-only question was processed.",
+        metadata: {
+          route: "/api/ai/chat",
+          context: body.context,
+          conversationId: body.conversationId,
+          queryType: result.audit?.queryType,
+          toolsCalled: result.audit?.toolsCalled || [],
+          success: Boolean(result.audit?.success),
+          reason: result.audit?.reason || null,
+          activeEntityType: body.activeEntity?.type || null,
+        },
+        requestContext: requestContext(req),
+      });
+
+      res.json({ ok: true, data: responseData });
+    } catch (error) {
+      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      console.error("AI assistant chat failed:", error);
+      createApiError(res, 500, "AI_CHAT_FAILED", "Could not answer the AI assistant question.");
     }
   });
 
