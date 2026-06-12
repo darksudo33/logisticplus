@@ -1,5 +1,5 @@
 import React from "react";
-import { Activity, AlertTriangle, BellRing, Building2, CheckCircle2, ChevronDown, ChevronUp, CreditCard, Mail, MessageSquareText, PhoneCall, ReceiptText, Send, ShieldCheck, SlidersHorizontal, UserPlus, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, ArrowUpLeft, BellRing, Building2, CheckCircle2, ChevronDown, ChevronUp, CircleDollarSign, Clock3, CreditCard, Database, FileWarning, Globe2, HardDrive, HeartPulse, KeyRound, LayoutDashboard, Mail, MessageSquareText, PhoneCall, ReceiptText, Send, Server, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, UserCheck, UserPlus, Users, UserX, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,8 +12,9 @@ import { cn } from "@/lib/utils";
 import { EmptyState, EmptyTableRow } from "@/src/components/EmptyState";
 import { AdminPanelSkeleton } from "@/src/components/SkeletonStates";
 import { ActionSkeleton } from "@/components/ui/skeleton";
+import { useMockStore as useAppDataStore } from "@/src/store/useMockStore";
 
-type TabKey = "overview" | "organizations" | "contacts" | "requests" | "subscriptions" | "sms" | "billing" | "errors";
+export type AdminTabKey = "overview" | "organizations" | "contacts" | "requests" | "subscriptions" | "sms" | "billing" | "errors";
 type Organization = {
   id: string;
   name: string;
@@ -82,6 +83,17 @@ type SmsAnalytics = {
     lastActivityAt?: string;
   }>;
 };
+type AdminOrgUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: "CEO" | "MANAGER" | "OPERATIONS" | "CUSTOMER_SERVICE" | "FINANCE";
+  status?: string;
+  isOnline?: boolean;
+  lastSeenAt?: string;
+};
+
+const adminRoleOptions: AdminOrgUser["role"][] = ["CEO", "MANAGER", "OPERATIONS", "CUSTOMER_SERVICE", "FINANCE"];
 
 const moduleLabels: Record<string, string> = {
   chat: "چت",
@@ -99,6 +111,14 @@ const limitLabels: Record<string, string> = {
   documents: "تعداد اسناد",
   customerLinks: "لینک رهگیری مشتری",
 };
+
+function isIncompleteUnpaidSignup(request: any) {
+  return Boolean(request?.abandonedCleanupEligible)
+    || (!request?.hasPaidPayment
+      && !request?.hasReceipt
+      && request?.paymentStatus !== "paid"
+      && ["payment_pending", "payment_failed", "pending_review"].includes(request?.status));
+}
 
 async function api<T>(url: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(url, {
@@ -130,12 +150,189 @@ function StatusBadge({ status }: { status?: string }) {
       ? "border-emerald-500/30 bg-emerald-50 text-emerald-700"
       : status === "suspended" || status === "rejected" || status === "failed" || status === "expired" || status === "void"
         ? "border-red-500/30 bg-red-50 text-red-700"
-        : "border-amber-500/30 bg-amber-50 text-amber-700";
+      : "border-amber-500/30 bg-amber-50 text-amber-700";
   return <Badge variant="outline" className={cn("rounded-lg px-2.5 py-1 text-[11px] font-bold", tone)}>{status || "نامشخص"}</Badge>;
 }
 
-export default function AdminPanel() {
-  const [tab, setTab] = React.useState<TabKey>("overview");
+type PlatformHealthState = {
+  api: "healthy" | "down" | "unknown";
+  db: "healthy" | "down" | "unknown";
+  checkedAt?: string;
+};
+
+function numberFa(value: unknown) {
+  return Number(value || 0).toLocaleString("fa-IR");
+}
+
+function percent(value: number, total: number) {
+  if (!total) return 0;
+  return Math.max(0, Math.min(100, Math.round((value / total) * 100)));
+}
+
+function safeDateValue(value?: string) {
+  if (!value) return 0;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function DashboardKpiCard({
+  icon: Icon,
+  label,
+  value,
+  description,
+  accent,
+  statusText,
+}: {
+  icon: React.ElementType;
+  label: string;
+  value: React.ReactNode;
+  description: string;
+  accent: string;
+  statusText?: string;
+}) {
+  return (
+    <Card className="group rounded-2xl border-border/80 bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg">
+      <CardContent className="p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-xs font-black text-muted-foreground">{label}</p>
+            <div className="mt-3 text-3xl font-black tracking-tight text-foreground">{value}</div>
+          </div>
+          <div className={cn("grid h-12 w-12 shrink-0 place-items-center rounded-2xl", accent)}>
+            <Icon className="h-5 w-5" />
+          </div>
+        </div>
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <p className="min-w-0 truncate text-[11px] font-bold text-muted-foreground">{description}</p>
+          {statusText ? <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-[10px] font-black text-muted-foreground">{statusText}</span> : null}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DashboardPanel({
+  title,
+  description,
+  icon: Icon,
+  action,
+  children,
+  className,
+  testId,
+}: {
+  title: string;
+  description?: string;
+  icon: React.ElementType;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+  testId?: string;
+}) {
+  return (
+    <Card data-testid={testId} className={cn("rounded-2xl border-border/80 bg-card shadow-sm", className)}>
+      <CardHeader className="pb-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+              <Icon className="h-5 w-5" />
+            </div>
+            <div>
+              <CardTitle className="text-base font-black">{title}</CardTitle>
+              {description ? <p className="mt-1 text-xs leading-6 text-muted-foreground">{description}</p> : null}
+            </div>
+          </div>
+          {action}
+        </div>
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
+  );
+}
+
+function CompactListItem({
+  title,
+  meta,
+  badge,
+  action,
+}: {
+  key?: React.Key;
+  title: string;
+  meta?: string;
+  badge?: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl bg-muted/45 px-3 py-3">
+      <div className="min-w-0">
+        <div className="truncate text-sm font-black">{title || "بدون عنوان"}</div>
+        {meta ? <div className="mt-1 truncate text-[11px] text-muted-foreground">{meta}</div> : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {badge}
+        {action}
+      </div>
+    </div>
+  );
+}
+
+function MiniBar({
+  label,
+  value,
+  total,
+  tone,
+}: {
+  label: string;
+  value: number;
+  total: number;
+  tone: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between text-[11px] font-bold">
+        <span className="text-muted-foreground">{label}</span>
+        <span>{numberFa(value)}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-muted">
+        <div className={cn("h-full rounded-full", tone)} style={{ width: `${percent(value, total)}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function EmptyDashboardState({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: React.ElementType;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/25 p-7 text-center">
+      <div className="mb-3 grid h-11 w-11 place-items-center rounded-2xl bg-background text-muted-foreground">
+        <Icon className="h-5 w-5" />
+      </div>
+      <div className="text-sm font-black">{title}</div>
+      <p className="mt-1 max-w-sm text-xs leading-6 text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
+type AdminPanelProps = {
+  activeTab?: AdminTabKey;
+  onTabChange?: (tab: AdminTabKey) => void;
+  embedded?: boolean;
+};
+
+export default function AdminPanel({ activeTab, onTabChange, embedded = false }: AdminPanelProps = {}) {
+  const currentUser = useAppDataStore((state) => state.currentUser);
+  const [internalTab, setInternalTab] = React.useState<AdminTabKey>("overview");
+  const tab = activeTab || internalTab;
+  const setTab = React.useCallback((nextTab: AdminTabKey) => {
+    setInternalTab(nextTab);
+    onTabChange?.(nextTab);
+  }, [onTabChange]);
   const [loading, setLoading] = React.useState(true);
   const [overview, setOverview] = React.useState<any>(null);
   const [organizations, setOrganizations] = React.useState<Organization[]>([]);
@@ -143,6 +340,8 @@ export default function AdminPanel() {
   const [selectedOrgId, setSelectedOrgId] = React.useState("");
   const [orgDetail, setOrgDetail] = React.useState<any>(null);
   const [orgBilling, setOrgBilling] = React.useState<any>(null);
+  const [orgUsers, setOrgUsers] = React.useState<AdminOrgUser[]>([]);
+  const [orgUserSaving, setOrgUserSaving] = React.useState("");
   const [requests, setRequests] = React.useState<any[]>([]);
   const [contactRequests, setContactRequests] = React.useState<ContactRequest[]>([]);
   const [smsDeliveries, setSmsDeliveries] = React.useState<SmsDelivery[]>([]);
@@ -160,6 +359,7 @@ export default function AdminPanel() {
   });
   const [errors, setErrors] = React.useState<any[]>([]);
   const [errorFilter, setErrorFilter] = React.useState("unresolved");
+  const [platformHealth, setPlatformHealth] = React.useState<PlatformHealthState>({ api: "unknown", db: "unknown" });
   const [limits, setLimits] = React.useState<Record<string, any>>({});
   const [creatingCompany, setCreatingCompany] = React.useState(false);
   const [manualSignupOpen, setManualSignupOpen] = React.useState(false);
@@ -178,14 +378,28 @@ export default function AdminPanel() {
 
   const loadOrganization = React.useCallback(async (id: string) => {
     if (!id) return;
-    const [detail, billing] = await Promise.all([
+    const [detail, billing, users] = await Promise.all([
       api<any>(`/api/admin/organizations/${id}`),
       api<any>(`/api/admin/organizations/${id}/billing`),
+      api<AdminOrgUser[]>(`/api/admin/organizations/${id}/users`),
     ]);
     setSelectedOrgId(id);
     setOrgDetail(detail);
     setOrgBilling(billing);
+    setOrgUsers(users);
     setLimits(detail.subscription?.limitsOverride || {});
+  }, []);
+
+  const loadPlatformHealth = React.useCallback(async () => {
+    const [apiResult, dbResult] = await Promise.allSettled([
+      fetch("/api/health", { cache: "no-store" }),
+      fetch("/api/db/health", { cache: "no-store" }),
+    ]);
+    setPlatformHealth({
+      api: apiResult.status === "fulfilled" && apiResult.value.ok ? "healthy" : "down",
+      db: dbResult.status === "fulfilled" && dbResult.value.ok ? "healthy" : "down",
+      checkedAt: new Date().toISOString(),
+    });
   }, []);
 
   const refresh = React.useCallback(async () => {
@@ -217,12 +431,13 @@ export default function AdminPanel() {
       setInvoices(invoiceData);
       setErrors(errorData);
       await loadOrganization(selectedOrgId || orgData[0]?.id || "");
+      await loadPlatformHealth();
     } catch (error: any) {
       toast.error(error.message || "دسترسی به پنل ادمین ممکن نیست");
     } finally {
       setLoading(false);
     }
-  }, [errorFilter, loadOrganization, selectedOrgId]);
+  }, [errorFilter, loadOrganization, loadPlatformHealth, selectedOrgId]);
 
   React.useEffect(() => {
     refresh();
@@ -235,6 +450,20 @@ export default function AdminPanel() {
       refresh();
     } catch (error: any) {
       toast.error(error.message || "بررسی درخواست انجام نشد");
+    }
+  };
+
+  const deleteAbandonedSignup = async (request: any) => {
+    const confirmed = window.confirm(
+      "این ثبت‌نام پرداخت نشده حذف شود و ایمیل مالک برای ثبت‌نام دوباره آزاد شود؟"
+    );
+    if (!confirmed) return;
+    try {
+      await api(`/api/admin/signup-requests/${request.id}/abandoned`, { method: "DELETE" });
+      toast.success("ثبت‌نام ناقص حذف شد و ایمیل آزاد شد.");
+      await refresh();
+    } catch (error: any) {
+      toast.error(error.message || "حذف ثبت‌نام ناقص انجام نشد.");
     }
   };
 
@@ -315,6 +544,11 @@ export default function AdminPanel() {
   };
 
   const runSmsWorker = async () => {
+    const confirmed = window.confirm(
+      "اجرای دستی SMS worker ممکن است در محیط production پیامک واقعی ارسال کند. فقط اگر صف و تنظیمات را بررسی کرده‌اید ادامه دهید."
+    );
+    if (!confirmed) return;
+
     setSmsRunning(true);
     try {
       const result = await api<any>("/api/admin/sms-deliveries/run-worker", {
@@ -345,6 +579,80 @@ export default function AdminPanel() {
     await api(`/api/admin/organizations/${selectedOrgId}/${action}`, { method: "POST" });
     toast.success(action === "activate" ? "سازمان فعال شد" : "سازمان تعلیق شد");
     refresh();
+  };
+
+  const reloadOrgUsers = async () => {
+    if (!selectedOrgId) return;
+    setOrgUsers(await api<AdminOrgUser[]>(`/api/admin/organizations/${selectedOrgId}/users`));
+  };
+
+  const updateOrgUser = async (userId: string, updates: Record<string, any>) => {
+    if (!selectedOrgId) return;
+    setOrgUserSaving(userId);
+    try {
+      await api(`/api/admin/organizations/${selectedOrgId}/users/${userId}`, {
+        method: "PATCH",
+        body: JSON.stringify(updates),
+      });
+      await reloadOrgUsers();
+      toast.success("اطلاعات کاربر سازمان به‌روزرسانی شد.");
+    } catch (error: any) {
+      toast.error(error.message || "به‌روزرسانی کاربر سازمان ناموفق بود.");
+    } finally {
+      setOrgUserSaving("");
+    }
+  };
+
+  const changeOrgUserStatus = async (userId: string, action: "activate" | "suspend") => {
+    if (!selectedOrgId) return;
+    setOrgUserSaving(userId);
+    try {
+      await api(`/api/admin/organizations/${selectedOrgId}/users/${userId}/${action}`, { method: "POST" });
+      await reloadOrgUsers();
+      toast.success(action === "activate" ? "کاربر فعال شد." : "دسترسی کاربر تعلیق شد.");
+    } catch (error: any) {
+      toast.error(error.message || "تغییر وضعیت کاربر ناموفق بود.");
+    } finally {
+      setOrgUserSaving("");
+    }
+  };
+
+  const resetOrgUserPassword = async (userId: string) => {
+    if (!selectedOrgId) return;
+    const password = window.prompt("رمز عبور موقت جدید را وارد کنید (حداقل ۸ کاراکتر):");
+    if (!password) return;
+    setOrgUserSaving(userId);
+    try {
+      await api(`/api/admin/organizations/${selectedOrgId}/users/${userId}/password`, {
+        method: "POST",
+        body: JSON.stringify({ password }),
+      });
+      toast.success("رمز عبور موقت ذخیره شد.");
+    } catch (error: any) {
+      toast.error(error.message || "تغییر رمز عبور ناموفق بود.");
+    } finally {
+      setOrgUserSaving("");
+    }
+  };
+
+  const deleteOrgUser = async (userId: string) => {
+    if (!selectedOrgId) return;
+    setOrgUserSaving(userId);
+    try {
+      const preview = await api<any>(`/api/admin/organizations/${selectedOrgId}/users/${userId}/delete-preview`);
+      if (!preview.canDelete) {
+        toast.error(preview.blockers?.[0]?.message || "حذف دائمی این کاربر مسدود است.");
+        return;
+      }
+      if (!window.confirm("این کاربر به‌صورت دائمی حذف شود؟")) return;
+      await api(`/api/admin/organizations/${selectedOrgId}/users/${userId}`, { method: "DELETE" });
+      await reloadOrgUsers();
+      toast.success("کاربر به‌صورت دائمی حذف شد.");
+    } catch (error: any) {
+      toast.error(error.message || "حذف کاربر ناموفق بود.");
+    } finally {
+      setOrgUserSaving("");
+    }
   };
 
   const changeSubscription = async (action: "renew" | "expire") => {
@@ -411,7 +719,7 @@ export default function AdminPanel() {
     ["خطاهای باز", overview?.unresolvedErrors, AlertTriangle],
   ];
 
-  const tabItems: { key: TabKey; label: string; count?: number }[] = [
+  const tabItems: { key: AdminTabKey; label: string; count?: number }[] = [
     { key: "overview", label: "نمای کلی" },
     { key: "organizations", label: "مشتریان", count: organizations.length },
     { key: "contacts", label: "تماس‌ها", count: overview?.pendingContactRequests },
@@ -425,9 +733,93 @@ export default function AdminPanel() {
     .filter((item) => !selectedOrgId || item.organizationId === selectedOrgId)
     .slice(0, 10);
 
+  const activeOrganizations = organizations.filter((org) => org.status === "active");
+  const pendingSignupRequests = requests.filter((request) => !["approved", "rejected"].includes(String(request.status || "")));
+  const pendingContacts = contactRequests.filter((request) => request.status !== "resolved");
+  const paidPayments = payments.filter((payment) => payment.status === "paid");
+  const paidRevenue = Number(overview?.paidRevenueIrr || paidPayments.reduce((sum, payment) => sum + Number(payment.amountIrr || 0), 0));
+  const paidPendingReview = Number(overview?.paidPendingReview || requests.filter((request) => request.paymentStatus === "paid" && request.status !== "approved").length);
+  const smsSummary = smsAnalytics?.summary || {
+    totalSent: smsDeliveries.filter((delivery) => delivery.status === "sent").length,
+    sentThisMonth: 0,
+    failed: smsDeliveries.filter((delivery) => delivery.status === "failed").length,
+    skipped: smsDeliveries.filter((delivery) => delivery.status === "skipped").length,
+    queued: smsDeliveries.filter((delivery) => delivery.status === "queued").length,
+  };
+  const openErrors = Number(overview?.unresolvedErrors ?? errors.filter((error) => !error.resolvedAt).length);
+  const pendingActionsCount = pendingSignupRequests.length + pendingContacts.length + paidPendingReview + openErrors + Number(smsSummary.queued || 0);
+  const recentOrganizations = [...organizations]
+    .sort((a: any, b: any) => safeDateValue(b.createdAt) - safeDateValue(a.createdAt))
+    .slice(0, 6);
+  const recentInvoices = [...invoices]
+    .sort((a: any, b: any) => safeDateValue(b.createdAt || b.issuedAt) - safeDateValue(a.createdAt || a.issuedAt))
+    .slice(0, 5);
+  const recentPayments = [...payments]
+    .sort((a: any, b: any) => safeDateValue(b.createdAt || b.paidAt || b.updatedAt) - safeDateValue(a.createdAt || a.paidAt || a.updatedAt))
+    .slice(0, 5);
+  const recentActivity = [
+    ...requests.map((item) => ({ type: "ثبت‌نام", title: item.companyName, status: item.status, at: item.createdAt })),
+    ...contactRequests.map((item) => ({ type: "تماس", title: item.companyName, status: item.status, at: item.createdAt })),
+    ...payments.map((item) => ({ type: "پرداخت", title: item.organizationName || item.provider, status: item.status, at: item.createdAt || item.paidAt })),
+    ...smsDeliveries.map((item) => ({ type: "SMS", title: item.recipientName || item.userName || item.organizationName, status: item.status, at: item.createdAt || item.sentAt })),
+    ...errors.map((item) => ({ type: "خطا", title: item.message, status: item.resolvedAt ? "resolved" : item.source, at: item.createdAt })),
+  ].sort((a, b) => safeDateValue(b.at) - safeDateValue(a.at)).slice(0, 8);
+  const paymentStatusCounts = payments.reduce((counts: Record<string, number>, payment) => {
+    const key = payment.status || "unknown";
+    counts[key] = (counts[key] || 0) + 1;
+    return counts;
+  }, {});
+  const paymentStatusTotal: number = (Object.values(paymentStatusCounts) as number[]).reduce((sum, value) => sum + value, 0);
+
+  const sectionMeta: Record<AdminTabKey, { title: string; subtitle: string; icon: React.ElementType; action?: React.ReactNode }> = {
+    overview: {
+      title: "نمای کلی پلتفرم",
+      subtitle: "سلامت، درآمد، پیامک، درخواست‌ها و وضعیت عملیاتی Logistic Plus",
+      icon: LayoutDashboard,
+    },
+    organizations: {
+      title: "شرکت‌ها و مشتریان SaaS",
+      subtitle: "ایجاد دستی شرکت، وضعیت سازمان‌ها، پلن‌ها و دسترسی‌ها",
+      icon: Building2,
+    },
+    requests: {
+      title: "درخواست‌های ثبت‌نام",
+      subtitle: "بررسی ثبت‌نام‌ها، وضعیت پرداخت و آزادسازی درخواست‌های ناقص",
+      icon: UserPlus,
+    },
+    contacts: {
+      title: "درخواست‌های تماس",
+      subtitle: "پیگیری لیدهای ورودی سایت و علامت‌گذاری درخواست‌های حل‌شده",
+      icon: MessageSquareText,
+    },
+    subscriptions: {
+      title: "اشتراک، محدودیت و کاربران سازمان",
+      subtitle: "مدیریت پلن، افزونه SMS، محدودیت‌ها و کاربران شرکت‌ها",
+      icon: ShieldCheck,
+    },
+    sms: {
+      title: "مرکز کنترل SMS",
+      subtitle: "تحویل پیامک، تحلیل گیرنده‌ها، قالب‌ها و اجرای worker با تایید",
+      icon: Send,
+    },
+    billing: {
+      title: "مالی، پرداخت‌ها و فاکتورها",
+      subtitle: "صدور فاکتور دستی، تایید پرداخت‌ها، رسیدها و وضعیت حساب‌ها",
+      icon: ReceiptText,
+    },
+    errors: {
+      title: "خطاها و پایداری",
+      subtitle: "مرور لاگ خطاها، منبع رخداد و علامت‌گذاری موارد حل‌شده",
+      icon: FileWarning,
+    },
+  };
+
+  const activeSectionMeta = sectionMeta[tab];
+  const ActiveSectionIcon = activeSectionMeta.icon;
+
   return (
-    <div className="app-page max-w-7xl space-y-5 font-sans" dir="rtl">
-      <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+    <div className={cn(embedded ? "space-y-5 font-sans" : "app-page max-w-7xl space-y-5 font-sans")} dir="rtl">
+      {!embedded && <div data-testid="admin-legacy-tabbar" className="rounded-xl border border-border bg-card p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
             <div className="grid h-11 w-11 place-items-center rounded-xl border border-primary/20 bg-primary/10 text-primary">
@@ -458,34 +850,290 @@ export default function AdminPanel() {
             </div>
           </div>
         </div>
-      </div>
+      </div>}
+
+      {embedded && tab !== "overview" && !loading && (
+        <div className="rounded-2xl border border-border/80 bg-card p-5 shadow-sm" data-testid="admin-module-header">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-primary/10 text-primary">
+                <ActiveSectionIcon className="h-6 w-6" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-black tracking-tight">{activeSectionMeta.title}</h1>
+                <p className="mt-1 max-w-3xl text-sm leading-7 text-muted-foreground">{activeSectionMeta.subtitle}</p>
+              </div>
+            </div>
+            <Button variant="outline" className="rounded-xl text-xs font-bold" onClick={refresh}>
+              <Activity className="ml-2 h-4 w-4" />
+              بروزرسانی
+            </Button>
+          </div>
+        </div>
+      )}
 
       {loading && <AdminPanelSkeleton />}
 
       {tab === "overview" && !loading && (
-        <div className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-            {cards.map(([label, value, Icon]: any) => (
-              <Card key={label} className="rounded-xl border-border bg-card shadow-sm">
-                <CardContent className="flex items-center justify-between p-4">
-                  <div>
-                    <p className="text-xs font-bold text-muted-foreground">{label}</p>
-                    <p className="mt-1 text-2xl font-black">{Number(value || 0).toLocaleString("fa-IR")}</p>
+        embedded ? (
+          <div data-testid="admin-section-overview" className="space-y-6">
+            <section data-testid="admin-command-header" className="rounded-3xl border border-border/80 bg-card p-5 shadow-sm lg:p-6">
+              <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+                <div className="min-w-0">
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <Badge className="rounded-full bg-primary/10 px-3 py-1 text-primary hover:bg-primary/10">
+                      <ShieldCheck className="ml-1.5 h-3.5 w-3.5" />
+                      Platform owner
+                    </Badge>
+                    <Badge variant="outline" className="rounded-full px-3 py-1">
+                      {currentUser?.name || "ادمین پلتفرم"}
+                    </Badge>
                   </div>
-                  <Icon className="h-6 w-6 text-primary" />
-                </CardContent>
-              </Card>
-            ))}
+                  <h1 className="text-3xl font-black tracking-tight md:text-4xl">نمای کلی پلتفرم</h1>
+                  <p className="mt-2 max-w-3xl text-sm leading-7 text-muted-foreground">
+                    مرکز فرماندهی سلامت پلتفرم، درآمد، SMS، درخواست‌ها و عملیات SaaS Logistic Plus.
+                  </p>
+                </div>
+                <div className="flex flex-col gap-3 xl:items-end">
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      ["API", platformHealth.api === "healthy" ? "سالم" : platformHealth.api === "down" ? "قطع" : "نامشخص", Server, platformHealth.api === "healthy" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"],
+                      ["DB", platformHealth.db === "healthy" ? "سالم" : platformHealth.db === "down" ? "قطع" : "نامشخص", Database, platformHealth.db === "healthy" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"],
+                      ["SMS worker", Number(smsSummary.queued || 0) > 0 ? `${numberFa(smsSummary.queued)} در صف` : "آرام", Send, Number(smsSummary.failed || 0) > 0 ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-blue-50 text-blue-700 border-blue-200"],
+                      ["Mode", typeof window !== "undefined" && window.location.hostname.includes("logisticplus.ir") ? "Production" : "Local/Test", Globe2, "bg-slate-50 text-slate-700 border-slate-200"],
+                    ].map(([label, value, Icon, tone]: any) => (
+                      <div key={label} className={cn("flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-black", tone)}>
+                        <Icon className="h-3.5 w-3.5" />
+                        <span>{label}: {value}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="text-[11px] font-bold text-muted-foreground">
+                    آخرین بروزرسانی: {platformHealth.checkedAt ? new Date(platformHealth.checkedAt).toLocaleString("fa-IR") : "نامشخص"}
+                  </div>
+                  <div className="flex flex-wrap justify-start gap-2 xl:justify-end">
+                    <Button className="rounded-xl text-xs font-black" onClick={() => { setManualSignupOpen(true); setTab("organizations"); }}>
+                      <UserPlus className="ml-2 h-4 w-4" />
+                      شرکت جدید
+                    </Button>
+                    <Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("requests")}>بررسی درخواست‌ها</Button>
+                    <Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("errors")}>مشاهده خطاها</Button>
+                    <Button asChild variant="outline" className="rounded-xl text-xs font-bold">
+                      <a href="/dashboard">بازگشت به اپ</a>
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section data-testid="admin-command-hero" className="overflow-hidden rounded-3xl border border-primary/20 bg-[linear-gradient(135deg,rgba(37,99,235,0.16),rgba(16,185,129,0.10)_45%,rgba(15,23,42,0.04))] p-6 shadow-sm lg:p-7">
+              <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr] xl:items-center">
+                <div>
+                  <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-primary/20 bg-background/70 px-3 py-1 text-[11px] font-black text-primary">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Command Center
+                  </div>
+                  <h2 className="text-2xl font-black tracking-tight md:text-3xl">امروز {numberFa(pendingActionsCount)} مورد نیازمند توجه دارید</h2>
+                  <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
+                    درخواست‌های ثبت‌نام، تماس، پرداخت‌های نیازمند بررسی، صف SMS و خطاهای باز از همین‌جا قابل پایش هستند.
+                  </p>
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    <Button className="rounded-xl font-bold" onClick={() => setTab(pendingSignupRequests.length ? "requests" : "organizations")}>
+                      شروع بررسی
+                      <ArrowUpLeft className="mr-2 h-4 w-4" />
+                    </Button>
+                    <Button variant="outline" className="rounded-xl font-bold" onClick={refresh}>
+                      بروزرسانی داده‌ها
+                    </Button>
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-white/60 bg-background/75 p-4 shadow-sm">
+                    <div className="text-[11px] font-black text-muted-foreground">درآمد تاییدشده</div>
+                    <div className="mt-2 text-2xl font-black text-primary">{money(paidRevenue)}</div>
+                  </div>
+                  <div className="rounded-2xl border border-white/60 bg-background/75 p-4 shadow-sm">
+                    <div className="text-[11px] font-black text-muted-foreground">مشتریان فعال</div>
+                    <div className="mt-2 text-2xl font-black">{numberFa(activeOrganizations.length)}</div>
+                  </div>
+                  <div className="rounded-2xl border border-white/60 bg-background/75 p-4 shadow-sm">
+                    <div className="text-[11px] font-black text-muted-foreground">وضعیت سیستم</div>
+                    <div className="mt-2 text-lg font-black text-emerald-700">{platformHealth.api === "healthy" && platformHealth.db === "healthy" ? "پایدار" : "نیازمند بررسی"}</div>
+                  </div>
+                  <div className="rounded-2xl border border-white/60 bg-background/75 p-4 shadow-sm">
+                    <div className="text-[11px] font-black text-muted-foreground">اقدام‌های باز</div>
+                    <div className="mt-2 text-2xl font-black text-amber-700">{numberFa(pendingActionsCount)}</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section data-testid="admin-kpi-grid" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <DashboardKpiCard icon={Building2} label="مشتریان فعال" value={numberFa(activeOrganizations.length)} description={`از ${numberFa(organizations.length)} سازمان ثبت‌شده`} accent="bg-blue-50 text-blue-700" statusText="SaaS" />
+              <DashboardKpiCard icon={UserPlus} label="در انتظار تایید" value={numberFa(pendingSignupRequests.length)} description="ثبت‌نام‌ها و حساب‌های نیازمند بررسی" accent="bg-amber-50 text-amber-700" statusText="Review" />
+              <DashboardKpiCard icon={MessageSquareText} label="درخواست تماس" value={numberFa(pendingContacts.length)} description="لیدهای باز از فرم عمومی" accent="bg-cyan-50 text-cyan-700" statusText="Lead" />
+              <DashboardKpiCard icon={CreditCard} label="پرداخت‌های منتظر بررسی" value={numberFa(paidPendingReview)} description="پرداخت‌شده یا نیازمند اقدام مالی" accent="bg-violet-50 text-violet-700" statusText="Billing" />
+              <DashboardKpiCard icon={CircleDollarSign} label="درآمد تاییدشده" value={money(paidRevenue)} description={`${numberFa(paidPayments.length)} پرداخت تاییدشده`} accent="bg-emerald-50 text-emerald-700" statusText="Paid" />
+              <DashboardKpiCard icon={FileWarning} label="خطاهای باز" value={numberFa(openErrors)} description="موارد حل‌نشده یا اخیر" accent="bg-rose-50 text-rose-700" statusText={openErrors ? "Alert" : "OK"} />
+              <DashboardKpiCard icon={Send} label="SMS ارسال / ناموفق" value={`${numberFa(smsSummary.totalSent)} / ${numberFa(smsSummary.failed)}`} description={`${numberFa(smsSummary.queued)} پیام در صف، ${numberFa(smsSummary.skipped)} skip`} accent="bg-sky-50 text-sky-700" statusText="SMS" />
+              <DashboardKpiCard icon={Users} label="سازمان‌های فعال" value={numberFa(activeOrganizations.length)} description="وضعیت active در لیست سازمان‌ها" accent="bg-slate-100 text-slate-700" statusText="Org" />
+            </section>
+
+            <section className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
+              <div className="space-y-5">
+                <DashboardPanel testId="admin-billing-panel" title="مالی و درآمد" description="خلاصه پرداخت‌ها، فاکتورها و توزیع وضعیت مالی" icon={ReceiptText} action={<Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("billing")}>مشاهده مالی</Button>}>
+                  <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+                    <div className="rounded-2xl bg-muted/35 p-4">
+                      <div className="text-xs font-black text-muted-foreground">درآمد تاییدشده</div>
+                      <div className="mt-2 text-3xl font-black text-primary">{money(paidRevenue)}</div>
+                      <div className="mt-4 space-y-3">
+                        <MiniBar label="پرداخت‌شده" value={Number(paymentStatusCounts.paid || 0)} total={paymentStatusTotal} tone="bg-emerald-500" />
+                        <MiniBar label="در انتظار" value={Number(paymentStatusCounts.pending || 0)} total={paymentStatusTotal} tone="bg-amber-500" />
+                        <MiniBar label="ناموفق" value={Number(paymentStatusCounts.failed || 0)} total={paymentStatusTotal} tone="bg-rose-500" />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      {[...recentPayments, ...recentInvoices].slice(0, 5).length ? (
+                        [...recentPayments, ...recentInvoices].slice(0, 5).map((item: any) => (
+                          <CompactListItem
+                            key={`${item.id}-${item.invoiceNumber || item.provider || "billing"}`}
+                            title={item.organizationName || item.invoiceNumber || "رکورد مالی"}
+                            meta={`${money(item.amountIrr || item.totalIrr || 0)} · ${formatDate(item.createdAt || item.dueAt || item.paidAt)}`}
+                            badge={<StatusBadge status={item.status} />}
+                          />
+                        ))
+                      ) : (
+                        <EmptyDashboardState icon={CreditCard} title="رکورد مالی تازه‌ای وجود ندارد" description="بعد از پرداخت یا صدور فاکتور، خلاصه آن اینجا نمایش داده می‌شود." />
+                      )}
+                    </div>
+                  </div>
+                </DashboardPanel>
+
+                <DashboardPanel testId="admin-organizations-panel" title="نمای سازمان‌ها" description="آخرین شرکت‌ها، پلن و وضعیت فعلی آنها" icon={Building2} action={<Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("organizations")}>مدیریت شرکت‌ها</Button>}>
+                  <div className="grid gap-2">
+                    {recentOrganizations.length ? recentOrganizations.map((org) => (
+                      <CompactListItem
+                        key={org.id}
+                        title={org.name}
+                        meta={`${org.planName || "بدون پلن"} · ${org.contactEmail || "بدون ایمیل"}`}
+                        badge={<StatusBadge status={org.status} />}
+                        action={<Button size="sm" variant="ghost" className="rounded-lg text-xs" onClick={() => { loadOrganization(org.id); setTab("subscriptions"); }}>جزئیات</Button>}
+                      />
+                    )) : (
+                      <EmptyDashboardState icon={Building2} title="هنوز شرکتی ثبت نشده" description="از دکمه شرکت جدید برای ساخت اولین سازمان استفاده کنید." />
+                    )}
+                  </div>
+                </DashboardPanel>
+
+                <div className="grid gap-5 lg:grid-cols-2">
+                  <DashboardPanel testId="admin-signups-panel" title="ثبت‌نام‌های باز" description="درخواست‌هایی که هنوز نیازمند پیگیری هستند" icon={UserPlus} action={<Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("requests")}>رفتن به ثبت‌نام‌ها</Button>}>
+                    <div className="space-y-2">
+                      {pendingSignupRequests.slice(0, 4).length ? pendingSignupRequests.slice(0, 4).map((request) => (
+                        <CompactListItem key={request.id} title={request.companyName} meta={`${request.contactName || "بدون نام"} · ${formatDate(request.createdAt)}`} badge={<StatusBadge status={request.status} />} />
+                      )) : (
+                        <EmptyDashboardState icon={CheckCircle2} title="درخواستی برای بررسی وجود ندارد" description="همه چیز مرتب است." />
+                      )}
+                    </div>
+                  </DashboardPanel>
+
+                  <DashboardPanel testId="admin-contacts-panel" title="درخواست‌های تماس" description="آخرین پیام‌های دریافتی از سایت" icon={MessageSquareText} action={<Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("contacts")}>بررسی تماس‌ها</Button>}>
+                    <div className="space-y-2">
+                      {pendingContacts.slice(0, 4).length ? pendingContacts.slice(0, 4).map((request) => (
+                        <CompactListItem key={request.id} title={request.companyName} meta={`${request.contactName || "بدون نام"} · ${preferredContactMethodLabel(request.preferredContactMethod)}`} badge={<StatusBadge status={request.status} />} />
+                      )) : (
+                        <EmptyDashboardState icon={CheckCircle2} title="درخواست تماس باز وجود ندارد" description="لیدهای جدید سایت بعد از ثبت فرم اینجا می‌آیند." />
+                      )}
+                    </div>
+                  </DashboardPanel>
+                </div>
+              </div>
+
+              <aside className="space-y-5">
+                <DashboardPanel testId="admin-sms-health-panel" title="سلامت SMS" description="صف، شکست‌ها و وضعیت worker بدون اجرای ارسال" icon={Send} action={<Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("sms")}>جزئیات SMS</Button>}>
+                  <div className="grid gap-3">
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-2xl bg-emerald-50 p-3 text-emerald-700"><div className="text-lg font-black">{numberFa(smsSummary.totalSent)}</div><div className="text-[10px] font-bold">ارسال</div></div>
+                      <div className="rounded-2xl bg-rose-50 p-3 text-rose-700"><div className="text-lg font-black">{numberFa(smsSummary.failed)}</div><div className="text-[10px] font-bold">ناموفق</div></div>
+                      <div className="rounded-2xl bg-amber-50 p-3 text-amber-700"><div className="text-lg font-black">{numberFa(smsSummary.queued)}</div><div className="text-[10px] font-bold">صف</div></div>
+                    </div>
+                    {(smsSummary.failed || smsSummary.queued) ? (
+                      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-xs font-bold leading-6 text-amber-800">
+                        صف یا خطای SMS وجود دارد؛ قبل از اجرای worker وضعیت provider و هزینه ارسال را بررسی کنید.
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-bold text-emerald-800">صف SMS آرام است.</div>
+                    )}
+                  </div>
+                </DashboardPanel>
+
+                <DashboardPanel testId="admin-errors-panel" title="خطاهای اخیر" description="خلاصه رخدادهای باز یا تازه" icon={FileWarning} action={<Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("errors")}>مشاهده خطاها</Button>}>
+                  <div className="space-y-2">
+                    {errors.slice(0, 4).length ? errors.slice(0, 4).map((error) => (
+                      <CompactListItem key={error.id} title={error.message} meta={`${error.route || error.apiEndpoint || "بدون مسیر"} · ${formatDate(error.createdAt)}`} badge={<StatusBadge status={error.resolvedAt ? "resolved" : error.source} />} />
+                    )) : (
+                      <EmptyDashboardState icon={CheckCircle2} title="خطای فعالی وجود ندارد" description="همه چیز مرتب است." />
+                    )}
+                  </div>
+                </DashboardPanel>
+
+                <DashboardPanel testId="admin-health-panel" title="چک‌لیست سلامت پلتفرم" description="مواردی که از داده موجود قابل نمایش هستند" icon={HeartPulse}>
+                  <div className="space-y-2">
+                    {[
+                      ["API health", platformHealth.api === "healthy" ? "سالم" : platformHealth.api === "down" ? "قطع" : "نامشخص", Server],
+                      ["DB health", platformHealth.db === "healthy" ? "سالم" : platformHealth.db === "down" ? "قطع" : "نامشخص", Database],
+                      ["Rate limit store", "نامشخص", ShieldCheck],
+                      ["Document storage", "نامشخص", HardDrive],
+                      ["SMS config", smsTemplates.length ? `${numberFa(smsTemplates.filter((template) => template.enabled).length)} قالب فعال` : "نامشخص", Send],
+                      ["APP public URL", typeof window !== "undefined" ? window.location.origin : "نامشخص", Globe2],
+                    ].map(([label, value, Icon]: any) => (
+                      <div key={label} className="flex items-center justify-between gap-3 rounded-xl bg-muted/45 px-3 py-2.5 text-xs">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <Icon className="h-4 w-4 shrink-0 text-primary" />
+                          <span className="truncate font-bold">{label}</span>
+                        </div>
+                        <span className="shrink-0 font-black text-muted-foreground">{value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </DashboardPanel>
+
+                <DashboardPanel testId="admin-activity-panel" title="فعالیت اخیر" description="ترکیب رخدادهای قابل مشاهده از داده ادمین" icon={Clock3}>
+                  <div className="space-y-2">
+                    {recentActivity.length ? recentActivity.map((item, index) => (
+                      <CompactListItem key={`${item.type}-${index}-${item.at || item.title}`} title={item.title || item.type} meta={`${item.type} · ${formatDate(item.at)}`} badge={<StatusBadge status={item.status} />} />
+                    )) : (
+                      <EmptyDashboardState icon={Activity} title="فعالیت تازه‌ای وجود ندارد" description="پس از ثبت رخدادهای پلتفرم، جریان فعالیت اینجا کامل می‌شود." />
+                    )}
+                  </div>
+                </DashboardPanel>
+              </aside>
+            </section>
           </div>
-          <Card className="rounded-xl border-border shadow-sm">
-            <CardHeader><CardTitle className="text-base font-black">درآمد تاییدشده</CardTitle></CardHeader>
-            <CardContent className="text-2xl font-black text-primary">{money(overview?.paidRevenueIrr || 0)}</CardContent>
-          </Card>
-        </div>
+        ) : (
+          <div data-testid="admin-section-overview" className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              {cards.map(([label, value, Icon]: any) => (
+                <Card key={label} className="rounded-xl border-border bg-card shadow-sm">
+                  <CardContent className="flex items-center justify-between p-4">
+                    <div>
+                      <p className="text-xs font-bold text-muted-foreground">{label}</p>
+                      <p className="mt-1 text-2xl font-black">{Number(value || 0).toLocaleString("fa-IR")}</p>
+                    </div>
+                    <Icon className="h-6 w-6 text-primary" />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+            <Card className="rounded-xl border-border shadow-sm">
+              <CardHeader><CardTitle className="text-base font-black">درآمد تاییدشده</CardTitle></CardHeader>
+              <CardContent className="text-2xl font-black text-primary">{money(overview?.paidRevenueIrr || 0)}</CardContent>
+            </Card>
+          </div>
+        )
       )}
 
       {tab === "organizations" && !loading && (
-        <div className="space-y-4">
+        <div data-testid="admin-section-organizations" className="space-y-4">
           <Card className="rounded-xl border-border shadow-sm">
             <CardHeader>
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -600,7 +1248,7 @@ export default function AdminPanel() {
       )}
 
       {tab === "requests" && !loading && (
-        <Card className="rounded-xl border-border shadow-sm">
+        <Card data-testid="admin-section-requests" className="rounded-xl border-border shadow-sm">
           <CardHeader><CardTitle className="text-base font-black">درخواست‌های ثبت‌نام</CardTitle></CardHeader>
           <CardContent className="overflow-x-auto p-0">
             <table className="w-full text-right text-xs">
@@ -616,16 +1264,36 @@ export default function AdminPanel() {
                     />
                   </EmptyTableRow>
                 ) : (
-                  requests.map((request) => (
+                  requests.map((request) => {
+                    const incompleteUnpaid = isIncompleteUnpaidSignup(request);
+                    return (
                   <tr key={request.id}>
-                    <td className="px-4 py-3 font-bold">{request.companyName}</td>
+                    <td className="px-4 py-3 font-bold">
+                      <div>{request.companyName}</div>
+                      {incompleteUnpaid && (
+                        <div className="mt-1 text-[11px] font-normal text-amber-700">ثبت‌نام ناقص و بدون پرداخت</div>
+                      )}
+                      {request.abandonedCleanupEligible && (
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          className="mt-2 rounded-lg text-xs"
+                          title="حذف ثبت‌نام ناقص و آزادسازی ایمیل"
+                          onClick={() => deleteAbandonedSignup(request)}
+                        >
+                          <Trash2 className="ml-1 h-3.5 w-3.5" />
+                          آزادسازی ایمیل
+                        </Button>
+                      )}
+                    </td>
                     <td className="px-4 py-3"><div>{request.contactName}</div><div className="text-muted-foreground" dir="ltr">{request.contactEmail}</div></td>
                     <td className="px-4 py-3">{request.planName}</td>
                     <td className="px-4 py-3"><StatusBadge status={request.paymentStatus} /></td>
                     <td className="px-4 py-3"><StatusBadge status={request.status} /></td>
                     <td className="px-4 py-3"><div className="flex gap-2"><Button size="sm" className="rounded-lg text-xs" disabled={request.status === "approved" || request.paymentStatus !== "paid"} title={request.paymentStatus !== "paid" ? "ابتدا پرداخت را تایید کنید" : undefined} onClick={() => reviewSignup(request.id, "approve")}>تایید</Button><Button size="sm" variant="outline" className="rounded-lg text-xs" disabled={request.status === "rejected"} onClick={() => reviewSignup(request.id, "reject")}>رد</Button></div></td>
                   </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -634,7 +1302,7 @@ export default function AdminPanel() {
       )}
 
       {tab === "contacts" && !loading && (
-        <Card className="rounded-xl border-border shadow-sm">
+        <Card data-testid="admin-section-contacts" className="rounded-xl border-border shadow-sm">
           <CardHeader>
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <CardTitle className="flex items-center gap-2 text-base font-black">
@@ -714,7 +1382,7 @@ export default function AdminPanel() {
       )}
 
       {tab === "subscriptions" && !loading && (
-        <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+        <div data-testid="admin-section-subscriptions" className="grid gap-4 lg:grid-cols-[280px_1fr]">
           <Card className="rounded-xl border-border shadow-sm">
             <CardHeader><CardTitle className="text-base font-black">انتخاب مشتری</CardTitle></CardHeader>
             <CardContent className="space-y-2">
@@ -797,6 +1465,63 @@ export default function AdminPanel() {
                 <Button variant="outline" onClick={() => changeSubscription("expire")} className="rounded-xl font-bold text-amber-700"><XCircle className="ml-2 h-4 w-4" />انقضای اشتراک</Button>
               </div>
               <div className="rounded-xl border border-border">
+                <div className="flex items-center justify-between border-b border-border p-4">
+                  <div className="flex items-center gap-2 text-sm font-black">
+                    <Users className="h-4 w-4 text-primary" />
+                    مدیریت کاربران سازمان
+                  </div>
+                  <Button type="button" variant="outline" className="h-9 rounded-xl text-xs font-bold" onClick={reloadOrgUsers}>به‌روزرسانی</Button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[820px] text-right text-xs">
+                    <thead className="bg-muted/50 text-muted-foreground">
+                      <tr><th className="px-4 py-3">کاربر</th><th className="px-4 py-3">ایمیل</th><th className="px-4 py-3">نقش</th><th className="px-4 py-3">وضعیت</th><th className="px-4 py-3">عملیات</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {orgUsers.length === 0 ? (
+                        <EmptyTableRow colSpan={5}>
+                          <EmptyState icon={Users} title="کاربری برای این سازمان ثبت نشده" description="بعد از ساخت یا تأیید سازمان، کاربران آن اینجا قابل مدیریت هستند." compact />
+                        </EmptyTableRow>
+                      ) : (
+                        orgUsers.map((user) => {
+                          const suspended = user.status === "suspended";
+                          return (
+                            <tr key={user.id} className="hover:bg-muted/30">
+                              <td className="px-4 py-3 font-black">{user.name}</td>
+                              <td className="px-4 py-3 text-muted-foreground" dir="ltr">{user.email}</td>
+                              <td className="px-4 py-3">
+                                <Select value={user.role} onValueChange={(role) => updateOrgUser(user.id, { role })} disabled={orgUserSaving === user.id}>
+                                  <SelectTrigger className="h-9 rounded-lg text-xs"><SelectValue /></SelectTrigger>
+                                  <SelectContent>
+                                    {adminRoleOptions.map((role) => <SelectItem key={role} value={role}>{role}</SelectItem>)}
+                                  </SelectContent>
+                                </Select>
+                              </td>
+                              <td className="px-4 py-3"><StatusBadge status={user.status || "active"} /></td>
+                              <td className="px-4 py-3">
+                                <div className="flex flex-wrap gap-2">
+                                  <Button size="sm" variant="outline" className="h-8 rounded-lg text-xs" disabled={orgUserSaving === user.id} onClick={() => {
+                                    const name = window.prompt("نام جدید کاربر:", user.name);
+                                    if (name && name !== user.name) updateOrgUser(user.id, { name });
+                                  }}>ویرایش</Button>
+                                  <Button size="sm" variant="outline" className="h-8 rounded-lg text-xs" disabled={orgUserSaving === user.id} onClick={() => resetOrgUserPassword(user.id)}><KeyRound className="ml-1 h-3.5 w-3.5" />رمز</Button>
+                                  {suspended ? (
+                                    <Button size="sm" variant="outline" className="h-8 rounded-lg text-xs text-emerald-600" disabled={orgUserSaving === user.id} onClick={() => changeOrgUserStatus(user.id, "activate")}><UserCheck className="ml-1 h-3.5 w-3.5" />فعال</Button>
+                                  ) : (
+                                    <Button size="sm" variant="outline" className="h-8 rounded-lg text-xs text-rose-600" disabled={orgUserSaving === user.id} onClick={() => changeOrgUserStatus(user.id, "suspend")}><UserX className="ml-1 h-3.5 w-3.5" />تعلیق</Button>
+                                  )}
+                                  <Button size="sm" variant="outline" className="h-8 rounded-lg text-xs text-destructive" disabled={orgUserSaving === user.id || !suspended} onClick={() => deleteOrgUser(user.id)}><Trash2 className="ml-1 h-3.5 w-3.5" />حذف</Button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div className="rounded-xl border border-border">
                 <div className="flex flex-col gap-3 border-b border-border p-4 md:flex-row md:items-center md:justify-between">
                   <div>
                     <div className="flex items-center gap-2 text-sm font-black">
@@ -857,7 +1582,7 @@ export default function AdminPanel() {
       )}
 
       {tab === "sms" && !loading && (
-        <div className="space-y-4">
+        <div data-testid="admin-section-sms" className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             {[
               ["ارسال موفق", smsAnalytics?.summary.totalSent, Send],
@@ -992,7 +1717,7 @@ export default function AdminPanel() {
       )}
 
       {tab === "billing" && !loading && (
-        <div className="space-y-4">
+        <div data-testid="admin-section-billing" className="space-y-4">
           <Card className="rounded-xl border-border shadow-sm">
             <CardHeader><CardTitle className="text-base font-black flex items-center gap-2"><ReceiptText className="h-5 w-5 text-primary" />صدور صورتحساب دستی</CardTitle></CardHeader>
             <CardContent className="grid gap-3 lg:grid-cols-[1.4fr_1fr_1.2fr_auto]">
@@ -1115,7 +1840,7 @@ export default function AdminPanel() {
       )}
 
       {tab === "errors" && !loading && (
-        <Card className="rounded-xl border-border shadow-sm">
+        <Card data-testid="admin-section-errors" className="rounded-xl border-border shadow-sm">
           <CardHeader>
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <CardTitle className="text-base font-black">گزارش خطاها</CardTitle>
