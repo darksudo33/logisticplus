@@ -64,8 +64,6 @@ import {
   getShipmentCustomerAccess,
   getShipmentRecord,
   getTaskRecord,
-  getChequeRecord,
-  getComplianceMeetingRecord,
   getAdminOverview,
   getAppErrorLog,
   getSmsAnalytics,
@@ -75,10 +73,7 @@ import {
   getOrganizationDetail,
   getOrganizationBilling,
   getOrganizationSubscription,
-  getQuotationRecord,
   getUserById,
-  listExitedShipmentRecords,
-  getShipmentOperationalRecord,
   getUserByEmail,
   getUserByPhone,
   getUserPermissions,
@@ -95,17 +90,13 @@ import {
   listChatThreadMemberIds,
   listChatThreads,
   listContactRequests,
-  listCustomerRelated,
   listCustomersDetailed,
   listDocuments,
   listFeatureRecords,
-  listCheques,
-  listComplianceMeetings,
   listDueSoonCheques,
   listAppErrorLogs,
   listBillingInvoices,
   listBillingPayments,
-  listQuotations,
   listRoles,
   listOrganizationMembers,
   listSignupRequests,
@@ -233,6 +224,23 @@ import { registerShipmentFormTemplateRoutes } from "./src/server/routes/shipment
 import { registerShipmentWorkflowTemplateRoutes } from "./src/server/routes/shipment-workflow-template-routes.js";
 import { registerUserRoutes } from "./src/server/routes/user-routes.js";
 import { registerRatesRoutes } from "./src/server/routes/rates-routes.js";
+import {
+  getChequeRecord as getChequeRecordFromRepository,
+  listCheques as listChequesFromRepository,
+} from "./src/server/repositories/cheques.js";
+import {
+  getComplianceMeetingRecord as getComplianceMeetingRecordFromRepository,
+  listComplianceMeetings as listComplianceMeetingsFromRepository,
+} from "./src/server/repositories/compliance-meetings.js";
+import { listCustomerRelated as listCustomerRelatedFromRepository } from "./src/server/repositories/customers.js";
+import {
+  getShipmentOperationalRecord as getShipmentOperationalRecordFromRepository,
+  listExitedShipmentRecords as listExitedShipmentRecordsFromRepository,
+} from "./src/server/repositories/shipments.js";
+import {
+  getQuotationRecord as getQuotationRecordFromRepository,
+  listQuotations as listQuotationsFromRepository,
+} from "./src/server/repositories/quotations.js";
 import { startShipmentWorkflow as startShipmentWorkflowRecord } from "./src/server/repositories/shipment-progress.js";
 import { parseRequestValue } from "./src/server/validation.js";
 import {
@@ -252,6 +260,36 @@ import { runSmsWorkerOnce, startSmsWorker } from "./src/server/sms-worker.js";
 import { startCurrencyRatesWorker } from "./src/server/rates-worker.js";
 import { sendSmsMessage } from "./src/server/sms-provider.js";
 import { AI_MESSAGES, runAiChat } from "./src/server/ai/ai-orchestrator.js";
+
+const listExitedShipmentRecords = ({ organizationId, filters = {} } = {}) =>
+  listExitedShipmentRecordsFromRepository(pool, { organizationId, filters });
+const getShipmentOperationalRecord = (shipmentId, { organizationId, includeCustomerPrivateDetails = true } = {}) =>
+  getShipmentOperationalRecordFromRepository(pool, shipmentId, { organizationId, includeCustomerPrivateDetails });
+const listCustomerRelated = (id, type, { organizationId, includePrivateDetails = true } = {}) =>
+  listCustomerRelatedFromRepository(pool, id, type, { organizationId, includePrivateDetails });
+const listQuotations = ({
+  ownerUserId,
+  customerId,
+  organizationId,
+  includeArchived = false,
+  includeCustomerPrivateDetails = true,
+} = {}) =>
+  listQuotationsFromRepository(pool, {
+    ownerUserId,
+    customerId,
+    organizationId,
+    includeArchived,
+    includeCustomerPrivateDetails,
+  });
+const getQuotationRecord = (id, { organizationId, includeCustomerPrivateDetails = true } = {}) =>
+  getQuotationRecordFromRepository(pool, id, { organizationId, includeCustomerPrivateDetails });
+const listCheques = ({ ownerUserId, organizationId, includeArchived = false } = {}) =>
+  listChequesFromRepository(pool, { ownerUserId, organizationId, includeArchived });
+const getChequeRecord = (id, { organizationId } = {}) => getChequeRecordFromRepository(pool, id, { organizationId });
+const listComplianceMeetings = ({ ownerUserId, assignedToId, organizationId, includeArchived = false } = {}) =>
+  listComplianceMeetingsFromRepository(pool, { ownerUserId, assignedToId, organizationId, includeArchived });
+const getComplianceMeetingRecord = (id, { organizationId } = {}) =>
+  getComplianceMeetingRecordFromRepository(pool, id, { organizationId });
 
 const SESSION_COOKIE = "logisticplus_session";
 const PASSWORD_LOGIN_LIMIT = { limit: 5, windowMs: 15 * 60 * 1000 };
