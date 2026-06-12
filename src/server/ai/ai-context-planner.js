@@ -9,7 +9,39 @@ export const RELATION_INTENTS = {
   SHIPMENT_SUMMARY_LOOKUP: "shipment.summary.lookup",
 };
 
+export const BUSINESS_ENTITY_TYPES = {
+  SHIPMENT: "shipment",
+  CUSTOMER: "customer",
+  COMMERCIAL_CARD: "commercial_card",
+};
+
+export const BUSINESS_REQUESTED_FIELDS = {
+  SUMMARY: "summary",
+  STATUS: "status",
+  CUSTOMER: "customer",
+  CUSTOMER_PHONE: "customer_phone",
+  CUSTOMER_NUMBER: "customer_number",
+  COMMERCIAL_CARD: "commercial_card",
+  COMMERCIAL_CARD_NUMBER: "commercial_card_number",
+  SHIPMENT_NUMBER: "shipment_number",
+  LOCATION: "location",
+};
+
 const SUPPORTED_RELATION_INTENTS = new Set(Object.values(RELATION_INTENTS));
+const SUPPORTED_ENTITY_TYPES = new Set(Object.values(BUSINESS_ENTITY_TYPES));
+
+const HONORIFICS = new Set([
+  "آقا",
+  "آقای",
+  "خانم",
+  "سرکار",
+  "جناب",
+  "شرکت",
+  "mr",
+  "mrs",
+  "ms",
+  "company",
+]);
 
 const STOP_WORDS = new Set([
   "a",
@@ -44,11 +76,17 @@ const STOP_WORDS = new Set([
   "پرونده",
   "پرونده‌ها",
   "پرونده‌های",
+  "اون",
+  "آن",
+  "این",
   "چندتا",
   "چند",
   "چه",
   "چیه",
   "چیست",
+  "چی",
+  "شد",
+  "شده",
   "داراست",
   "داره",
   "دارد",
@@ -56,11 +94,14 @@ const STOP_WORDS = new Set([
   "را",
   "رو",
   "صاحب",
+  "طرف",
+  "حساب",
   "فعال",
   "کارت",
   "کدام",
   "کدوم",
   "کجاست",
+  "کجاس",
   "کیه",
   "مال",
   "محموله",
@@ -69,14 +110,28 @@ const STOP_WORDS = new Set([
   "مشتری",
   "مشتریش",
   "نام",
+  "اسم",
   "های",
   "هایی",
   "وضعیت",
+  "وضعیتش",
+  "شماره",
+  "کد",
+  "خلاصه",
+  "آخرین",
+  "درچه",
+  "حاله",
+  "حالش",
 ]);
 
 const SHIPMENT_TERMS = ["shipment", "cargo", "load", "tracking", "بار", "محموله", "پرونده"];
-const CUSTOMER_TERMS = ["customer", "client", "مشتری", "صاحب", "مالک"];
-const COMMERCIAL_CARD_TERMS = ["commercial card", "کارت بازرگانی", "کارت‌های بازرگانی", "کارتهاي بازرگانی"];
+const CUSTOMER_TERMS = ["customer", "client", "مشتری", "صاحب", "مالک", "طرف حساب", "شرکت"];
+const COMMERCIAL_CARD_TERMS = [
+  "commercial card",
+  "کارت بازرگانی",
+  "کارت‌های بازرگانی",
+  "کارتهاي بازرگانی",
+];
 const CARD_TERMS = ["card", "cards", "کارت", "کارتها", "کارت‌ها", "کارت‌های", "کارت‌هایی"];
 const SHIPMENT_LIST_TERMS = [
   "shipments",
@@ -90,8 +145,21 @@ const SHIPMENT_LIST_TERMS = [
   "چندتا پرونده",
   "چند پرونده",
 ];
-const SUMMARY_TERMS = ["summary", "status", "where", "وضعیت", "خلاصه", "کجاست", "الان", "آخرین وضعیت"];
+const SUMMARY_TERMS = ["summary", "status", "where", "وضعیت", "خلاصه", "کجاست", "کجاس", "الان", "آخرین وضعیت", "چی شد", "در چه حال"];
 const CUSTOMER_OWNER_TERMS = ["مشتری", "صاحب", "مالک", "مال کی", "برای کی", "کدوم مشتری", "کدام مشتری", "who", "customer"];
+const NUMBER_TERMS = ["شماره", "number", "phone", "code", "کد", "تلفن", "تماس", "موبایل"];
+const PHONE_TERMS = ["تلفن", "تماس", "موبایل", "شماره تماس", "phone", "mobile"];
+const LOCATION_TERMS = ["کجاست", "کجاس", "لوکیشن", "محل", "بندر", "مسیر", "location", "where"];
+const IDENTITY_TERMS = [
+  "تو کی هستی",
+  "تو چی هستی",
+  "شما کی هستید",
+  "شما چی هستید",
+  "خودتو معرفی کن",
+  "خودت رو معرفی کن",
+  "who are you",
+  "what are you",
+];
 
 function normalizeDigits(value = "") {
   return String(value)
@@ -118,14 +186,21 @@ function includesAny(text, terms) {
   return terms.some((term) => text.includes(normalizeAgentText(term)));
 }
 
+function unique(values = []) {
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
 function tokenized(text = "") {
   return normalizeAgentText(text).match(/[\p{L}\p{N}_-]+/gu) || [];
 }
 
+function isStopToken(token = "") {
+  return STOP_WORDS.has(token) || HONORIFICS.has(token) || /^(ها|های|اش|ش)$/.test(token);
+}
+
 function candidateRefs(message = "") {
   return tokenized(message)
-    .filter((token) => !STOP_WORDS.has(token))
-    .filter((token) => !/^(ها|های|اسم|نامش|کد|شماره)$/.test(token))
+    .filter((token) => !isStopToken(token))
     .filter((token) => token.length > 0)
     .slice(0, 4);
 }
@@ -147,6 +222,12 @@ function confidenceFor(intent, ref) {
 
 export function isSupportedRelationIntent(intent) {
   return SUPPORTED_RELATION_INTENTS.has(intent);
+}
+
+export function isIdentityQuestion(message = "") {
+  const normalized = normalizeAgentText(message);
+  if (!normalized) return false;
+  return IDENTITY_TERMS.some((term) => normalized === normalizeAgentText(term) || normalized.includes(normalizeAgentText(term)));
 }
 
 export function detectRelationIntent(message = "") {
@@ -195,6 +276,126 @@ export function detectRelationIntent(message = "") {
     entities,
     confidence: confidenceFor(intent, ref),
     language,
+  };
+}
+
+export function detectBusinessRequestedField(message = "") {
+  const normalized = normalizeAgentText(message);
+  const hasNumber = includesAny(normalized, NUMBER_TERMS);
+  const hasPhone = includesAny(normalized, PHONE_TERMS);
+  const hasShipment = includesAny(normalized, SHIPMENT_TERMS);
+  const hasCustomer = includesAny(normalized, CUSTOMER_TERMS);
+  const hasCard = includesAny(normalized, CARD_TERMS) || includesAny(normalized, COMMERCIAL_CARD_TERMS);
+  const hasStatus = includesAny(normalized, SUMMARY_TERMS);
+  const hasLocation = includesAny(normalized, LOCATION_TERMS);
+  const asksOwner = includesAny(normalized, CUSTOMER_OWNER_TERMS);
+
+  if (hasCard && hasNumber) return BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD_NUMBER;
+  if (hasCard) return BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD;
+  if (hasPhone || (hasNumber && hasCustomer && !hasShipment)) return BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE;
+  if (hasNumber && hasShipment) return BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER;
+  if (hasNumber && hasCustomer) return BUSINESS_REQUESTED_FIELDS.CUSTOMER_NUMBER;
+  if (asksOwner && hasShipment) return BUSINESS_REQUESTED_FIELDS.CUSTOMER;
+  if (hasLocation) return BUSINESS_REQUESTED_FIELDS.LOCATION;
+  if (hasStatus) return BUSINESS_REQUESTED_FIELDS.STATUS;
+  return BUSINESS_REQUESTED_FIELDS.SUMMARY;
+}
+
+export function extractBusinessSearchTerms(message = "", { maxTerms = 8 } = {}) {
+  const tokens = tokenized(message)
+    .map((token) => token.replace(/[%_\\]/g, ""))
+    .filter((token) => token.length >= 2 || /^[A-Za-z0-9_-]+$/.test(token))
+    .filter((token) => !isStopToken(token));
+  const phrases = [];
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    const left = tokens[index];
+    const right = tokens[index + 1];
+    if (left.length >= 2 && right.length >= 2 && !/^[0-9]+$/.test(left + right)) {
+      phrases.push(`${left} ${right}`);
+    }
+  }
+  return unique([...tokens, ...phrases]).slice(0, Math.min(Math.max(Number(maxTerms) || 8, 1), 12));
+}
+
+function candidateTypesFor(message = "", requestedField = BUSINESS_REQUESTED_FIELDS.SUMMARY) {
+  const normalized = normalizeAgentText(message);
+  const hasShipment = includesAny(normalized, SHIPMENT_TERMS);
+  const hasCustomer = includesAny(normalized, CUSTOMER_TERMS) || [...HONORIFICS].some((term) => normalized.includes(term));
+  const hasCard = includesAny(normalized, CARD_TERMS) || includesAny(normalized, COMMERCIAL_CARD_TERMS);
+  const hasStatus = includesAny(normalized, SUMMARY_TERMS) || requestedField === BUSINESS_REQUESTED_FIELDS.STATUS;
+  const types = [];
+
+  if (hasCard || requestedField === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD || requestedField === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD_NUMBER) {
+    types.push(BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD, BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.SHIPMENT);
+  } else if (hasShipment && hasCustomer) {
+    types.push(BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.CUSTOMER);
+  } else if (hasShipment || hasStatus) {
+    types.push(BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.CUSTOMER);
+  } else if (hasCustomer) {
+    types.push(BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD);
+  } else {
+    types.push(BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD);
+  }
+
+  return unique(types).filter((type) => SUPPORTED_ENTITY_TYPES.has(type));
+}
+
+function alternateTermsFor(terms = []) {
+  if (terms.length <= 1) return [];
+  const joined = terms.slice(0, 4).join(" ");
+  const compact = terms.filter((term) => !term.includes(" "));
+  return unique([joined, ...compact.slice().reverse()]).filter((term) => !terms.includes(term)).slice(0, 6);
+}
+
+export function planBusinessSearch(message = "") {
+  const normalized = normalizeAgentText(message);
+  const language = hasPersian(message) ? "fa" : "en";
+  if (!normalized) {
+    return {
+      intent: "empty",
+      language: "unknown",
+      searchBusinessContext: false,
+      queryTerms: [],
+      alternateQueryTerms: [],
+      candidateTypes: [],
+      requestedField: BUSINESS_REQUESTED_FIELDS.SUMMARY,
+      confidence: 0,
+    };
+  }
+
+  if (isIdentityQuestion(message)) {
+    return {
+      intent: "identity",
+      language,
+      searchBusinessContext: false,
+      queryTerms: [],
+      alternateQueryTerms: [],
+      candidateTypes: [],
+      requestedField: BUSINESS_REQUESTED_FIELDS.SUMMARY,
+      confidence: 1,
+    };
+  }
+
+  const requestedField = detectBusinessRequestedField(message);
+  const queryTerms = extractBusinessSearchTerms(message);
+  const candidateTypes = candidateTypesFor(message, requestedField);
+  const hasBusinessCue =
+    includesAny(normalized, SHIPMENT_TERMS) ||
+    includesAny(normalized, CUSTOMER_TERMS) ||
+    includesAny(normalized, CARD_TERMS) ||
+    includesAny(normalized, SUMMARY_TERMS) ||
+    includesAny(normalized, NUMBER_TERMS) ||
+    [...HONORIFICS].some((term) => normalized.includes(term));
+
+  return {
+    intent: "business_search",
+    language,
+    searchBusinessContext: Boolean(hasBusinessCue && queryTerms.length),
+    queryTerms,
+    alternateQueryTerms: alternateTermsFor(queryTerms),
+    candidateTypes,
+    requestedField,
+    confidence: queryTerms.length >= 2 ? 0.86 : hasBusinessCue ? 0.72 : 0.35,
   };
 }
 

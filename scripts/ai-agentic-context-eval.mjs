@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import {
+  BUSINESS_REQUESTED_FIELDS,
   RELATION_INTENTS,
   classifyResolutionState,
   detectRelationIntent,
+  isIdentityQuestion,
+  planBusinessSearch,
   verifyRelationAnswerability,
 } from "../src/server/ai/ai-context-planner.js";
 import { llmProviderStatus } from "../src/server/ai/llm-provider.js";
@@ -24,6 +27,87 @@ for (const [message, expectedIntent, expectedRef] of intentCases) {
   assert.equal(ref, expectedRef.toLowerCase(), message);
   assert.ok(result.confidence >= 0.9, message);
 }
+
+const businessCases = [
+  {
+    message: "محموله آنتویس چاپ آقای سنجری شماره خانمانش چنده",
+    terms: ["آنتویس", "چاپ", "سنجری"],
+    types: ["shipment", "customer"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER,
+  },
+  {
+    message: "برای آقای سنجری در چه حاله",
+    terms: ["سنجری"],
+    types: ["shipment", "customer"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.STATUS,
+  },
+  {
+    message: "پرونده سنجری چی شد",
+    terms: ["سنجری"],
+    types: ["shipment"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.STATUS,
+  },
+  {
+    message: "اون بار چاپ آنتویس",
+    terms: ["چاپ", "آنتویس"],
+    types: ["shipment"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.SUMMARY,
+  },
+  {
+    message: "بار آقای سنجری",
+    terms: ["سنجری"],
+    types: ["shipment", "customer"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.SUMMARY,
+  },
+  {
+    message: "کارت آقای سنجری",
+    terms: ["سنجری"],
+    types: ["commercial_card", "customer"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD,
+  },
+  {
+    message: "شماره مشتری سنجری چنده",
+    terms: ["سنجری"],
+    types: ["customer"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE,
+  },
+  {
+    message: "بار X اسم مشتریش چیه؟",
+    terms: ["x"],
+    types: ["shipment", "customer"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.CUSTOMER,
+  },
+  {
+    message: "مشتری بار X چیه؟",
+    terms: ["x"],
+    types: ["shipment", "customer"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.CUSTOMER,
+  },
+  {
+    message: "کارت بازرگانی مشتری بار X چیه؟",
+    terms: ["x"],
+    types: ["commercial_card", "customer", "shipment"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD,
+  },
+];
+
+for (const testCase of businessCases) {
+  const plan = planBusinessSearch(testCase.message);
+  assert.equal(plan.searchBusinessContext, true, `${testCase.message} should trigger business search`);
+  for (const term of testCase.terms) {
+    assert.ok(plan.queryTerms.includes(term.toLowerCase()), `${testCase.message} should include term ${term}`);
+  }
+  for (const type of testCase.types) {
+    assert.ok(plan.candidateTypes.includes(type), `${testCase.message} should include candidate type ${type}`);
+  }
+  assert.equal(plan.requestedField, testCase.requestedField, `${testCase.message} requested field`);
+  assert.ok(plan.confidence >= 0.7, `${testCase.message} should be confident enough to search`);
+}
+
+const identityPlan = planBusinessSearch("تو کی هستی");
+assert.equal(isIdentityQuestion("تو کی هستی"), true, "identity phrase should be detected");
+assert.equal(identityPlan.intent, "identity", "identity query should use identity intent");
+assert.equal(identityPlan.searchBusinessContext, false, "identity query must not trigger business search");
 
 assert.equal(
   classifyResolutionState([
