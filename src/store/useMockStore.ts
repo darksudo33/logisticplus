@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { User, Customer, Shipment, Task, Message, ActivityLog, Demurrage, ShipmentStep, ShipmentStatus, TaskStatus, ShipmentDocument, Channel, Notification, Appointment, AppointmentStatus, Cheque, Quote } from "../types";
+import { User, Customer, Shipment, Task, Message, ActivityLog, Demurrage, ShipmentStep, ShipmentStatus, TaskStatus, ShipmentDocument, Channel, Notification, Appointment, AppointmentStatus, Cheque, Quote, CommercialCard } from "../types";
 
 const CURRENT_USER_STORAGE_KEY = "logisticplus.currentUser";
 
@@ -26,6 +26,7 @@ const COLLECTION_KEYS = [
   "demurrageRecords",
   "shipmentSteps",
   "documents",
+  "commercialCards",
   "channels",
   "notifications",
   "appointments",
@@ -82,6 +83,7 @@ interface MockStore {
   demurrageRecords: Demurrage[];
   shipmentSteps: ShipmentStep[];
   documents: ShipmentDocument[];
+  commercialCards: CommercialCard[];
   channels: Channel[];
   notifications: Notification[];
   appointments: Appointment[];
@@ -90,6 +92,7 @@ interface MockStore {
   isHydratingFromDatabase: boolean;
   hydrateFromRecords: (records: Record<string, any[]>) => void;
   loadCurrentUserRecords: () => Promise<void>;
+  refreshShipments: () => Promise<void>;
   loginWithPassword: (email: string, password: string, remember?: boolean) => Promise<User>;
   loginWithPhoneCode: (phone: string, code: string, remember?: boolean) => Promise<User>;
 
@@ -109,6 +112,9 @@ interface MockStore {
   deleteUser: (id: string) => void;
   addDocument: (document: Omit<ShipmentDocument, "id" | "createdAt">) => void;
   deleteDocument: (id: string) => void;
+  addCommercialCard: (card: Omit<CommercialCard, "id" | "createdAt" | "updatedAt"> & { id?: string }) => void;
+  updateCommercialCard: (id: string, updates: Partial<Omit<CommercialCard, "id" | "createdAt">>) => void;
+  deleteCommercialCard: (id: string) => void;
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   addNotification: (notification: Omit<Notification, "id" | "isRead" | "createdAt" | "link"> & { link?: string }) => void;
@@ -155,6 +161,7 @@ export const useMockStore = create<MockStore>((set) => ({
   demurrageRecords: [],
   shipmentSteps: [],
   documents: [],
+  commercialCards: [],
   channels: [],
   notifications: [],
   appointments: [],
@@ -178,6 +185,7 @@ export const useMockStore = create<MockStore>((set) => ({
     demurrageRecords: records.demurrageRecords || [],
     shipmentSteps: records.shipmentSteps || [],
     documents: records.documents || [],
+    commercialCards: records.commercialCards || [],
     channels: records.channels || [],
     notifications: records.notifications || [],
     appointments: records.appointments || [],
@@ -342,6 +350,7 @@ export const useMockStore = create<MockStore>((set) => ({
         demurrageRecords: [],
         shipmentSteps: [],
         documents: [],
+        commercialCards: [],
         channels: [],
         notifications: [],
         appointments: [],
@@ -355,6 +364,20 @@ export const useMockStore = create<MockStore>((set) => ({
       return;
     }
     set({ currentUser: user });
+  },
+
+  refreshShipments: async () => {
+    const user = useMockStore.getState().currentUser;
+    if (!user) return;
+
+    const response = await fetch("/api/shipments");
+    if (!response.ok) {
+      throw new Error("Could not refresh shipments.");
+    }
+    const payload = await response.json();
+    useMockStore.setState({
+      shipments: Array.isArray(payload) ? payload : payload.data || [],
+    });
   },
 
   addShipment: (shipment) => {
@@ -521,6 +544,30 @@ export const useMockStore = create<MockStore>((set) => ({
   }),
   deleteDocument: (id) => set((state) => ({
     documents: state.documents.filter(d => d.id !== id)
+  })),
+  addCommercialCard: (card) => set((state) => {
+    const now = new Date().toISOString();
+    const newCard: CommercialCard = {
+      ...card,
+      id: card.id || `cc${Date.now()}`,
+      createdAt: now,
+      updatedAt: now,
+    };
+    return {
+      commercialCards: [newCard, ...state.commercialCards],
+    };
+  }),
+  updateCommercialCard: (id, updates) => set((state) => ({
+    commercialCards: state.commercialCards.map((card) =>
+      card.id === id ? { ...card, ...updates, updatedAt: new Date().toISOString() } : card
+    ),
+  })),
+  deleteCommercialCard: (id) => set((state) => ({
+    commercialCards: state.commercialCards.map((card) =>
+      card.id === id
+        ? { ...card, isArchived: true, archivedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+        : card
+    ),
   })),
   markNotificationRead: (id) => set((state) => ({
     notifications: state.notifications.map(n => n.id === id ? { ...n, isRead: true } : n)
@@ -877,6 +924,8 @@ export const useMockStore = create<MockStore>((set) => ({
     };
   }),
 }));
+
+export const useAppDataStore = useMockStore;
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 

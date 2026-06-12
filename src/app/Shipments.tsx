@@ -1,11 +1,10 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useMockStore } from "../store/useMockStore";
 import { Progress } from "@/components/ui/progress";
-import { Search, Ship, Filter, Plus, Eye, MoreHorizontal, Calendar, MapPin, Truck, Check, ListChecks, CheckCircle2, Clock, MoreVertical, Edit, ArrowUpDown, ArrowUp, ArrowDown, Activity, Archive, Trash2, Trash, UserPlus } from "lucide-react";
+import { Search, Ship, Filter, Plus, Eye, MoreHorizontal, Check, ListChecks, CheckCircle2, MoreVertical, Edit, ArrowUpDown, ArrowUp, ArrowDown, Archive, Trash2, Trash, UserPlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -35,10 +34,13 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { ShipmentStatus } from "../types";
+import { Shipment, ShipmentStep, ShipmentStatus, Task } from "../types";
+import { apiGet } from "@/src/lib/api";
+import { useApiResource } from "@/src/lib/resourceState";
+import { shipmentApi } from "@/src/lib/shipmentApi";
+import { useAppDataStore } from "@/src/store/useMockStore";
 
 const StatusBadge = ({ status }: { status: string }) => {
   const styles: Record<string, string> = {
@@ -64,62 +66,125 @@ const StatusBadge = ({ status }: { status: string }) => {
   return <Badge className={`${styles[status] || ""} border-none py-0.5 px-2 text-[10px] font-bold`}>{labels[status] || status}</Badge>;
 };
 
+const shipmentCustomerDisplay = (shipment: Shipment) =>
+  shipment.customerCode || shipment.customerName || shipment.customerId || "";
+
+const shipmentOriginDisplay = (shipment: Shipment) => shipment.origin || "";
+
+const shipmentDestinationDisplay = (shipment: Shipment) =>
+  shipment.deliveryPort || shipment.destination || "";
+
+const shipmentDisplayStatusText = (shipment: Shipment) =>
+  String(shipment.displayStatusText || "").trim();
+
 export default function Shipments() {
   const navigate = useNavigate();
-  const shipments = useMockStore(state => state.shipments);
-  const shipmentSteps = useMockStore(state => state.shipmentSteps);
-  const addShipment = useMockStore(state => state.addShipment);
-  const updateShipmentStatus = useMockStore(state => state.updateShipmentStatus);
-  const softDelete = useMockStore(state => state.softDelete);
-  const archiveShipment = useMockStore(state => state.archiveShipment);
-  const customers = useMockStore(state => state.customers);
-  const tasks = useMockStore(state => state.tasks);
-  const updateTaskStatus = useMockStore(state => state.updateTaskStatus);
+  const shipmentsResource = useApiResource(React.useCallback(() => shipmentApi.list(), []), []);
+  const tasksResource = useApiResource(React.useCallback(() => apiGet<Task[]>("/api/tasks"), []), []);
+  const shipments = shipmentsResource.data;
+  const tasks = tasksResource.data;
+  const refreshStoreShipments = useAppDataStore(state => state.refreshShipments);
+  const currentUser = useAppDataStore(state => state.currentUser);
+  const [shipmentSteps, setShipmentSteps] = useState<ShipmentStep[]>([]);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
-  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [shipmentToDelete, setShipmentToDelete] = useState<string | null>(null);
+  const [exitedArchiveTarget, setExitedArchiveTarget] = useState<string | null>(null);
+  const [exitedArchiveReason, setExitedArchiveReason] = useState("");
+  const [isExitedArchiveSaving, setIsExitedArchiveSaving] = useState(false);
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
   
-  // New Shipment Form State
-  const [newShipment, setNewShipment] = useState({
-    trackingNumber: "",
-    containerNumber: "",
-    customerId: "",
-    customerName: "",
-    origin: "",
-    destination: "",
-    estimatedDelivery: "",
-  });
+  useEffect(() => {
+    let isMounted = true;
+    if (!shipments.length) {
+      setShipmentSteps([]);
+      return;
+    }
 
-  const handleAddShipment = () => {
-    const customer = customers.find(c => c.id === newShipment.customerId);
-    addShipment({
-      ...newShipment,
-      customerName: customer?.name || "مشتری متفرقه",
-      status: "PENDING",
-      createdAt: new Date().toLocaleDateString("fa-IR"),
-      freeTimeDays: 7
+    Promise.all(
+      shipments.map((shipment) =>
+        apiGet<ShipmentStep[]>(`/api/shipments/${encodeURIComponent(shipment.id)}/steps`).catch(() => [])
+      )
+    ).then((stepGroups) => {
+      if (isMounted) setShipmentSteps(stepGroups.flat());
     });
-    setIsAddDialogOpen(false);
-    setNewShipment({
-      trackingNumber: "",
-      containerNumber: "",
-      customerId: "",
-      customerName: "",
-      origin: "",
-      destination: "",
-      estimatedDelivery: "",
-    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [shipments]);
+
+  const refreshShipmentViews = React.useCallback(async () => {
+    await shipmentsResource.refresh();
+    try {
+      await refreshStoreShipments();
+    } catch (error) {
+      console.error("Could not refresh shared shipment store.", error);
+    }
+  }, [refreshStoreShipments, shipmentsResource.refresh]);
+
+  const handleArchiveShipment = async (id: string) => {
+    try {
+      await shipmentApi.archive(id);
+      await refreshShipmentViews();
+      toast.success("محموله به بایگانی منتقل شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "بایگانی محموله ناموفق بود.");
+    }
+  };
+
+  const handleMoveToExitedArchive = async () => {
+    if (!exitedArchiveTarget) return;
+    setIsExitedArchiveSaving(true);
+    try {
+      await shipmentApi.moveToExitedArchive(exitedArchiveTarget, {
+        reason: exitedArchiveReason.trim() || null,
+      });
+      await refreshShipmentViews();
+      setExitedArchiveTarget(null);
+      setExitedArchiveReason("");
+      toast.success("محموله به محموله‌های خروج‌شده منتقل شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "انتقال محموله ناموفق بود.");
+    } finally {
+      setIsExitedArchiveSaving(false);
+    }
+  };
+
+  const handleShipmentStatus = async (id: string, status: ShipmentStatus) => {
+    try {
+      await shipmentApi.updateOperationalFields(id, { status });
+      await refreshShipmentViews();
+      toast.success("وضعیت محموله بروزرسانی شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "بروزرسانی وضعیت ناموفق بود.");
+    }
   };
 
   const processedShipments = React.useMemo(() => {
     return [...shipments]
       .filter(s => {
-        const isNotArchived = !s.isArchived;
-        const matchesSearch = s.trackingNumber.includes(searchTerm) || s.containerNumber.includes(searchTerm);
+        const isNotArchived = !s.isArchived && !s.isExitedArchived;
+        const normalizedSearch = searchTerm.trim().toLowerCase();
+        const searchableText = [
+          s.trackingNumber,
+          s.containerNumber,
+          s.customerCode,
+          s.customerName,
+          s.customerId,
+          s.origin,
+          s.destination,
+          s.dischargePort,
+          s.deliveryPort,
+          s.displayStatusText,
+          s.currentStage,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const matchesSearch = !normalizedSearch || searchableText.includes(normalizedSearch);
         const matchesStatus = statusFilter === "ALL" || s.status === statusFilter;
         return isNotArchived && matchesSearch && matchesStatus;
       })
@@ -137,9 +202,9 @@ export default function Shipments() {
   };
 
   const shipmentStats = React.useMemo(() => {
-    const active = shipments.filter(s => !s.isArchived && !["DELIVERED", "CLOSED"].includes(s.status)).length;
-    const customs = shipments.filter(s => !s.isArchived && s.status === "CUSTOMS").length;
-    const delivered = shipments.filter(s => !s.isArchived && s.status === "DELIVERED").length;
+    const active = shipments.filter(s => !s.isArchived && !s.isExitedArchived && !["DELIVERED", "CLOSED"].includes(s.status)).length;
+    const customs = shipments.filter(s => !s.isArchived && !s.isExitedArchived && s.status === "CUSTOMS").length;
+    const delivered = shipments.filter(s => !s.isArchived && !s.isExitedArchived && s.status === "DELIVERED").length;
     const pendingTasks = tasks.filter(t => t.status !== "DONE").length;
     return [
       { label: "محموله فعال", value: active, icon: Ship, tone: "blue" },
@@ -166,6 +231,10 @@ export default function Shipments() {
     navigate(`/shipments/${shipment.id}`);
   };
 
+  const canMoveToExitedArchive = Boolean(currentUser?.permissions?.includes("shipments.archive"));
+  const isExitArchiveEligible = (shipment: { status: ShipmentStatus }) =>
+    canMoveToExitedArchive && ["CLEARED", "DELIVERED", "CLOSED"].includes(shipment.status);
+
   const statusOptions = [
     { value: "ALL", label: "همه وضعیت‌ها" },
     { value: "PENDING", label: "در انتظار ثبت" },
@@ -185,97 +254,17 @@ export default function Shipments() {
           <p className="text-[12px] text-muted-foreground">لیست کامل و وضعیت جزئی بارهای در جریان.</p>
         </div>
         
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-          <DialogTrigger
-            render={(triggerProps) => (
-              <Button {...triggerProps} className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2 h-10 w-full sm:w-auto text-xs font-bold px-4 rounded-xl">
-                <Plus className="w-3.5 h-3.5" />
-                ثبت محموله جدید
-              </Button>
-            )}
-          />
-          <DialogContent className="bg-card border-border text-foreground text-right" dir="rtl">
-            <DialogHeader>
-              <DialogTitle className="text-lg font-bold">افزودن محموله جدید</DialogTitle>
-              <DialogDescription className="text-muted-foreground text-xs text-right">
-                جزئیات محموله جدید را برای رهگیری در سیستم وارد کنید.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="tracking" className="text-xs text-muted-foreground">شماره رهگیری (B/L)</Label>
-                  <Input 
-                    id="tracking" 
-                    placeholder="شماره رهگیری را وارد کنید" 
-                    className="bg-muted border-border text-xs h-9 ltr" 
-                    value={newShipment.trackingNumber}
-                    onChange={e => setNewShipment({...newShipment, trackingNumber: e.target.value})}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="container" className="text-xs text-muted-foreground">شماره کانتینر</Label>
-                  <Input 
-                    id="container" 
-                    placeholder="شماره کانتینر را وارد کنید" 
-                    className="bg-muted border-border text-xs h-9 ltr" 
-                    value={newShipment.containerNumber}
-                    onChange={e => setNewShipment({...newShipment, containerNumber: e.target.value})}
-                  />
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="customer" className="text-xs text-muted-foreground">مشتری</Label>
-                <select 
-                  id="customer"
-                  className="w-full bg-muted border-border text-xs h-9 rounded-md px-3 outline-none focus:ring-1 focus:ring-primary/50"
-                  value={newShipment.customerId}
-                  onChange={e => setNewShipment({...newShipment, customerId: e.target.value})}
-                >
-                  <option value="">انتخاب مشتری...</option>
-                  {customers.filter((customer) => !customer.isArchived).map(c => (
-                    <option key={c.id} value={c.id}>{c.name} ({c.company})</option>
-                  ))}
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="origin" className="text-xs text-muted-foreground">مبداء</Label>
-                  <Input 
-                    id="origin" 
-                    className="bg-muted border-border text-xs h-9" 
-                    value={newShipment.origin}
-                    onChange={e => setNewShipment({...newShipment, origin: e.target.value})}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="destination" className="text-xs text-muted-foreground">مقصد (بندر)</Label>
-                  <Input 
-                    id="destination" 
-                    className="bg-muted border-border text-xs h-9" 
-                    value={newShipment.destination}
-                    onChange={e => setNewShipment({...newShipment, destination: e.target.value})}
-                  />
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="eta" className="text-xs text-muted-foreground">تاریخ تحویل تخمینی (ETA)</Label>
-                <Input 
-                  id="eta" 
-                  placeholder="۱۴۰۳/۰۴/۱۵"
-                  className="bg-muted border-border text-xs h-9" 
-                  value={newShipment.estimatedDelivery}
-                  onChange={e => setNewShipment({...newShipment, estimatedDelivery: e.target.value})}
-                />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button onClick={handleAddShipment} className="w-full bg-primary text-primary-foreground font-bold h-10">
-                ایجاد محموله
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+          <Button
+            type="button"
+            data-testid="open-shipment-v2-create"
+            className="h-10 w-full gap-2 rounded-xl px-4 text-xs font-bold sm:w-auto"
+            onClick={() => navigate("/shipments/new-v2")}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            ثبت محموله جدید
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -355,9 +344,13 @@ export default function Shipments() {
             if (shipment.status === 'DELIVERED') progressValue = 100;
             else if (shipment.status === 'CLEARED' && progressValue < 80) progressValue = 85;
             else if (shipment.status === 'ARRIVED' && progressValue < 50) progressValue = 60;
+            const customerDisplay = shipmentCustomerDisplay(shipment);
+            const originDisplay = shipmentOriginDisplay(shipment);
+            const destinationDisplay = shipmentDestinationDisplay(shipment);
+            const displayStatusText = shipmentDisplayStatusText(shipment);
             
             return (
-              <Card key={shipment.id} className="bg-card border-border rounded-xl overflow-hidden shadow-sm p-4">
+              <Card key={shipment.id} data-testid={`shipment-mobile-card-${shipment.id}`} className="bg-card border-border rounded-xl overflow-hidden shadow-sm p-4">
                <div className="flex items-start justify-between mb-4">
                   <div className="flex flex-col gap-1">
                      <span className="font-mono text-sm font-black text-primary">{shipment.trackingNumber}</span>
@@ -391,10 +384,22 @@ export default function Shipments() {
                           {(shipment.status === "DELIVERED" || shipment.status === "CLOSED") && (
                             <DropdownMenuItem 
                               className="text-xs cursor-pointer hover:bg-amber-500/10 text-amber-500 font-bold flex items-center gap-2 rounded-lg"
-                              onClick={() => { archiveShipment(shipment.id); toast.success("محموله به بایگانی منتقل شد."); }}
+                              onClick={() => void handleArchiveShipment(shipment.id)}
                             >
                               <Archive className="w-3.5 h-3.5" />
                               بایگانی محموله
+                            </DropdownMenuItem>
+                          )}
+                          {isExitArchiveEligible(shipment) && (
+                            <DropdownMenuItem
+                              className="text-xs cursor-pointer hover:bg-primary/10 text-primary font-bold flex items-center gap-2 rounded-lg"
+                              onClick={() => {
+                                setExitedArchiveTarget(shipment.id);
+                                setExitedArchiveReason("");
+                              }}
+                            >
+                              <Archive className="w-3.5 h-3.5" />
+                              انتقال به محموله‌های خروج‌شده
                             </DropdownMenuItem>
                           )}
                           <DropdownMenuSeparator className="bg-border" />
@@ -416,7 +421,7 @@ export default function Shipments() {
                            <DropdownMenuItem 
                              key={status.value} 
                              className="text-xs cursor-pointer hover:bg-muted flex justify-between items-center rounded-lg"
-                             onClick={() => updateShipmentStatus(shipment.id, status.value as ShipmentStatus)}
+                             onClick={() => void handleShipmentStatus(shipment.id, status.value as ShipmentStatus)}
                            >
                              <span className="font-medium">{status.label}</span>
                              {shipment.status === status.value && <Check className="w-3 h-3 text-primary" />}
@@ -430,7 +435,7 @@ export default function Shipments() {
                <div className="grid grid-cols-2 gap-4 mb-4 bg-background/50 p-3 rounded-xl border border-border/50">
                   <div className="flex flex-col gap-1">
                      <span className="text-[9px] text-muted-foreground font-black uppercase tracking-widest">مشتری</span>
-                     <span className="text-[11px] text-foreground font-bold truncate">{shipment.customerName}</span>
+                     <span data-testid={`shipment-mobile-customer-${shipment.id}`} className="text-[11px] text-foreground font-bold truncate">{customerDisplay}</span>
                   </div>
                   <div className="flex flex-col gap-1">
                      <span className="text-[9px] text-muted-foreground font-black uppercase tracking-widest">تحویل تخمینی</span>
@@ -438,7 +443,8 @@ export default function Shipments() {
                   </div>
                </div>
 
-               <div className="mb-4 space-y-1.5 px-1">
+               {!displayStatusText ? (
+                <div className="mb-4 space-y-1.5 px-1">
                   <div className="flex justify-between items-center text-[9px] font-bold">
                     <span className="text-muted-foreground">پیشرفت فرآیند</span>
                     <span className="text-primary">
@@ -449,21 +455,35 @@ export default function Shipments() {
                     value={progressValue} 
                     className="h-1 bg-muted" 
                   />
-               </div>
+                </div>
+               ) : null}
 
                <div className="flex items-center justify-between border-t border-border/30 pt-4">
                   <div className="flex items-center gap-2">
                      <div className="flex flex-col">
-                        <span className="text-[11px] text-foreground font-bold">{shipment.origin}</span>
+                        <span data-testid={`shipment-mobile-origin-${shipment.id}`} className="text-[11px] text-foreground font-bold">{originDisplay}</span>
                         <span className="text-[9px] text-muted-foreground">مبدأ</span>
                      </div>
                      <ArrowUpDown className="w-3 h-3 text-muted-foreground rotate-90 opacity-50" />
                      <div className="flex flex-col">
-                        <span className="text-[11px] text-foreground font-bold">{shipment.destination}</span>
+                        <span data-testid={`shipment-mobile-destination-${shipment.id}`} className="text-[11px] text-foreground font-bold">{destinationDisplay}</span>
                         <span className="text-[9px] text-muted-foreground">مقصد</span>
                      </div>
                   </div>
-                  <StatusBadge status={shipment.status} />
+                  <div data-testid={`shipment-mobile-status-${shipment.id}`} className="flex max-w-[45%] flex-col items-end gap-1">
+                    {displayStatusText ? (
+                      <>
+                        <Badge className="border-none bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
+                          {displayStatusText}
+                        </Badge>
+                        {shipment.currentStage ? (
+                          <span className="max-w-full truncate text-[9px] font-bold text-muted-foreground">{shipment.currentStage}</span>
+                        ) : null}
+                      </>
+                    ) : (
+                      <StatusBadge status={shipment.status} />
+                    )}
+                  </div>
                </div>
             </Card>
             );
@@ -474,7 +494,7 @@ export default function Shipments() {
             title={shipments.length === 0 ? "هنوز محموله‌ای ثبت نشده" : "محموله‌ای با این فیلترها پیدا نشد"}
             description={shipments.length === 0 ? "برای شروع عملیات، ابتدا مشتری را ثبت کنید و سپس اولین محموله را بسازید." : "جستجو یا وضعیت انتخاب‌شده را تغییر دهید تا محموله‌های موجود نمایش داده شوند."}
             primaryAction={shipments.length === 0 ? { label: "ثبت مشتری", to: "/customers", icon: UserPlus } : resetFiltersAction(resetShipmentFilters)}
-            secondaryAction={shipments.length === 0 ? { label: "ثبت محموله", onClick: () => setIsAddDialogOpen(true), icon: Plus, variant: "outline" } : undefined}
+            secondaryAction={shipments.length === 0 ? { label: "ثبت محموله", to: "/shipments/new-v2", icon: Plus, variant: "outline" } : undefined}
           />
         )}
       </div>
@@ -522,29 +542,44 @@ export default function Shipments() {
                     if (shipment.status === 'DELIVERED') progressValue = 100;
                     else if (shipment.status === 'CLEARED' && progressValue < 80) progressValue = 85;
                     else if (shipment.status === 'ARRIVED' && progressValue < 50) progressValue = 60;
+                    const customerDisplay = shipmentCustomerDisplay(shipment);
+                    const originDisplay = shipmentOriginDisplay(shipment);
+                    const destinationDisplay = shipmentDestinationDisplay(shipment);
+                    const displayStatusText = shipmentDisplayStatusText(shipment);
 
                     return (
-                      <tr key={shipment.id} className="hover:bg-muted/30 transition-colors group">
+                      <tr key={shipment.id} data-testid={`shipment-row-${shipment.id}`} className="hover:bg-muted/30 transition-colors group">
                         <td className="px-5 py-4">
                           <span className="font-mono text-sm font-bold text-primary">{shipment.trackingNumber}</span>
                         </td>
                         <td className="px-5 py-4 font-mono text-[11px] text-muted-foreground">{shipment.containerNumber}</td>
-                        <td className="px-5 py-4 text-muted-foreground">{shipment.origin}</td>
-                        <td className="px-5 py-4 text-muted-foreground">{shipment.destination}</td>
-                        <td className="px-5 py-4 font-medium text-foreground">{shipment.customerName}</td>
-                        <td className="px-5 py-4">
-                          <div className="flex flex-col gap-1.5 min-w-[120px]">
-                            <div className="flex justify-between items-center text-[10px]">
-                              <StatusBadge status={shipment.status} />
-                              <span className="font-bold text-primary">
-                                {Math.round(progressValue)}%
-                              </span>
+                        <td data-testid={`shipment-row-origin-${shipment.id}`} className="px-5 py-4 text-muted-foreground">{originDisplay}</td>
+                        <td data-testid={`shipment-row-destination-${shipment.id}`} className="px-5 py-4 text-muted-foreground">{destinationDisplay}</td>
+                        <td data-testid={`shipment-row-customer-${shipment.id}`} className="px-5 py-4 font-medium text-foreground">{customerDisplay}</td>
+                        <td data-testid={`shipment-row-status-${shipment.id}`} className="px-5 py-4">
+                          {displayStatusText ? (
+                            <div className="flex min-w-[120px] flex-col items-start gap-1">
+                              <Badge className="border-none bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
+                                {displayStatusText}
+                              </Badge>
+                              {shipment.currentStage ? (
+                                <span className="max-w-[160px] truncate text-[10px] font-bold text-muted-foreground">{shipment.currentStage}</span>
+                              ) : null}
                             </div>
-                            <Progress 
-                              value={progressValue} 
-                              className="h-1.5 bg-muted" 
-                            />
-                          </div>
+                          ) : (
+                            <div className="flex flex-col gap-1.5 min-w-[120px]">
+                              <div className="flex justify-between items-center text-[10px]">
+                                <StatusBadge status={shipment.status} />
+                                <span className="font-bold text-primary">
+                                  {Math.round(progressValue)}%
+                                </span>
+                              </div>
+                              <Progress
+                                value={progressValue}
+                                className="h-1.5 bg-muted"
+                              />
+                            </div>
+                          )}
                         </td>
                         <td className="px-5 py-4 text-muted-foreground font-mono">{shipment.estimatedDelivery}</td>
                         <td className="px-5 py-4">
@@ -576,10 +611,22 @@ export default function Shipments() {
                                  {(shipment.status === "DELIVERED" || shipment.status === "CLOSED") && (
                                    <DropdownMenuItem 
                                      className="text-xs cursor-pointer hover:bg-amber-500/10 text-amber-500 font-bold flex items-center gap-2 rounded-lg"
-                                     onClick={() => { archiveShipment(shipment.id); toast.success("محموله به بایگانی منتقل شد."); }}
+                                     onClick={() => void handleArchiveShipment(shipment.id)}
                                    >
                                      <Archive className="w-3.5 h-3.5" />
                                      بایگانی محموله
+                                   </DropdownMenuItem>
+                                 )}
+                                 {isExitArchiveEligible(shipment) && (
+                                   <DropdownMenuItem
+                                     className="text-xs cursor-pointer hover:bg-primary/10 text-primary font-bold flex items-center gap-2 rounded-lg"
+                                     onClick={() => {
+                                       setExitedArchiveTarget(shipment.id);
+                                       setExitedArchiveReason("");
+                                     }}
+                                   >
+                                     <Archive className="w-3.5 h-3.5" />
+                                     انتقال به محموله‌های خروج‌شده
                                    </DropdownMenuItem>
                                  )}
                                  <DropdownMenuSeparator className="bg-border" />
@@ -593,13 +640,6 @@ export default function Shipments() {
                                    <Trash2 className="w-3.5 h-3.5" />
                                    حذف محموله
                                  </DropdownMenuItem>
-                                 <DropdownMenuItem 
-                                   className="text-xs cursor-pointer hover:bg-muted flex items-center gap-2 rounded-lg"
-                                   onClick={() => navigate(`/shipments/${shipment.id}`)}
-                                 >
-                                   <Activity className="w-3.5 h-3.5 text-primary" />
-                                   تغییر وضعیت جزئی
-                                 </DropdownMenuItem>
                                  <DropdownMenuSeparator className="bg-border" />
                                  <DropdownMenuGroup>
                                    <DropdownMenuLabel className="text-[10px] text-muted-foreground font-black px-2 py-1">تغییر وضعیت</DropdownMenuLabel>
@@ -608,7 +648,7 @@ export default function Shipments() {
                                    <DropdownMenuItem 
                                      key={status.value} 
                                      className="text-xs cursor-pointer hover:bg-muted flex justify-between items-center rounded-lg"
-                                     onClick={() => updateShipmentStatus(shipment.id, status.value as ShipmentStatus)}
+                                     onClick={() => void handleShipmentStatus(shipment.id, status.value as ShipmentStatus)}
                                    >
                                      <span className="font-medium">{status.label}</span>
                                      {shipment.status === status.value && <Check className="w-3 h-3 text-primary" />}
@@ -628,7 +668,7 @@ export default function Shipments() {
                       title={shipments.length === 0 ? "هنوز محموله‌ای ثبت نشده" : "محموله‌ای با این فیلترها پیدا نشد"}
                       description={shipments.length === 0 ? "برای شروع عملیات، ابتدا مشتری را ثبت کنید و سپس اولین محموله را بسازید." : "جستجو یا وضعیت انتخاب‌شده را تغییر دهید تا محموله‌های موجود نمایش داده شوند."}
                       primaryAction={shipments.length === 0 ? { label: "ثبت مشتری", to: "/customers", icon: UserPlus } : resetFiltersAction(resetShipmentFilters)}
-                      secondaryAction={shipments.length === 0 ? { label: "ثبت محموله", onClick: () => setIsAddDialogOpen(true), icon: Plus, variant: "outline" } : undefined}
+                      secondaryAction={shipments.length === 0 ? { label: "ثبت محموله", to: "/shipments/new-v2", icon: Plus, variant: "outline" } : undefined}
                       compact
                     />
                   </EmptyTableRow>
@@ -644,7 +684,7 @@ export default function Shipments() {
         onClose={() => setIsDeleteDialogOpen(false)}
         onConfirm={() => {
           if (shipmentToDelete) {
-            softDelete(shipmentToDelete, "SHIPMENT");
+            void handleArchiveShipment(shipmentToDelete);
             toast.message("محموله به سطل زباله منتقل شد", {
               description: "می‌توانید تا ۷ روز آینده آن را از بخش بایگانی بازیابی کنید.",
               icon: <Trash className="w-4 h-4 text-red-500" />
@@ -653,6 +693,39 @@ export default function Shipments() {
         }}
         itemName={shipments.find(s => s.id === shipmentToDelete)?.trackingNumber}
       />
+
+      <Dialog open={Boolean(exitedArchiveTarget)} onOpenChange={(open) => {
+        if (!open && !isExitedArchiveSaving) {
+          setExitedArchiveTarget(null);
+          setExitedArchiveReason("");
+        }
+      }}>
+        <DialogContent className="max-w-md text-right" dir="rtl">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black">انتقال به محموله‌های خروج‌شده</DialogTitle>
+            <DialogDescription className="text-sm leading-7 text-muted-foreground">
+              این محموله از لیست محموله‌های فعال خارج می‌شود اما حذف نخواهد شد. اطلاعات، اسناد، گفتگوها و سوابق آن برای پیگیری‌های بعد از خروج باقی می‌ماند.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label className="text-xs font-black">دلیل انتقال</Label>
+            <Input
+              value={exitedArchiveReason}
+              onChange={(event) => setExitedArchiveReason(event.target.value)}
+              placeholder="مثلاً: خروج از گمرک و شروع پیگیری تسویه"
+              className="h-10 rounded-lg text-xs"
+            />
+          </div>
+          <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-start">
+            <Button type="button" variant="outline" onClick={() => setExitedArchiveTarget(null)} disabled={isExitedArchiveSaving}>
+              انصراف
+            </Button>
+            <Button type="button" onClick={() => void handleMoveToExitedArchive()} disabled={isExitedArchiveSaving}>
+              {isExitedArchiveSaving ? "در حال انتقال..." : "انتقال"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
