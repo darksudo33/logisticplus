@@ -77,9 +77,15 @@ import {
   classifyResolutionState,
   detectRelationIntent,
   isSupportedRelationIntent,
+  planCompanyBrainLookup,
   planBusinessSearch,
   verifyRelationAnswerability,
 } from "./ai-context-planner.js";
+import {
+  STALE_MEMORY_MESSAGE,
+  getCompanyBrainSnapshot,
+  searchCompanyBrain,
+} from "./company-brain.js";
 
 const ASSISTANT_NAME = "همیار لاجستیک";
 const CEO_ONLY_MESSAGE = "دسترسی به همیار لاجستیک در حال حاضر فقط برای مدیرعامل فعال است.";
@@ -2652,8 +2658,115 @@ async function answerBusinessCandidate(pool, context, plan, candidate, toolsCall
   return missingBusinessContextResult(plan, candidate, toolsCalled, "unsupported_business_candidate");
 }
 
+function companyBrainMemoryLabel(memory = {}) {
+  if (memory.memoryType === "daily_summary") return "خلاصه امروز";
+  if (memory.memoryType === "operational_snapshot") return "نمای عملیاتی";
+  if (memory.memoryType === "company_summary") return "حافظه کلی";
+  return memory.title || "حافظه همیار";
+}
+
+function companyBrainItemLine(item = {}) {
+  const label = labelOrMissing(item.title || item.entityCode || item.entityId);
+  const summary = cleanText(item.summary);
+  const stale = item.freshness?.isStale ? ` (${STALE_MEMORY_MESSAGE})` : "";
+  return `- ${label}${summary ? `: ${summary}` : ""}${stale}`;
+}
+
+function companyBrainSources(snapshot = {}) {
+  const memorySources = (snapshot.memories || []).map((memory) => source("company_brain", {
+    id: memory.id,
+    label: companyBrainMemoryLabel(memory),
+  }));
+  const itemSources = (snapshot.recentItems || []).slice(0, 5).map((item) => source(
+    item.entityType === "task" ? "workflow_item" : item.entityType,
+    {
+      id: item.entityId,
+      label: item.title || item.entityCode || item.entityId,
+      url: item.facts?.actionUrl,
+    }
+  ));
+  return uniqueSources([...memorySources, ...itemSources]);
+}
+
+function companyBrainSnapshotAnswer(plan = {}, snapshot = {}) {
+  const memories = snapshot.memories || [];
+  const recentItems = snapshot.recentItems || [];
+  const wantsLatest = plan.intent === "company_brain.latest";
+  const lines = [];
+
+  if (wantsLatest) {
+    lines.push("آخرین مواردی که در حافظه همیار برای این شرکت ثبت شده:");
+    lines.push(itemList(recentItems.slice(0, 6), companyBrainItemLine, "هنوز موردی در حافظه شرکت ثبت نشده است."));
+  } else {
+    lines.push("خلاصه حافظه همیار از وضعیت شرکت:");
+    for (const memory of memories) {
+      lines.push(`- ${companyBrainMemoryLabel(memory)}: ${memory.summary}`);
+    }
+    if (recentItems.length) {
+      lines.push("آخرین موارد مرتبط:");
+      lines.push(...recentItems.slice(0, 4).map(companyBrainItemLine));
+    }
+  }
+
+  const hasStaleMemory =
+    memories.some((memory) => memory.freshness?.isStale) ||
+    recentItems.some((item) => item.freshness?.isStale);
+  if (hasStaleMemory) lines.push(STALE_MEMORY_MESSAGE);
+  return toPersianDigits(joinLines(lines));
+}
+
+async function answerCompanyBrainSnapshot(pool, context, plan, toolsCalled = []) {
+  if (!plan?.useSnapshot) return null;
+  toolsCalled.push("getCompanyBrainSnapshot");
+  const snapshot = await getCompanyBrainSnapshot(pool, context, {
+    memoryTypes: plan.memoryTypes,
+    limit: plan.intent === "company_brain.latest" ? 8 : 5,
+  });
+  if (!snapshot.memoryAvailable || (!snapshot.memories.length && !snapshot.recentItems.length)) {
+    return null;
+  }
+  return relationResult({
+    plan,
+    answer: companyBrainSnapshotAnswer(plan, snapshot),
+    toolsCalled,
+    sources: companyBrainSources(snapshot),
+    recordIds: [
+      ...snapshot.memories.map((memory) => memory.id),
+      ...snapshot.recentItems.map((item) => item.entityId),
+    ].filter(Boolean),
+    success: true,
+    reason: "answered_from_company_brain_snapshot",
+    tone: "direct",
+  });
+}
+
+async function runCompanyBrainSearchPlan(pool, context, plan, toolsCalled = []) {
+  if (!plan.searchBusinessContext) return null;
+
+  toolsCalled.push("searchCompanyBrain");
+  const searchResult = await searchCompanyBrain(pool, context, {
+    queryTerms: plan.queryTerms,
+    candidateTypes: plan.candidateTypes,
+    requestedField: plan.requestedField,
+    requestedFields: requestedFieldsForPlan(plan),
+    limit: 8,
+  });
+  const candidates = rankBusinessCandidatesForPlan(plan, searchResult.candidates || []);
+  if (!candidates.length) return null;
+
+  const strongCandidate = strongBusinessCandidate(candidates);
+  if (strongCandidate && toolsCalled.length < AGENTIC_CONTEXT_MAX_STEPS) {
+    return answerBusinessCandidate(pool, context, plan, strongCandidate, toolsCalled);
+  }
+
+  return businessAmbiguousResult(plan, candidates, toolsCalled);
+}
+
 async function runBusinessSearchPlan(pool, context, plan, toolsCalled = []) {
   if (!plan.searchBusinessContext) return null;
+
+  const companyBrainResult = await runCompanyBrainSearchPlan(pool, context, plan, toolsCalled);
+  if (companyBrainResult) return companyBrainResult;
 
   toolsCalled.push("searchBusinessContext");
   let searchResult = await searchBusinessContext(pool, context, {
@@ -2988,7 +3101,16 @@ async function runBoundedContextAgent(pool, context, message, { recentMessages =
 
   const plan = detectRelationIntent(message);
   const businessPlan = planBusinessSearch(message);
+  const companyBrainPlan = planCompanyBrainLookup(message);
   if (businessPlan.intent === "identity") return identityResult(businessPlan);
+  if (companyBrainPlan.useSnapshot) {
+    const snapshotResult = await answerCompanyBrainSnapshot(pool, context, companyBrainPlan, []);
+    if (snapshotResult) return snapshotResult;
+  }
+  if (companyBrainPlan.searchCompanyBrain && !businessPlan.searchBusinessContext) {
+    const memorySearchResult = await runCompanyBrainSearchPlan(pool, context, companyBrainPlan, []);
+    if (memorySearchResult) return memorySearchResult;
+  }
   if (!isSupportedRelationIntent(plan.intent)) return runBusinessSearchPlan(pool, context, businessPlan, []);
   if (plan.confidence < 0.7 || !relationRef(plan)) {
     return await runBusinessSearchPlan(pool, context, businessPlan, []) || relationMissingRefResult(plan);

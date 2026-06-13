@@ -19,6 +19,24 @@ import {
 } from "./shipment-workflow-templates.js";
 import { requireOrganizationScope } from "../tenant-scope.js";
 import { withTransaction } from "../transaction.js";
+import { refreshCompanyBrainEntity } from "../ai/company-brain.js";
+
+async function refreshWorkflowBrainBestEffort(pool, organizationId, shipmentId, workflowItemId = "") {
+  if (!organizationId || !shipmentId) return;
+  try {
+    await refreshCompanyBrainEntity(pool, organizationId, "shipment", shipmentId);
+    if (workflowItemId) {
+      await refreshCompanyBrainEntity(pool, organizationId, "workflow_item", workflowItemId);
+    }
+  } catch (error) {
+    if (error?.code === "42P01" || error?.code === "42703") return;
+    console.warn("Company brain workflow refresh failed:", {
+      shipmentId,
+      workflowItemId,
+      message: error?.message || String(error),
+    });
+  }
+}
 
 function fallbackWorkflowDefinition() {
   return normalizeWorkflowDefinition({
@@ -461,7 +479,7 @@ export async function updateShipmentWorkflowCurrent(pool, {
   metadata = {},
 } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "updateShipmentWorkflowCurrent");
-  return withTransaction(pool, async (client) => {
+  const payload = await withTransaction(pool, async (client) => {
     let instance = await getInstance(client, shipmentId, scopedOrganizationId);
     if (customsRoute && !isValidIranImportRoute(customsRoute)) return { invalidRoute: true };
     if (!instance) {
@@ -642,6 +660,8 @@ export async function updateShipmentWorkflowCurrent(pool, {
     });
     return buildProgressPayload(client, shipmentId, scopedOrganizationId);
   });
+  await refreshWorkflowBrainBestEffort(pool, scopedOrganizationId, shipmentId);
+  return payload;
 }
 
 export async function addShipmentWorkflowBlocker(pool, {
@@ -655,7 +675,7 @@ export async function addShipmentWorkflowBlocker(pool, {
   metadata = {},
 } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "addShipmentWorkflowBlocker");
-  return withTransaction(pool, async (client) => {
+  const payload = await withTransaction(pool, async (client) => {
     if (!isValidIranImportBlockerCode(blockerCode)) return { invalidBlocker: true };
     let instance = await getInstance(client, shipmentId, scopedOrganizationId);
     if (!instance) {
@@ -717,6 +737,8 @@ export async function addShipmentWorkflowBlocker(pool, {
       progress: await buildProgressPayload(client, shipmentId, scopedOrganizationId),
     };
   });
+  await refreshWorkflowBrainBestEffort(pool, scopedOrganizationId, shipmentId, payload?.blocker?.id ? `blocker:${payload.blocker.id}` : "");
+  return payload;
 }
 
 export async function resolveShipmentWorkflowBlocker(pool, {
@@ -731,7 +753,7 @@ export async function resolveShipmentWorkflowBlocker(pool, {
   metadata = {},
 } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "resolveShipmentWorkflowBlocker");
-  return withTransaction(pool, async (client) => {
+  const payload = await withTransaction(pool, async (client) => {
     const instance = await getInstance(client, shipmentId, scopedOrganizationId);
     if (!instance) return null;
     const definition = await getWorkflowDefinitionForInstance(client, {
@@ -797,6 +819,8 @@ export async function resolveShipmentWorkflowBlocker(pool, {
       progress: await buildProgressPayload(client, shipmentId, scopedOrganizationId),
     };
   });
+  await refreshWorkflowBrainBestEffort(pool, scopedOrganizationId, shipmentId, payload?.blocker?.id ? `blocker:${payload.blocker.id}` : "");
+  return payload;
 }
 
 export async function getPublicWorkflowSummary(queryable, shipmentId) {

@@ -95,6 +95,8 @@ const STOP_WORDS = new Set([
   "شد",
   "شده",
   "داراست",
+  "دارم",
+  "داریم",
   "داره",
   "دارد",
   "در",
@@ -250,6 +252,57 @@ const IDENTITY_TERMS = [
   "خودت رو معرفی کن",
   "who are you",
   "what are you",
+];
+
+export const COMPANY_BRAIN_LOOKUP_INTENTS = {
+  SNAPSHOT: "company_brain.snapshot",
+  DAILY: "company_brain.daily",
+  LATEST: "company_brain.latest",
+  ENTITY_MEMORY: "company_brain.entity_memory",
+  NONE: "company_brain.none",
+};
+
+const COMPANY_BRAIN_STATUS_TERMS = [
+  "وضعیت کلی",
+  "نمای کلی",
+  "خلاصه شرکت",
+  "وضعیت شرکت",
+  "عملیات شرکت",
+  "در جریان",
+  "محموله های در جریان",
+  "محموله‌های در جریان",
+  "company status",
+  "operations snapshot",
+  "overview",
+];
+
+const COMPANY_BRAIN_DAILY_TERMS = [
+  "امروز چه اتفاقی",
+  "اتفاقات امروز",
+  "امروز چی شد",
+  "امروز چه خبر",
+  "today",
+  "what happened today",
+];
+
+const COMPANY_BRAIN_LATEST_TERMS = [
+  "آخرین بار ثبت شده",
+  "جدیدترین بار",
+  "آخرین محموله",
+  "آخرین پرونده",
+  "latest shipment",
+  "latest cargo",
+];
+
+const COMPANY_BRAIN_OPEN_ENDED_TERMS = [
+  "برای",
+  "درباره",
+  "در مورد",
+  "چی داریم",
+  "چه داریم",
+  "what do we have",
+  "about",
+  "for",
 ];
 
 function normalizeDigits(value = "") {
@@ -544,6 +597,114 @@ export function planBusinessSearch(message = "") {
     requestedField,
     requestedFields,
     confidence: queryTerms.length >= 2 ? 0.86 : hasBusinessCue ? 0.72 : 0.35,
+  };
+}
+
+export function planCompanyBrainLookup(message = "") {
+  const normalized = normalizeAgentText(message);
+  const language = hasPersian(message) ? "fa" : "en";
+  if (!normalized || isIdentityQuestion(message)) {
+    return {
+      intent: COMPANY_BRAIN_LOOKUP_INTENTS.NONE,
+      language,
+      checkCompanyBrain: false,
+      useSnapshot: false,
+      searchCompanyBrain: false,
+      memoryTypes: [],
+      queryTerms: [],
+      candidateTypes: [],
+      requestedField: BUSINESS_REQUESTED_FIELDS.SUMMARY,
+      requestedFields: [BUSINESS_REQUESTED_FIELDS.SUMMARY],
+      confidence: 0,
+    };
+  }
+
+  const businessPlan = planBusinessSearch(message);
+  const hasStatusQuestion = includesAny(normalized, COMPANY_BRAIN_STATUS_TERMS);
+  const hasTodayCue = includesAny(normalized, ["امروز", "today"]);
+  const hasDailyQuestion =
+    includesAny(normalized, COMPANY_BRAIN_DAILY_TERMS) ||
+    (hasTodayCue && (includesAny(normalized, WORKFLOW_TERMS) || includesAny(normalized, SHIPMENT_LIST_TERMS)));
+  const hasLatestQuestion = includesAny(normalized, COMPANY_BRAIN_LATEST_TERMS);
+  const hasOperationalListQuestion =
+    businessPlan.queryTerms.length === 0 &&
+    (
+      includesAny(normalized, SHIPMENT_LIST_TERMS) ||
+      includesAny(normalized, WORKFLOW_TERMS) ||
+      includesAny(normalized, CHEQUE_TERMS)
+    );
+  const hasOpenEndedEntityQuestion =
+    businessPlan.queryTerms.length > 0 &&
+    includesAny(normalized, COMPANY_BRAIN_OPEN_ENDED_TERMS) &&
+    !businessPlan.searchBusinessContext;
+
+  if (hasLatestQuestion) {
+    return {
+      ...businessPlan,
+      intent: COMPANY_BRAIN_LOOKUP_INTENTS.LATEST,
+      checkCompanyBrain: true,
+      useSnapshot: true,
+      searchCompanyBrain: false,
+      memoryTypes: ["operational_snapshot", "daily_summary", "company_summary"],
+      confidence: 0.88,
+    };
+  }
+
+  if (hasDailyQuestion) {
+    return {
+      ...businessPlan,
+      intent: COMPANY_BRAIN_LOOKUP_INTENTS.DAILY,
+      checkCompanyBrain: true,
+      useSnapshot: true,
+      searchCompanyBrain: false,
+      memoryTypes: ["daily_summary", "operational_snapshot"],
+      confidence: 0.9,
+    };
+  }
+
+  if (hasStatusQuestion || hasOperationalListQuestion) {
+    return {
+      ...businessPlan,
+      intent: COMPANY_BRAIN_LOOKUP_INTENTS.SNAPSHOT,
+      checkCompanyBrain: true,
+      useSnapshot: true,
+      searchCompanyBrain: false,
+      memoryTypes: ["operational_snapshot", "company_summary"],
+      confidence: 0.84,
+    };
+  }
+
+  if (businessPlan.searchBusinessContext || hasOpenEndedEntityQuestion) {
+    return {
+      ...businessPlan,
+      intent: COMPANY_BRAIN_LOOKUP_INTENTS.ENTITY_MEMORY,
+      checkCompanyBrain: true,
+      useSnapshot: false,
+      searchCompanyBrain: true,
+      memoryTypes: [],
+      searchBusinessContext: true,
+      candidateTypes: businessPlan.candidateTypes?.length
+        ? businessPlan.candidateTypes
+        : [
+          BUSINESS_ENTITY_TYPES.SHIPMENT,
+          BUSINESS_ENTITY_TYPES.CUSTOMER,
+          BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD,
+          BUSINESS_ENTITY_TYPES.DOCUMENT,
+          BUSINESS_ENTITY_TYPES.WORKFLOW_ITEM,
+          BUSINESS_ENTITY_TYPES.CHEQUE,
+        ],
+      confidence: Math.max(businessPlan.confidence || 0, hasOpenEndedEntityQuestion ? 0.74 : 0.7),
+    };
+  }
+
+  return {
+    ...businessPlan,
+    intent: COMPANY_BRAIN_LOOKUP_INTENTS.NONE,
+    checkCompanyBrain: false,
+    useSnapshot: false,
+    searchCompanyBrain: false,
+    memoryTypes: [],
+    confidence: 0,
   };
 }
 

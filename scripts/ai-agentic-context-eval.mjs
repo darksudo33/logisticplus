@@ -5,6 +5,7 @@ import {
   classifyResolutionState,
   detectRelationIntent,
   isIdentityQuestion,
+  planCompanyBrainLookup,
   planBusinessSearch,
   verifyRelationAnswerability,
 } from "../src/server/ai/ai-context-planner.js";
@@ -203,15 +204,52 @@ assert.equal(isIdentityQuestion("تو کی هستی"), true, "identity phrase sh
 assert.equal(identityPlan.intent, "identity", "identity query should use identity intent");
 assert.equal(identityPlan.searchBusinessContext, false, "identity query must not trigger business search");
 
+const companyBrainSnapshotCases = [
+  ["آخرین بار ثبت شده چیه؟", "company_brain.latest"],
+  ["امروز چه اتفاقی افتاده؟", "company_brain.daily"],
+  ["وضعیت کلی شرکت چیه؟", "company_brain.snapshot"],
+  ["چه وظایفی دارم امروز؟", "company_brain.daily"],
+  ["چه محموله‌هایی در جریان هستند؟", "company_brain.snapshot"],
+];
+for (const [message, expectedIntent] of companyBrainSnapshotCases) {
+  const plan = planCompanyBrainLookup(message);
+  assert.equal(plan.checkCompanyBrain, true, `${message} should check company brain`);
+  assert.equal(plan.useSnapshot, true, `${message} should use company brain snapshot`);
+  assert.equal(plan.intent, expectedIntent, `${message} company brain intent`);
+}
+
+const companyBrainEntityPlan = planCompanyBrainLookup("بار موتور برق مال کیه؟");
+assert.equal(companyBrainEntityPlan.checkCompanyBrain, true, "entity owner question should check company brain");
+assert.equal(companyBrainEntityPlan.searchCompanyBrain, true, "entity owner question should search entity memory");
+assert.ok(companyBrainEntityPlan.queryTerms.includes("موتور برق"), "entity memory search should keep the goods phrase");
+assert.ok(companyBrainEntityPlan.candidateTypes.includes("shipment"), "entity memory search should include shipments");
+assert.ok(companyBrainEntityPlan.candidateTypes.includes("customer"), "entity memory search should include customers for owner resolution");
+
+const openEndedCompanyBrainPlan = planCompanyBrainLookup("برای سنجری چی داریم؟");
+assert.equal(openEndedCompanyBrainPlan.searchCompanyBrain, true, "open-ended customer/company question should search company brain memory");
+assert.deepEqual(openEndedCompanyBrainPlan.queryTerms, ["سنجری"], "open-ended company brain search should use the real entity term");
+
+const exactStatusCompanyBrainPlan = planCompanyBrainLookup("وضعیت بار موتور برق چیه؟");
+assert.equal(exactStatusCompanyBrainPlan.searchCompanyBrain, true, "exact status entity question should search memory for candidates first");
+assert.ok(
+  exactStatusCompanyBrainPlan.requestedFields.includes(BUSINESS_REQUESTED_FIELDS.STATUS),
+  "exact status entity question should preserve status intent for live detail verification"
+);
+
+const identityCompanyBrainPlan = planCompanyBrainLookup("تو کی هستی");
+assert.equal(identityCompanyBrainPlan.checkCompanyBrain, false, "identity query must not call memory/search");
+
 const commandOnlyFollowUpPlan = planBusinessSearch("شماره تماس مشتری رو بده");
 assert.equal(commandOnlyFollowUpPlan.searchBusinessContext, false, "field-only command follow-up should not search for command words");
 assert.deepEqual(commandOnlyFollowUpPlan.queryTerms, [], "field-only command follow-up should not keep بده/رو as query terms");
 assert.equal(commandOnlyFollowUpPlan.requestedField, BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE, "field-only command follow-up should preserve phone intent");
+assert.equal(planCompanyBrainLookup("شماره تماس مشتری رو بده").checkCompanyBrain, false, "activeEntity-style field follow-up should not call memory/search");
 assert.equal(
   shouldUseActiveEntityForFollowUp("شماره تماس مشتری رو بده", { type: "customer", id: "customer-156", code: "156", label: "مشتری 156" }),
   true,
   "field-only phone follow-up should use the active selected customer"
 );
+assert.ok(!commandOnlyFollowUpPlan.queryTerms.includes("بده"), "business search term must not be command-only word بده");
 
 assert.equal(
   businessQueryDisplay({ queryTerms: ["موتور", "برق", "موتور برق"] }),
