@@ -63,6 +63,9 @@ Use this checklist before adding a new field to Hamyar. The goal is to add field
 
 - Add registry examples.
 - Run `node scripts/hamyar-generate-eval-cases.mjs`.
+- Add or update JSONL coverage rows in `data/hamyar/hamyar_logistic_question_dataset_v1.jsonl` when the field introduces new customer question wording.
+- Run `npm run hamyar:dataset:check`.
+- Run `npm run hamyar:dataset:eval`.
 - Add/verify assertions in `scripts/ai-agentic-context-eval.mjs` for:
 - intent
 - relation path
@@ -71,6 +74,11 @@ Use this checklist before adding a new field to Hamyar. The goal is to add field
 - Company Brain policy
 - live verification policy
 - command-word filtering
+
+Action-command note:
+- Rows with `future_write_action=yes` are preview-only in the dataset phase.
+- Do not implement direct write execution from dataset rows.
+- Future action support must go through a separate Action Registry flow with preview, permission validation, explicit confirmation, and audit.
 
 Release safety:
 - No migration is needed for registry-only additions.
