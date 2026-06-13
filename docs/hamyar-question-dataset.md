@@ -73,6 +73,7 @@ npm run hamyar:dataset:eval
 ```
 
 The eval runs every dataset question through the existing registry-backed planner/resolver without DB access and without LLM/provider calls.
+The optional Hamyar LLM adapter is default-off and is not used by this dataset eval; provider-specific behavior is covered only by mock-provider agentic evals.
 
 It writes:
 

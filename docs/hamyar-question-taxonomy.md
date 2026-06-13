@@ -2,6 +2,8 @@
 
 This taxonomy defines the main question groups Hamyar should understand. The registry is the machine-readable source; this document explains the workflow behavior for product and QA review.
 
+The optional Hamyar LLM provider adapter does not replace the registry. It may only suggest a registry-backed plan after deterministic routing fails, and validated output must still run through the existing tenant-scoped tools and live verification rules.
+
 ## 1. Identity / Capability
 
 Persian examples:

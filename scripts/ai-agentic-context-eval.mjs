@@ -29,7 +29,22 @@ import {
   resolveBusinessCandidateSelection,
   shouldUseActiveEntityForFollowUp,
 } from "../src/server/ai/ai-orchestrator.js";
-import { llmProviderStatus } from "../src/server/ai/llm-provider.js";
+import {
+  hamyarLlmPublicStatus,
+  parseHamyarLlmConfig,
+} from "../src/server/ai/hamyar-llm-config.js";
+import {
+  createDisabledLlmProvider,
+} from "../src/server/ai/hamyar-llm-provider.js";
+import {
+  businessPlanFromValidatedHamyarLlmPlan,
+  suggestHamyarLlmPlan,
+  validateHamyarLlmPlan,
+} from "../src/server/ai/hamyar-llm-planner.js";
+import {
+  polishHamyarAnswer,
+  validatePolishedHamyarAnswer,
+} from "../src/server/ai/hamyar-llm-answer-polisher.js";
 
 const intentCases = [
   ["بار X اسم مشتریش چیه؟", RELATION_INTENTS.SHIPMENT_CUSTOMER_LOOKUP, "X"],
@@ -569,9 +584,197 @@ assert.ok(optionFollowUpPlan, "option follow-up should rebuild a business plan f
 assert.deepEqual(optionFollowUpPlan.queryTerms, ["14051102036"], "option follow-up should search the selected candidate code only");
 assert.equal(optionFollowUpPlan.candidateTypes[0], "shipment", "option follow-up should preserve the selected candidate type first");
 
-const oldKey = process.env.LLM_API_KEY;
-delete process.env.LLM_API_KEY;
-assert.equal(llmProviderStatus().configured, false, "LLM_API_KEY unset should keep provider optional");
-if (oldKey !== undefined) process.env.LLM_API_KEY = oldKey;
+function mockJsonProvider(json, { ok = true, errorCode = "" } = {}) {
+  const calls = { json: 0, text: 0 };
+  return {
+    calls: () => ({ ...calls, total: calls.json + calls.text }),
+    isEnabled: () => true,
+    status: () => ({ enabled: true, configured: true, provider: "mock", model: "mock-model" }),
+    callJson: async () => {
+      calls.json += 1;
+      if (!ok) {
+        return { ok: false, json: null, text: "", latencyMs: 3, errorCode, safeError: errorCode };
+      }
+      return { ok: true, json, text: JSON.stringify(json), latencyMs: 3, errorCode: "", safeError: "" };
+    },
+    callText: async () => {
+      calls.text += 1;
+      return { ok: true, json: null, text: "", latencyMs: 3, errorCode: "", safeError: "" };
+    },
+  };
+}
+
+function mockTextProvider(text, { ok = true, errorCode = "" } = {}) {
+  const calls = { json: 0, text: 0 };
+  return {
+    calls: () => ({ ...calls, total: calls.json + calls.text }),
+    isEnabled: () => true,
+    status: () => ({ enabled: true, configured: true, provider: "mock", model: "mock-model" }),
+    callJson: async () => {
+      calls.json += 1;
+      return { ok: true, json: {}, text: "{}", latencyMs: 3, errorCode: "", safeError: "" };
+    },
+    callText: async () => {
+      calls.text += 1;
+      if (!ok) {
+        return { ok: false, json: null, text: "", latencyMs: 3, errorCode, safeError: errorCode };
+      }
+      return { ok: true, json: null, text, latencyMs: 3, errorCode: "", safeError: "" };
+    },
+  };
+}
+
+function disabledCountingProvider(reason = "hamyar_llm_disabled") {
+  const disabled = createDisabledLlmProvider(reason);
+  const calls = { json: 0, text: 0 };
+  return {
+    ...disabled,
+    calls: () => ({ ...calls, total: calls.json + calls.text }),
+    callJson: async (...args) => {
+      calls.json += 1;
+      return disabled.callJson(...args);
+    },
+    callText: async (...args) => {
+      calls.text += 1;
+      return disabled.callText(...args);
+    },
+  };
+}
+
+const disabledHamyarConfig = parseHamyarLlmConfig({});
+assert.equal(disabledHamyarConfig.enabled, false, "Hamyar LLM must be disabled by default");
+assert.equal(disabledHamyarConfig.configured, false, "Hamyar LLM default config must not be treated as configured");
+assert.equal(hamyarLlmPublicStatus({}).apiKeyConfigured, false, "public Hamyar LLM status must not imply a key by default");
+
+const missingHamyarConfig = parseHamyarLlmConfig({ HAMYAR_LLM_ENABLED: "true" });
+assert.equal(missingHamyarConfig.enabled, false, "enabled Hamyar LLM with missing config should fail closed");
+assert.match(missingHamyarConfig.disabledReason, /HAMYAR_LLM_PROVIDER/, "missing Hamyar LLM config should name missing keys");
+
+const configuredHamyarEnv = {
+  HAMYAR_LLM_ENABLED: "true",
+  HAMYAR_LLM_PROVIDER: "openai-compatible",
+  HAMYAR_LLM_BASE_URL: "https://llm.example.invalid",
+  HAMYAR_LLM_API_KEY: "placeholder",
+  HAMYAR_LLM_MODEL: "mock-model",
+};
+const configuredHamyarStatus = hamyarLlmPublicStatus(configuredHamyarEnv);
+assert.equal(configuredHamyarStatus.enabled, true, "complete Hamyar LLM config should enable the adapter");
+assert.equal(configuredHamyarStatus.apiKeyConfigured, true, "public Hamyar LLM status should expose key presence only");
+assert.equal(Object.hasOwn(configuredHamyarStatus, "apiKey"), false, "public Hamyar LLM status must not expose key material");
+
+const disabledPlannerProvider = disabledCountingProvider();
+const disabledPlannerSuggestion = await suggestHamyarLlmPlan({
+  message: "phone for Sanjari",
+  deterministicPlan: { intent: "unknown", confidence: 0 },
+  provider: disabledPlannerProvider,
+});
+assert.equal(disabledPlannerSuggestion.ok, false, "disabled Hamyar LLM planner should return no suggestion");
+assert.equal(disabledPlannerSuggestion.providerCalled, false, "disabled Hamyar LLM planner must not call the provider");
+assert.equal(disabledPlannerProvider.calls().total, 0, "disabled Hamyar LLM planner provider must have zero calls");
+
+const validHamyarLlmPlan = {
+  intent: "customer.contact.lookup",
+  confidence: 0.86,
+  primaryEntity: { type: "customer", value: "Sanjari", source: "user_message" },
+  relationPath: "customer -> contact",
+  requestedField: "phone",
+  requiresLiveVerification: true,
+  usesCompanyBrain: true,
+  answerPolicy: "deterministic_tools_only",
+  safetyFlags: [],
+};
+const validPlannerProvider = mockJsonProvider(validHamyarLlmPlan);
+const validPlannerSuggestion = await suggestHamyarLlmPlan({
+  message: "phone for Sanjari",
+  deterministicPlan: { intent: "unknown", confidence: 0 },
+  provider: validPlannerProvider,
+});
+assert.equal(validPlannerProvider.calls().json, 1, "enabled mock planner should be called once");
+assert.equal(validPlannerSuggestion.ok, true, "valid Hamyar LLM planner JSON should pass validation");
+assert.equal(validPlannerSuggestion.plan.intent, "customer.contact.lookup", "valid Hamyar LLM planner should preserve the registry intent");
+const staticBusinessPlan = businessPlanFromValidatedHamyarLlmPlan(validPlannerSuggestion.plan, {});
+assert.equal(staticBusinessPlan.registryIntent, "customer.contact.lookup", "validated Hamyar LLM plan should map back to registry intent");
+assert.deepEqual(staticBusinessPlan.queryTerms, ["Sanjari"], "validated Hamyar LLM plan should only supply search terms");
+assert.equal(staticBusinessPlan.searchBusinessContext, true, "validated Hamyar LLM plan should require existing business search");
+assert.equal(staticBusinessPlan.hamyarLlm.llmUsed, true, "validated Hamyar LLM business plan should mark planner usage");
+
+const invalidPlannerProvider = mockJsonProvider(null);
+const invalidPlannerSuggestion = await suggestHamyarLlmPlan({
+  message: "phone for Sanjari",
+  deterministicPlan: { intent: "unknown", confidence: 0 },
+  provider: invalidPlannerProvider,
+});
+assert.equal(invalidPlannerSuggestion.ok, false, "invalid Hamyar LLM planner JSON should fail closed");
+assert.equal(invalidPlannerSuggestion.reason, "schema_mismatch", "invalid Hamyar LLM planner JSON should expose schema mismatch");
+
+const documentValidation = validateHamyarLlmPlan({
+  intent: "document.lookup",
+  confidence: 0.8,
+  primaryEntity: { type: "shipment", value: "14051102036", source: "user_message" },
+  relationPath: "shipment -> documents",
+  requestedField: "documents",
+});
+assert.equal(documentValidation.ok, false, "Hamyar LLM document lookup plans must be deferred");
+assert.equal(documentValidation.reason, "document_lookup_deferred", "document lookup should use deferred reason");
+
+const unsafeSqlValidation = validateHamyarLlmPlan({
+  ...validHamyarLlmPlan,
+  answerPolicy: "SELECT * FROM shipments",
+});
+assert.equal(unsafeSqlValidation.ok, false, "Hamyar LLM planner must reject SQL-like output");
+assert.equal(unsafeSqlValidation.reason, "unsafe_generated_content", "SQL-like output should be rejected as unsafe");
+
+const writeActionValidation = validateHamyarLlmPlan({
+  intent: "action.proposed.requires_confirmation",
+  confidence: 0.8,
+  answerPolicy: "preview write action only",
+});
+assert.equal(writeActionValidation.ok, false, "Hamyar LLM write/action plans must not be executable");
+assert.equal(writeActionValidation.reason, "future_action_preview_only", "write/action plans should be preview-only");
+assert.equal(writeActionValidation.previewOnly, true, "write/action plans should be marked preview-only");
+
+const exactRouteProvider = mockJsonProvider(validHamyarLlmPlan);
+const exactRouteSuggestion = await suggestHamyarLlmPlan({
+  message: "status for shipment 14051102036",
+  deterministicPlan: {
+    intent: "shipment.status.lookup",
+    confidence: 0.95,
+    entities: { shipmentRef: "14051102036" },
+  },
+  provider: exactRouteProvider,
+});
+assert.equal(exactRouteSuggestion.ok, false, "exact deterministic routes should win over Hamyar LLM");
+assert.equal(exactRouteSuggestion.providerCalled, false, "exact deterministic routes must not call Hamyar LLM");
+assert.equal(exactRouteProvider.calls().total, 0, "exact deterministic route provider should have zero calls");
+
+const deterministicAnswer = "No contact phone is registered.";
+const hallucinatedPhoneValidation = validatePolishedHamyarAnswer({
+  deterministicAnswer,
+  polishedAnswer: "Call 09123456789.",
+});
+assert.equal(hallucinatedPhoneValidation.ok, false, "Hamyar LLM polish must reject introduced phone values");
+assert.ok(
+  ["introduced_numeric_identifier", "introduced_phone_like_value"].includes(hallucinatedPhoneValidation.reason),
+  "introduced phone should be rejected as a new identifier or phone value"
+);
+
+const disabledPolishProvider = disabledCountingProvider();
+const disabledPolish = await polishHamyarAnswer({
+  deterministicAnswer,
+  provider: disabledPolishProvider,
+});
+assert.equal(disabledPolish.answer, deterministicAnswer, "disabled Hamyar LLM polish should keep deterministic answer");
+assert.equal(disabledPolish.llmUsed, false, "disabled Hamyar LLM polish should not mark LLM usage");
+assert.equal(disabledPolishProvider.calls().total, 0, "disabled Hamyar LLM polish must not call the provider");
+
+const hallucinatingPolishProvider = mockTextProvider("Call 09123456789.");
+const hallucinatingPolish = await polishHamyarAnswer({
+  deterministicAnswer,
+  provider: hallucinatingPolishProvider,
+});
+assert.equal(hallucinatingPolish.answer, deterministicAnswer, "unsafe Hamyar LLM polish should fall back to deterministic answer");
+assert.equal(hallucinatingPolish.llmUsed, false, "unsafe Hamyar LLM polish should not mark LLM usage");
+assert.equal(hallucinatingPolish.llmMode, "fallback", "unsafe Hamyar LLM polish should be a fallback");
+assert.equal(hallucinatingPolishProvider.calls().text, 1, "enabled mock polisher should be called once");
 
 console.log("AI agentic context eval passed.");

@@ -1,4 +1,8 @@
-import { callLlmProvider, llmProviderStatus } from "./llm-provider.js";
+import { polishHamyarAnswer } from "./hamyar-llm-answer-polisher.js";
+import {
+  businessPlanFromValidatedHamyarLlmPlan,
+  suggestHamyarLlmPlan,
+} from "./hamyar-llm-planner.js";
 import {
   getActiveEmployeeCount,
   getActiveShipmentCountsByStatus,
@@ -1710,6 +1714,7 @@ function relationResult({
       needsCompanyBrain: Boolean(plan?.needsCompanyBrain || plan?.hamyarPlan?.needsCompanyBrain),
       needsLiveVerification: Boolean(plan?.needsLiveVerification || plan?.hamyarPlan?.needsLiveVerification),
       liveTool: plan?.liveTool || plan?.hamyarPlan?.liveTool || "",
+      hamyarLlm: plan?.hamyarLlm || null,
       confidence: plan?.confidence || 0,
     },
   };
@@ -2871,6 +2876,45 @@ async function runBusinessSearchPlan(pool, context, plan, toolsCalled = []) {
   return businessAmbiguousResult(plan, candidates, toolsCalled);
 }
 
+function shouldAskHamyarLlmPlanner(relationPlan = {}, businessPlan = {}) {
+  if (businessPlan.intent === "identity") return false;
+  if (businessPlan.searchBusinessContext && businessPlan.queryTerms.length) return false;
+  if (relationPlan.intent && relationPlan.confidence >= 0.7 && relationRef(relationPlan)) return false;
+  if (businessPlan.hamyarPlan?.intent && businessPlan.hamyarPlan.confidence >= 0.7) return false;
+  return true;
+}
+
+async function maybeApplyHamyarLlmBusinessPlan(message = "", { relationPlan = {}, businessPlan = {}, recentMessages = [] } = {}) {
+  if (!shouldAskHamyarLlmPlanner(relationPlan, businessPlan)) return businessPlan;
+  const suggestion = await suggestHamyarLlmPlan({
+    message,
+    conversationContext: {
+      recentMessageCount: Array.isArray(recentMessages) ? recentMessages.length : 0,
+      hasActiveBusinessPlan: Boolean(businessPlan.registryIntent || businessPlan.hamyarPlan?.intent),
+    },
+    deterministicPlan: relationPlan.intent ? relationPlan : businessPlan,
+  });
+  if (!suggestion.ok) {
+    return {
+      ...businessPlan,
+      hamyarLlm: {
+        llmUsed: false,
+        llmMode: suggestion.providerCalled ? "fallback" : "disabled",
+        llmRejectedReason: suggestion.reason || "hamyar_llm_not_used",
+        providerLatencyMs: suggestion.providerLatencyMs || 0,
+      },
+    };
+  }
+  const llmBusinessPlan = businessPlanFromValidatedHamyarLlmPlan(suggestion.plan, businessPlan);
+  return {
+    ...llmBusinessPlan,
+    hamyarLlm: {
+      ...(llmBusinessPlan.hamyarLlm || {}),
+      providerLatencyMs: suggestion.providerLatencyMs || 0,
+    },
+  };
+}
+
 export function extractAmbiguitySelection(message = "") {
   const normalized = normalizeAiLookupCode(message)
     .replace(/[^\p{L}\p{N}\s_-]/gu, " ")
@@ -3202,8 +3246,9 @@ async function runBoundedContextAgent(pool, context, message, { recentMessages =
   }
 
   const plan = detectRelationIntent(message);
-  const businessPlan = planBusinessSearch(message);
+  let businessPlan = planBusinessSearch(message);
   const companyBrainPlan = planCompanyBrainLookup(message);
+  businessPlan = await maybeApplyHamyarLlmBusinessPlan(message, { relationPlan: plan, businessPlan, recentMessages });
   if (businessPlan.intent === "identity") return identityResult(businessPlan);
   if (companyBrainPlan.useSnapshot) {
     const snapshotResult = await answerCompanyBrainSnapshot(pool, context, companyBrainPlan, []);
@@ -3301,30 +3346,16 @@ async function runBoundedContextAgent(pool, context, message, { recentMessages =
   });
 }
 
-async function maybePolishAnswer({ deterministicAnswer, queryType, tone }) {
-  if (!llmProviderStatus().configured) return deterministicAnswer;
-  const providerResult = await callLlmProvider({
-    strength: "fast",
-    messages: [
-      {
-        role: "system",
-        content:
-          "You are LogisticPlus assistant. Rewrite the provided Persian logistics answer professionally and concisely. Keep it short, conversational, and no longer than necessary. Do not create a report unless the input is already a summary/report. Do not add facts, SQL, IDs, secrets, or data not present in the provided answer.",
-      },
-      {
-        role: "user",
-        content: JSON.stringify({ queryType, tone, deterministicAnswer }),
-      },
-    ],
+async function maybePolishAnswer({ deterministicAnswer, queryType, tone, question = "", unsupported = false, deferred = false }) {
+  const result = await polishHamyarAnswer({
+    originalQuestion: question,
+    deterministicAnswer,
+    capability: queryType,
+    facts: [queryType, tone],
+    unsupported,
+    deferred,
   });
-  if (!providerResult.ok) return deterministicAnswer;
-  const deterministicLines = String(deterministicAnswer || "").split(/\r?\n/).length;
-  const providerLines = String(providerResult.answer || "").split(/\r?\n/).length;
-  const maxLines = Math.max(4, deterministicLines + 1);
-  if (providerResult.answer.length > deterministicAnswer.length + 120 || providerLines > maxLines) {
-    return deterministicAnswer;
-  }
-  return providerResult.answer;
+  return result.answer;
 }
 
 function clarificationResult({ toolsCalled = [], queryType = "none" } = {}) {
