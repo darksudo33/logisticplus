@@ -486,3 +486,18 @@ Answer behavior:
 
 Missing-data behavior:
 - Ask the user to send option number or exact code again.
+
+## Dataset Coverage Artifact
+
+The canonical question-pattern artifact is stored at:
+
+- `data/hamyar/hamyar_logistic_question_dataset_v1.jsonl`
+
+Use it for planner/eval/training coverage, not as a runtime replacement for the Capability Registry.
+
+Canonical checks:
+
+- `npm run hamyar:dataset:check`
+- `npm run hamyar:dataset:eval`
+
+Rows with `future_write_action=yes` are preview-only in this phase. They must not execute writes directly and must require explicit confirmation in any future Action Registry implementation.

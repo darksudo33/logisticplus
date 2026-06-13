@@ -13,6 +13,12 @@ import {
   HAMYAR_CAPABILITY_REGISTRY,
   registryToEvalCases,
 } from "../src/server/ai/hamyar-capability-registry.js";
+import {
+  HAMYAR_QUESTION_DATASET_DEFAULT_PATH,
+  loadHamyarQuestionDataset,
+  summarizeHamyarQuestionDataset,
+  validateHamyarQuestionDataset,
+} from "../src/server/ai/hamyar-question-dataset.js";
 import { resolveHamyarQuestionPlan } from "../src/server/ai/hamyar-relation-resolver.js";
 import {
   businessQueryDisplay,
@@ -277,6 +283,21 @@ for (const testCase of hamyarCases) {
     assert.ok(!plan.queryTerms.includes("give"), `${testCase.question} should not keep English command words`);
     assert.ok(!plan.queryTerms.includes("send"), `${testCase.question} should not keep English command words`);
   }
+}
+
+const hamyarDatasetRows = await loadHamyarQuestionDataset(HAMYAR_QUESTION_DATASET_DEFAULT_PATH);
+const hamyarDatasetValidation = validateHamyarQuestionDataset(hamyarDatasetRows);
+assert.equal(
+  hamyarDatasetValidation.ok,
+  true,
+  `Hamyar question dataset should validate: ${hamyarDatasetValidation.errors.slice(0, 3).map((error) => error.message).join("; ")}`
+);
+const hamyarDatasetSummary = summarizeHamyarQuestionDataset(hamyarDatasetRows);
+assert.ok(hamyarDatasetSummary.totalRows > 0, "Hamyar question dataset should contain rows");
+assert.ok(hamyarDatasetSummary.totalIntents >= 20, "Hamyar question dataset should cover broad intent groups");
+for (const row of hamyarDatasetRows.filter((candidate) => candidate.priority === "P0").slice(0, 20)) {
+  const plan = resolveHamyarQuestionPlan(row.question);
+  assert.equal(plan.source, "hamyar_capability_registry_v1", `${row.id} should use the registry-backed planner`);
 }
 
 assert.equal(

@@ -39,6 +39,8 @@
     "smoke:production-config": "tsx scripts/smoke-production-config.ts",
     "smoke:staging": "tsx scripts/validate-liara-staging.ts",
     "safety:check": "node scripts/safety-check.mjs",
+    "hamyar:dataset:check": "node scripts/hamyar-dataset-check.mjs",
+    "hamyar:dataset:eval": "node scripts/hamyar-dataset-registry-eval.mjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "deploy": "liara deploy",
