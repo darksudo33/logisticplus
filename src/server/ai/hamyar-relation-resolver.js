@@ -69,6 +69,14 @@ const QUESTION_STOP_WORDS = new Set([
   "همون",
   "همونو",
   "اولی",
+  "دومی",
+  "سومی",
+  "یکی",
+  "باز",
+  "کن",
+  "me",
+  "show",
+  "one",
 ]);
 
 const COLLECTION_INTENTS = new Set([
@@ -164,6 +172,10 @@ function isCommandOrStopToken(token = "") {
 function relationHasEntity(relationPath = [], entityType = "") {
   if (!entityType) return false;
   return relationPath.some((part) => part === entityType || (entityType === "customer" && part === "contact"));
+}
+
+function normalizedIncludesAny(normalized = "", terms = []) {
+  return terms.some((term) => normalized.includes(normalizeHamyarText(term)));
 }
 
 function explicitEntityHints(normalized) {
@@ -351,6 +363,220 @@ function fallbackFor(intentId, definition = {}, ref = "", fromActiveEntity = fal
   return ref || fromActiveEntity ? "current_planner_fallback" : "ask_clarification";
 }
 
+function buildResolvedPlan(question = "", intentId = "", definition = {}, confidence = 0, activeEntity = null, options = {}) {
+  const reference = options.reference || extractReference(question, definition, activeEntity);
+  const ref = reference.ref || "";
+  const fromActiveEntity = Boolean(reference.fromActiveEntity);
+  const primaryEntity = buildPrimaryEntity(definition, ref, activeEntity, fromActiveEntity);
+  const queryTerms = Array.isArray(options.queryTerms) ? options.queryTerms : queryTermsFor(question, ref);
+  const preferredEntityTypes = unique(definition.preferredEntityTypes || []);
+  const requestedField = options.requestedField || definition.requestedField;
+  const requestedFields = unique(options.requestedFields || [requestedField]);
+
+  return {
+    intent: intentId,
+    legacyIntent: options.legacyIntent ?? definition.legacyIntent ?? "",
+    language: hasPersian(question) ? "fa" : "en",
+    confidence,
+    primaryEntity,
+    relationPath: [...(options.relationPath || definition.relationPath || [])],
+    requestedField,
+    requestedFields,
+    preferredEntityTypes,
+    candidateTypes: preferredEntityTypes,
+    queryTerms,
+    alternateQueryTerms: [],
+    entities: relationRefEntities(definition, ref),
+    needsEntityResolution: options.needsEntityResolution ?? needsEntityResolution(intentId, definition, ref, fromActiveEntity),
+    needsCompanyBrain: options.needsCompanyBrain ?? Boolean(definition.needsCompanyBrain),
+    needsLiveVerification: options.needsLiveVerification ?? Boolean(definition.needsLiveVerification),
+    liveTool: options.liveTool ?? definition.liveTool ?? "",
+    memoryPolicy: definition.memoryPolicy,
+    freshness: definition.freshness,
+    answerTemplate: definition.answerTemplate || "",
+    missingTemplate: definition.missingTemplate || "",
+    fallback: options.fallback || fallbackFor(intentId, definition, ref, fromActiveEntity),
+    source: "hamyar_capability_registry_v1",
+  };
+}
+
+function selectionFollowUpIntent(normalized = "") {
+  if (!normalized) return "";
+  if (/^\d+$/.test(normalized)) return "ambiguity.selection.reply";
+  if (
+    /^(اول|اولی|یک|دوم|دومی|دو|سوم|سومی|سه|چهارم|چهار|پنجم|پنج|first|second|third|fourth|fifth)$/u.test(normalized)
+  ) {
+    return "ambiguity.selection.reply";
+  }
+  if (
+    /^(گزینه|مورد)\s+(\d+|اول|اولی|یک|دوم|دومی|دو|سوم|سومی|سه|چهارم|چهار|پنجم|پنج|first|second|third|fourth|fifth)$/u.test(normalized)
+  ) {
+    return "ambiguity.selection.reply";
+  }
+  if (/^به\s+[\p{L}\p{N}_-]+$/u.test(normalized)) return "ambiguity.selection.reply";
+  if (
+    normalizedIncludesAny(normalized, [
+      "همین مورد",
+      "همون مورد",
+      "همونو",
+      "اون یکی",
+      "show me the first one",
+      "show me first one",
+    ])
+  ) {
+    return "ambiguity.selection.reply";
+  }
+  return "";
+}
+
+function buildSelectionFollowUpPlan(question = "", normalized = "") {
+  const intentId = selectionFollowUpIntent(normalized);
+  const definition = intentId ? getHamyarIntent(intentId) : null;
+  if (!definition) return null;
+  return buildResolvedPlan(question, intentId, definition, 0.96, null, {
+    queryTerms: [],
+    needsEntityResolution: false,
+    needsLiveVerification: true,
+    fallback: definition.fallback || "resolve_pending_selection",
+  });
+}
+
+function activeFollowUpIntent(normalized = "", activeEntity = null) {
+  const activeType = activeEntityType(activeEntity);
+  if (!activeType) return null;
+
+  const asksShipmentNumber = normalizedIncludesAny(normalized, [
+    "شماره بار",
+    "شماره محموله",
+    "شماره پرونده",
+    "کد بار",
+    "کد محموله",
+    "shipment number",
+  ]);
+  const asksContact = normalizedIncludesAny(normalized, [
+    "شماره",
+    "شماره اش",
+    "شماره‌اش",
+    "شماره ش",
+    "شماره‌ش",
+    "شماره تماس",
+    "تماسش",
+    "تلفنش",
+    "موبایلش",
+    "تلفن",
+    "موبایل",
+    "تماس",
+    "phone",
+    "mobile",
+    "contact",
+  ]);
+  const asksStatus = normalizedIncludesAny(normalized, [
+    "وضعیت",
+    "وضعیتش",
+    "در چه حال",
+    "کجاست",
+    "کجاس",
+    "چی شد",
+    "status",
+    "where",
+  ]);
+  const asksCustomerOwner = normalizedIncludesAny(normalized, [
+    "مشتریش",
+    "مشتری",
+    "صاحبش",
+    "صاحب",
+    "مالک",
+    "مال کی",
+    "برای کی",
+    "customer",
+    "owner",
+    "who",
+  ]);
+  const asksShipments = normalizedIncludesAny(normalized, [
+    "بارهاش",
+    "بار هاش",
+    "بارهایش",
+    "محموله‌هاش",
+    "محموله هاش",
+    "محموله‌هایش",
+    "پرونده‌هاش",
+    "پرونده هاش",
+    "shipments",
+  ]);
+  const asksCommercialCard = normalizedIncludesAny(normalized, [
+    "کارت بازرگانی",
+    "کارتش",
+    "commercial card",
+  ]);
+  const asksTasks = normalizedIncludesAny(normalized, [
+    "وظایف",
+    "وظیفه",
+    "وظایفش",
+    "تسک",
+    "تسکش",
+    "کارهاش",
+    "tasks",
+  ]);
+  const asksCheques = normalizedIncludesAny(normalized, ["چک", "چک‌هاش", "چک هاش", "cheque", "check"]);
+  const asksActivity = normalizedIncludesAny(normalized, [
+    "آخرین فعالیت",
+    "فعالیتش",
+    "آخرین تغییر",
+    "تاریخچه",
+    "activity",
+    "history",
+  ]);
+  const asksDocuments = normalizedIncludesAny(normalized, ["سند", "اسناد", "مدارک", "document", "file"]);
+  if (asksDocuments) return null;
+
+  if (activeType === "shipment") {
+    if (asksContact && !asksShipmentNumber) return { intentId: "shipment.customer.phone.lookup" };
+    if (asksCustomerOwner) return { intentId: "shipment.customer.lookup" };
+    if (asksStatus) return { intentId: "shipment.status.lookup" };
+    if (asksCommercialCard) return { intentId: "shipment.commercial_card.lookup" };
+    if (asksTasks) return { intentId: "shipment.tasks.lookup" };
+    if (asksActivity) return { intentId: "shipment.activity.lookup" };
+    return null;
+  }
+
+  if (activeType === "customer") {
+    if (asksShipmentNumber) return null;
+    if (asksContact) return { intentId: "customer.contact.lookup" };
+    if (asksShipments) return { intentId: "customer.shipments.lookup" };
+    if (asksStatus) return { intentId: "customer.lookup", requestedField: "status", requestedFields: ["status"] };
+    if (asksCustomerOwner) return { intentId: "customer.lookup" };
+    if (asksTasks) return { intentId: "customer.tasks.lookup" };
+    if (asksCheques) return { intentId: "cheque.customer.lookup" };
+    if (asksActivity) return { intentId: "customer.activity.lookup" };
+    return null;
+  }
+
+  return null;
+}
+
+function isActiveDocumentFollowUp(normalized = "", activeEntity = null) {
+  return Boolean(
+    activeEntityType(activeEntity) &&
+    normalizedIncludesAny(normalized, ["سند", "اسناد", "مدارک", "document", "file"])
+  );
+}
+
+function buildActiveFollowUpPlan(question = "", normalized = "", activeEntity = null) {
+  const activeMatch = activeFollowUpIntent(normalized, activeEntity);
+  if (!activeMatch?.intentId) return null;
+  const definition = getHamyarIntent(activeMatch.intentId);
+  if (!definition) return null;
+  const ref = activeEntityReference(activeEntity);
+  if (!ref) return null;
+  return buildResolvedPlan(question, activeMatch.intentId, definition, 0.94, activeEntity, {
+    reference: { ref, fromActiveEntity: true },
+    queryTerms: [],
+    requestedField: activeMatch.requestedField,
+    requestedFields: activeMatch.requestedFields,
+    needsLiveVerification: true,
+  });
+}
+
 function emptyPlan(question = "") {
   const language = hasPersian(question) ? "fa" : question ? "en" : "unknown";
   return {
@@ -381,40 +607,17 @@ export function resolveHamyarQuestionPlan(question = "", context = {}, activeEnt
   const normalized = normalizeHamyarText(question);
   if (!normalized) return emptyPlan(question);
 
+  const selectionFollowUpPlan = buildSelectionFollowUpPlan(question, normalized);
+  if (selectionFollowUpPlan) return selectionFollowUpPlan;
+
+  const activeFollowUpPlan = buildActiveFollowUpPlan(question, normalized, activeEntity);
+  if (activeFollowUpPlan) return activeFollowUpPlan;
+  if (isActiveDocumentFollowUp(normalized, activeEntity)) return emptyPlan(question);
+
   const { id: intentId, definition, confidence } = chooseIntent(normalized, activeEntity);
   if (!intentId || !definition) return emptyPlan(question);
 
-  const { ref, fromActiveEntity } = extractReference(question, definition, activeEntity);
-  const primaryEntity = buildPrimaryEntity(definition, ref, activeEntity, fromActiveEntity);
-  const queryTerms = queryTermsFor(question, ref);
-  const preferredEntityTypes = unique(definition.preferredEntityTypes || []);
-  const requestedFields = unique([definition.requestedField]);
-
-  return {
-    intent: intentId,
-    legacyIntent: definition.legacyIntent || "",
-    language: hasPersian(question) ? "fa" : "en",
-    confidence,
-    primaryEntity,
-    relationPath: [...(definition.relationPath || [])],
-    requestedField: definition.requestedField,
-    requestedFields,
-    preferredEntityTypes,
-    candidateTypes: preferredEntityTypes,
-    queryTerms,
-    alternateQueryTerms: [],
-    entities: relationRefEntities(definition, ref),
-    needsEntityResolution: needsEntityResolution(intentId, definition, ref, fromActiveEntity),
-    needsCompanyBrain: Boolean(definition.needsCompanyBrain),
-    needsLiveVerification: Boolean(definition.needsLiveVerification),
-    liveTool: definition.liveTool || "",
-    memoryPolicy: definition.memoryPolicy,
-    freshness: definition.freshness,
-    answerTemplate: definition.answerTemplate || "",
-    missingTemplate: definition.missingTemplate || "",
-    fallback: fallbackFor(intentId, definition, ref, fromActiveEntity),
-    source: "hamyar_capability_registry_v1",
-  };
+  return buildResolvedPlan(question, intentId, definition, confidence, activeEntity);
 }
 
 export function hamyarIntentFieldPolicy(intentId) {

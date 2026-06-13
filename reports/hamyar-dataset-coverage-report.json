@@ -1,9 +1,9 @@
 {
-  "generatedAt": "2026-06-13T10:43:53.430Z",
-  "datasetPath": "C:\\Users\\Ahmadreza\\Documents\\logisticplus-hamyar-contact-followup-gaps\\data\\hamyar\\hamyar_logistic_question_dataset_v1.jsonl",
+  "generatedAt": "2026-06-13T13:23:15.024Z",
+  "datasetPath": "C:\\Users\\Ahmadreza\\Documents\\logisticplus-hamyar-broader-followup\\data\\hamyar\\hamyar_logistic_question_dataset_v1.jsonl",
   "totalRows": 758,
-  "passCount": 337,
-  "softGapCount": 421,
+  "passCount": 344,
+  "softGapCount": 414,
   "hardFailureCount": 0,
   "datasetSummary": {
     "totalRows": 758,
@@ -171,14 +171,14 @@
     },
     "conversation.followup.resolve": {
       "total": 23,
-      "pass": 7,
-      "soft_gap": 16,
+      "pass": 22,
+      "soft_gap": 1,
       "hard_fail": 0
     },
     "customer.contact.lookup": {
       "total": 55,
-      "pass": 52,
-      "soft_gap": 3,
+      "pass": 53,
+      "soft_gap": 2,
       "hard_fail": 0
     },
     "customer.profile.lookup": {
@@ -189,8 +189,8 @@
     },
     "customer.shipments.lookup": {
       "total": 29,
-      "pass": 29,
-      "soft_gap": 0,
+      "pass": 20,
+      "soft_gap": 9,
       "hard_fail": 0
     },
     "data_quality.missing_fields.lookup": {
@@ -278,10 +278,6 @@
       "count": 17
     },
     {
-      "value": "conversation.followup.resolve",
-      "count": 16
-    },
-    {
       "value": "shipment.vessel_captain.lookup",
       "count": 16
     },
@@ -326,6 +322,10 @@
       "count": 9
     },
     {
+      "value": "customer.shipments.lookup",
+      "count": 9
+    },
+    {
       "value": "shipment.lookup",
       "count": 8
     },
@@ -338,7 +338,7 @@
       "count": 4
     },
     {
-      "value": "customer.contact.lookup",
+      "value": "shipment.customer.lookup",
       "count": 3
     }
   ],
@@ -358,10 +358,6 @@
     {
       "value": "commercial_card → agent → contact",
       "count": 32
-    },
-    {
-      "value": "conversation → activeEntity/focusedEntity",
-      "count": 16
     },
     {
       "value": "shipment → vessel/captain",
@@ -408,6 +404,10 @@
       "count": 10
     },
     {
+      "value": "customer → shipments",
+      "count": 9
+    },
+    {
       "value": "organization → operational_summary",
       "count": 9
     },
@@ -431,7 +431,7 @@
     },
     {
       "value": "phone",
-      "count": 87
+      "count": 86
     },
     {
       "value": "document_status",
@@ -440,10 +440,6 @@
     {
       "value": "task_list",
       "count": 17
-    },
-    {
-      "value": "contextual_field",
-      "count": 16
     },
     {
       "value": "vessel_or_captain_contact",
@@ -484,6 +480,10 @@
     {
       "value": "risk_summary",
       "count": 10
+    },
+    {
+      "value": "shipment_list",
+      "count": 9
     },
     {
       "value": "status_summary",
@@ -1932,17 +1932,189 @@
       "hardFailures": []
     },
     {
-      "id": "HAMYAR-Q-0257",
+      "id": "HAMYAR-Q-0285",
       "priority": "P0",
-      "intent": "customer.contact.lookup",
-      "category": "customer_contact",
-      "question": "شماره همین مشتری رو بده",
-      "plannedIntent": "shipment.customer.phone.lookup",
-      "plannedRequestedField": "customer_phone",
+      "intent": "customer.shipments.lookup",
+      "category": "customer_shipments",
+      "question": "این مشتری چه بارهایی داره؟",
+      "plannedIntent": "customer.lookup",
+      "plannedRequestedField": "summary",
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent customer.contact.lookup, got shipment.customer.phone.lookup"
+          "message": "expected compatible registry intent customer.shipments.lookup, got customer.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path customer → shipments, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0286",
+      "priority": "P0",
+      "intent": "customer.shipments.lookup",
+      "category": "customer_shipments",
+      "question": "پرونده‌های باز مشتری همین مشتری کدومه؟",
+      "plannedIntent": "customer.lookup",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent customer.shipments.lookup, got customer.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path customer → shipments, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0287",
+      "priority": "P0",
+      "intent": "customer.shipments.lookup",
+      "category": "customer_shipments",
+      "question": "بارهای فعال همین مشتری رو بده",
+      "plannedIntent": "customer.lookup",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent customer.shipments.lookup, got customer.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path customer → shipments, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0288",
+      "priority": "P0",
+      "intent": "customer.shipments.lookup",
+      "category": "customer_shipments",
+      "question": "آخرین محموله‌های همین مشتری چیه؟",
+      "plannedIntent": "customer.lookup",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent customer.shipments.lookup, got customer.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path customer → shipments, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0289",
+      "priority": "P0",
+      "intent": "customer.shipments.lookup",
+      "category": "customer_shipments",
+      "question": "همین مشتری چندتا محموله دارد؟",
+      "plannedIntent": "customer.lookup",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent customer.shipments.lookup, got customer.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path customer → shipments, got customer"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment_list, got summary"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0290",
+      "priority": "P0",
+      "intent": "customer.shipments.lookup",
+      "category": "customer_shipments",
+      "question": "پرونده‌های باز مشتری این مشتری کدومه؟",
+      "plannedIntent": "customer.lookup",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent customer.shipments.lookup, got customer.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path customer → shipments, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0291",
+      "priority": "P0",
+      "intent": "customer.shipments.lookup",
+      "category": "customer_shipments",
+      "question": "بارهای فعال این مشتری رو بده",
+      "plannedIntent": "customer.lookup",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent customer.shipments.lookup, got customer.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path customer → shipments, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0292",
+      "priority": "P0",
+      "intent": "customer.shipments.lookup",
+      "category": "customer_shipments",
+      "question": "آخرین محموله‌های این مشتری چیه؟",
+      "plannedIntent": "customer.lookup",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent customer.shipments.lookup, got customer.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path customer → shipments, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0293",
+      "priority": "P0",
+      "intent": "customer.shipments.lookup",
+      "category": "customer_shipments",
+      "question": "این مشتری چندتا محموله دارد؟",
+      "plannedIntent": "customer.lookup",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent customer.shipments.lookup, got customer.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path customer → shipments, got customer"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment_list, got summary"
         }
       ],
       "hardFailures": []
@@ -4693,20 +4865,12 @@
       "intent": "task.lookup",
       "category": "task_lookup",
       "question": "برای بار {shipment_code} چه وظایفی داریم؟",
-      "plannedIntent": "shipment.lookup",
-      "plannedRequestedField": "summary",
+      "plannedIntent": "shipment.tasks.lookup",
+      "plannedRequestedField": "tasks",
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent task.today.lookup, task.assignee.lookup, got shipment.lookup"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path user/shipment/customer → tasks, got shipment"
-        },
-        {
-          "type": "requested_field_gap",
-          "message": "expected requested field task_list, got summary"
+          "message": "expected compatible registry intent task.today.lookup, task.assignee.lookup, got shipment.tasks.lookup"
         }
       ],
       "hardFailures": []
@@ -4717,20 +4881,12 @@
       "intent": "task.lookup",
       "category": "task_lookup",
       "question": "وظایف مشتری {customer_name} چیه؟",
-      "plannedIntent": "customer.lookup",
-      "plannedRequestedField": "summary",
+      "plannedIntent": "customer.tasks.lookup",
+      "plannedRequestedField": "tasks",
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent task.today.lookup, task.assignee.lookup, got customer.lookup"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path user/shipment/customer → tasks, got customer"
-        },
-        {
-          "type": "requested_field_gap",
-          "message": "expected requested field task_list, got summary"
+          "message": "expected compatible registry intent task.today.lookup, task.assignee.lookup, got customer.tasks.lookup"
         }
       ],
       "hardFailures": []
@@ -4797,20 +4953,12 @@
       "intent": "task.lookup",
       "category": "task_lookup",
       "question": "کارهای مربوط به محموله {shipment_code_lp} رو بده",
-      "plannedIntent": "shipment.lookup",
-      "plannedRequestedField": "summary",
+      "plannedIntent": "shipment.tasks.lookup",
+      "plannedRequestedField": "tasks",
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent task.today.lookup, task.assignee.lookup, got shipment.lookup"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path user/shipment/customer → tasks, got shipment"
-        },
-        {
-          "type": "requested_field_gap",
-          "message": "expected requested field task_list, got summary"
+          "message": "expected compatible registry intent task.today.lookup, task.assignee.lookup, got shipment.tasks.lookup"
         }
       ],
       "hardFailures": []
@@ -4849,64 +4997,12 @@
       "intent": "task.lookup",
       "category": "task_lookup",
       "question": "open tasks for shipment {shipment_code_lp}",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
+      "plannedIntent": "shipment.tasks.lookup",
+      "plannedRequestedField": "tasks",
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent task.today.lookup, task.assignee.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path user/shipment/customer → tasks, got (none)"
-        },
-        {
-          "type": "requested_field_gap",
-          "message": "expected requested field task_list, got summary"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0632",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "مشتریش کیه؟",
-      "plannedIntent": "customer.lookup",
-      "plannedRequestedField": "summary",
-      "softGaps": [
-        {
-          "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.contact.lookup, customer.shipments.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.lookup, got customer.lookup"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0633",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "کارتش چیه؟",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
-      "softGaps": [
-        {
-          "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.contact.lookup, customer.shipments.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path conversation → activeEntity/focusedEntity, got (none)"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
+          "message": "expected compatible registry intent task.today.lookup, task.assignee.lookup, got shipment.tasks.lookup"
         }
       ],
       "hardFailures": []
@@ -4922,287 +5018,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.contact.lookup, customer.shipments.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path conversation → activeEntity/focusedEntity, got (none)"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0635",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "وظایفش چیه؟",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
-      "softGaps": [
-        {
-          "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.contact.lookup, customer.shipments.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path conversation → activeEntity/focusedEntity, got (none)"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0636",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "چک‌هاش چیه؟",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
-      "softGaps": [
-        {
-          "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.contact.lookup, customer.shipments.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path conversation → activeEntity/focusedEntity, got (none)"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0637",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "آخرین فعالیتش چی بوده؟",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
-      "softGaps": [
-        {
-          "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.contact.lookup, customer.shipments.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path conversation → activeEntity/focusedEntity, got (none)"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0638",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "همین مورد",
-      "plannedIntent": "ambiguity.selection.reply",
-      "plannedRequestedField": "selection",
-      "softGaps": [
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0639",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "مورد اول",
-      "plannedIntent": "ambiguity.selection.reply",
-      "plannedRequestedField": "selection",
-      "softGaps": [
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0640",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "گزینه ۱",
-      "plannedIntent": "ambiguity.selection.reply",
-      "plannedRequestedField": "selection",
-      "softGaps": [
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0641",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "گزینه 1",
-      "plannedIntent": "ambiguity.selection.reply",
-      "plannedRequestedField": "selection",
-      "softGaps": [
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0642",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "1",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
-      "softGaps": [
-        {
-          "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.contact.lookup, customer.shipments.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path conversation → activeEntity/focusedEntity, got (none)"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0643",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "اولی",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
-      "softGaps": [
-        {
-          "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.contact.lookup, customer.shipments.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path conversation → activeEntity/focusedEntity, got (none)"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0644",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "دومی",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
-      "softGaps": [
-        {
-          "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.contact.lookup, customer.shipments.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path conversation → activeEntity/focusedEntity, got (none)"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0645",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "اون یکی",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
-      "softGaps": [
-        {
-          "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.contact.lookup, customer.shipments.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path conversation → activeEntity/focusedEntity, got (none)"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0646",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "همونو باز کن",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
-      "softGaps": [
-        {
-          "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.contact.lookup, customer.shipments.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path conversation → activeEntity/focusedEntity, got (none)"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0647",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "show me the first one",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
-      "softGaps": [
-        {
-          "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.contact.lookup, customer.shipments.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.lookup, got (none)"
+          "message": "expected compatible registry intent ambiguity.selection.reply, customer.lookup, customer.contact.lookup, customer.shipments.lookup, customer.tasks.lookup, cheque.customer.lookup, shipment.activity.lookup, shipment.commercial_card.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.tasks.lookup, shipment.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -10275,24 +10091,12 @@
       "intent": "task.lookup",
       "category": "task_lookup",
       "question": "وظایف مربوط به {shipment_code} چیه؟",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
+      "plannedIntent": "shipment.tasks.lookup",
+      "plannedRequestedField": "tasks",
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent task.today.lookup, task.assignee.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path entity → tasks, got (none)"
-        },
-        {
-          "type": "requested_field_gap",
-          "message": "expected requested field task_list, got summary"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
+          "message": "expected compatible registry intent task.today.lookup, task.assignee.lookup, got shipment.tasks.lookup"
         }
       ],
       "hardFailures": []
@@ -10303,24 +10107,12 @@
       "intent": "task.lookup",
       "category": "task_lookup",
       "question": "وظایف مربوط به {shipment_code_lp} چیه؟",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
+      "plannedIntent": "shipment.tasks.lookup",
+      "plannedRequestedField": "tasks",
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent task.today.lookup, task.assignee.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path entity → tasks, got (none)"
-        },
-        {
-          "type": "requested_field_gap",
-          "message": "expected requested field task_list, got summary"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
+          "message": "expected compatible registry intent task.today.lookup, task.assignee.lookup, got shipment.tasks.lookup"
         }
       ],
       "hardFailures": []
@@ -10610,6 +10402,7 @@
     "Add risk alert registry intents for blockers, overdue tasks, due cheques, and missing daily statuses.",
     "Add commercial-card-primary relation resolver coverage for agent/responsible contact lookups.",
     "Promote active-entity follow-up resolution into a first-class registry capability with eval rows.",
+    "Improve customer-to-shipments aliases and active shipment list routing.",
     "Add task, workflow, and cheque-specific relation aliases for current operational follow-up questions.",
     "For each implemented gap, add/adjust registry examples, regenerate registry eval fixtures, and rerun this dataset eval."
   ]

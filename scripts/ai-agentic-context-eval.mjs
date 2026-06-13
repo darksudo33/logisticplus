@@ -145,6 +145,14 @@ const businessCases = [
     requestedFields: [BUSINESS_REQUESTED_FIELDS.PHONE],
   },
   {
+    message: "تلفن شرکت گلدنیدک",
+    terms: ["گلدنیدک"],
+    forbiddenTerms: ["تلفن", "شرکت"],
+    types: ["customer"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE,
+    requestedFields: [BUSINESS_REQUESTED_FIELDS.PHONE],
+  },
+  {
     message: "شماره مشتری 214",
     terms: ["214"],
     forbiddenTerms: ["شماره", "مشتری"],
@@ -166,6 +174,14 @@ const businessCases = [
     types: ["shipment"],
     requestedField: BUSINESS_REQUESTED_FIELDS.STATUS,
     requestedFields: [BUSINESS_REQUESTED_FIELDS.STATUS],
+  },
+  {
+    message: "شماره بار 1234021",
+    terms: ["1234021"],
+    forbiddenTerms: ["شماره", "بار"],
+    types: ["shipment"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER,
+    requestedFields: [BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER],
   },
   {
     message: "سند محموله 14051102036",
@@ -263,6 +279,67 @@ assert.equal(
 assert.ok(!commandOnlyFollowUpPlan.queryTerms.includes("بده"), "business search term must not be command-only word بده");
 
 const activeCustomer = { type: "customer", id: "customer-3", code: "CUS-00003", label: "مشتری CUS-00003" };
+const activeShipment = { type: "shipment", id: "shipment-9", code: "LP-178072282908", label: "محموله LP-178072282908" };
+
+const activeShipmentStatusPlan = resolveHamyarQuestionPlan("وضعیتش چیه؟", { activeEntity: activeShipment });
+assert.equal(activeShipmentStatusPlan.intent, "shipment.status.lookup", "shipment status follow-up should bind to active shipment");
+assert.deepEqual(activeShipmentStatusPlan.queryTerms, [], "active shipment status follow-up should not search pronoun terms");
+assert.equal(activeShipmentStatusPlan.primaryEntity.fromActiveEntity, true, "active shipment status follow-up should use active entity reference");
+assert.equal(activeShipmentStatusPlan.needsLiveVerification, true, "active shipment status follow-up needs live verification");
+
+const activeShipmentCustomerPlan = resolveHamyarQuestionPlan("مشتریش کیه؟", { activeEntity: activeShipment });
+assert.equal(activeShipmentCustomerPlan.intent, "shipment.customer.lookup", "customer owner follow-up should bind to active shipment");
+assert.equal(activeShipmentCustomerPlan.requestedField, BUSINESS_REQUESTED_FIELDS.CUSTOMER, "customer owner follow-up should preserve customer requested field");
+
+const activeShipmentCardPlan = resolveHamyarQuestionPlan("کارتش چیه؟", { activeEntity: activeShipment });
+assert.equal(activeShipmentCardPlan.intent, "shipment.commercial_card.lookup", "card follow-up should bind to active shipment card relation");
+assert.equal(activeShipmentCardPlan.requestedField, BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD, "card follow-up should preserve commercial card requested field");
+
+const activeShipmentTasksPlan = resolveHamyarQuestionPlan("وظایفش چیه؟", { activeEntity: activeShipment });
+assert.equal(activeShipmentTasksPlan.intent, "shipment.tasks.lookup", "task follow-up should bind to active shipment");
+assert.equal(activeShipmentTasksPlan.requestedField, BUSINESS_REQUESTED_FIELDS.TASKS, "task follow-up should preserve tasks requested field");
+
+const activeShipmentActivityPlan = resolveHamyarQuestionPlan("آخرین فعالیتش چی بوده؟", { activeEntity: activeShipment });
+assert.equal(activeShipmentActivityPlan.intent, "shipment.activity.lookup", "activity follow-up should bind to active shipment audit history");
+assert.equal(activeShipmentActivityPlan.needsLiveVerification, true, "activity follow-up needs live verification");
+
+const activeCustomerStatusPlan = resolveHamyarQuestionPlan("وضعیتش چیه؟", { activeEntity: activeCustomer });
+assert.equal(activeCustomerStatusPlan.intent, "customer.lookup", "customer status follow-up should stay on active customer");
+assert.equal(activeCustomerStatusPlan.requestedField, BUSINESS_REQUESTED_FIELDS.STATUS, "customer status follow-up should expose status requested field");
+
+const activeCustomerShipmentPlan = resolveHamyarQuestionPlan("بارهاش چیه؟", { activeEntity: activeCustomer });
+assert.equal(activeCustomerShipmentPlan.intent, "customer.shipments.lookup", "shipment-list follow-up should bind to active customer");
+assert.equal(activeCustomerShipmentPlan.requestedField, BUSINESS_REQUESTED_FIELDS.SHIPMENTS, "shipment-list follow-up should preserve shipments requested field");
+
+const activeCustomerOwnerPlan = resolveHamyarQuestionPlan("مشتریش کیه؟", { activeEntity: activeCustomer });
+assert.equal(activeCustomerOwnerPlan.intent, "customer.lookup", "asking customer-of-customer should not pivot away from active customer");
+assert.equal(activeCustomerOwnerPlan.requestedField, BUSINESS_REQUESTED_FIELDS.SUMMARY, "customer-of-customer follow-up should answer as current customer summary");
+
+const activeCustomerChequePlan = resolveHamyarQuestionPlan("چک‌هاش چیه؟", { activeEntity: activeCustomer });
+assert.equal(activeCustomerChequePlan.intent, "cheque.customer.lookup", "cheque follow-up should bind to active customer cheques");
+assert.equal(activeCustomerChequePlan.requestedField, BUSINESS_REQUESTED_FIELDS.CHEQUES, "cheque follow-up should preserve cheques requested field");
+
+const activeCustomerTasksPlan = resolveHamyarQuestionPlan("وظایفش چیه؟", { activeEntity: activeCustomer });
+assert.equal(activeCustomerTasksPlan.intent, "customer.tasks.lookup", "task follow-up should bind to active customer");
+assert.equal(activeCustomerTasksPlan.requestedField, BUSINESS_REQUESTED_FIELDS.TASKS, "customer task follow-up should preserve tasks requested field");
+
+const activeDocumentPlan = resolveHamyarQuestionPlan("اسنادش چیه؟", { activeEntity: activeShipment });
+assert.equal(activeDocumentPlan.intent, null, "document follow-up should remain deferred instead of becoming document lookup");
+assert.equal(
+  shouldUseActiveEntityForFollowUp("اسنادش چیه؟", activeShipment),
+  false,
+  "active document follow-up should not route to active entity document tools in this PR"
+);
+
+const activeCustomerStatusBusinessPlan = planBusinessSearch("وضعیتش چیه؟", { activeEntity: activeCustomer });
+assert.equal(activeCustomerStatusBusinessPlan.searchBusinessContext, false, "active customer status follow-up should not search pronoun terms");
+assert.equal(activeCustomerStatusBusinessPlan.requestedField, BUSINESS_REQUESTED_FIELDS.STATUS, "active customer status business plan should keep status field");
+assert.equal(
+  shouldUseActiveEntityForFollowUp("وضعیتش چیه؟", activeCustomer),
+  true,
+  "active customer status follow-up should use the focused customer"
+);
+
 for (const message of ["شماره تماسش چنده", "تلفنش چیه؟", "موبایلش رو بده", "شماره‌ش رو بده"]) {
   const plan = planBusinessSearch(message);
   assert.equal(plan.searchBusinessContext, false, `${message} should not search possessive contact words`);
@@ -372,9 +449,12 @@ assert.deepEqual(
 assert.equal(extractAmbiguitySelection("به 214"), "214", "short ambiguity follow-up should extract selected code");
 assert.equal(extractAmbiguitySelection("به ۲۱۴"), "214", "Persian digit ambiguity follow-up should normalize selected code");
 assert.equal(extractAmbiguitySelection("گزینه دوم رو بده"), "2", "ordinal ambiguity follow-up should resolve option number");
+assert.equal(extractAmbiguitySelection("مورد دوم"), "2", "case/option wording should resolve option number");
 assert.equal(extractAmbiguitySelection("1"), "1", "bare numeric option should resolve option number");
 assert.equal(extractAmbiguitySelection("گزینه ۱"), "1", "Persian digit option should resolve option number");
 assert.equal(extractAmbiguitySelection("اولی"), "1", "bare Persian ordinal should resolve first option");
+assert.equal(extractAmbiguitySelection("اون یکی"), "1", "implicit same/that option should resolve to the current first option");
+assert.equal(extractAmbiguitySelection("show me the first one"), "1", "English ordinal follow-up should resolve first option");
 
 const candidateSelectionCases = [
   {
@@ -394,6 +474,16 @@ const candidateSelectionCases = [
   },
   {
     message: "اولی",
+    expectedId: "customer-214",
+    reason: "option",
+  },
+  {
+    message: "مورد دوم",
+    expectedId: "customer-156",
+    reason: "option",
+  },
+  {
+    message: "show me the first one",
     expectedId: "customer-214",
     reason: "option",
   },
