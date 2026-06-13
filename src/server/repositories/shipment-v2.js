@@ -8,6 +8,7 @@ import {
   SHIPMENT_CODE_ERRORS,
 } from "../shipment-codes.js";
 import { assertBusinessEntityBelongsToTenant } from "./business-entities.js";
+import { refreshCompanyBrainEntity } from "../ai/company-brain.js";
 
 export const SHIPMENT_V2_SECTION_KEYS = [
   "base",
@@ -24,6 +25,21 @@ const FLOW_TO_SHIPMENT_TYPE = {
   IMPORT_LANJ: "IMPORT_LENJ",
   IMPORT_SHIP: "IMPORT_SEA_CONTAINER",
 };
+
+async function refreshShipmentBrainBestEffort(pool, organizationId, shipmentId) {
+  if (!organizationId || !shipmentId) return;
+  try {
+    const result = await refreshCompanyBrainEntity(pool, organizationId, "shipment", shipmentId);
+    if (result?.reason && result.reason !== "memory_tables_missing") {
+      console.warn("Company brain shipment refresh skipped:", { shipmentId, reason: result.reason });
+    }
+  } catch (error) {
+    console.warn("Company brain shipment refresh failed:", {
+      shipmentId,
+      message: error?.message || String(error),
+    });
+  }
+}
 
 function jsonObject(value, fallback = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return fallback;
@@ -342,7 +358,7 @@ export async function createShipmentV2Record(pool, {
 } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "createShipmentV2Record");
   try {
-    return await withTransaction(pool, async (client) => {
+    const created = await withTransaction(pool, async (client) => {
       const customer = await getCustomerRow(client, {
         organizationId: scopedOrganizationId,
         customerId: body.customerId,
@@ -438,6 +454,8 @@ export async function createShipmentV2Record(pool, {
         includeCustomerPrivateDetails,
       });
     });
+    await refreshShipmentBrainBestEffort(pool, scopedOrganizationId, created?.shipment?.id);
+    return created;
   } catch (error) {
     throw setKnownError(error);
   }
@@ -464,7 +482,7 @@ export async function initializeShipmentV2Profile(pool, {
   includeCustomerPrivateDetails = true,
 } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "initializeShipmentV2Profile");
-  return withTransaction(pool, async (client) => {
+  const initialized = await withTransaction(pool, async (client) => {
     const shipment = await getShipmentRow(client, {
       organizationId: scopedOrganizationId,
       shipmentId,
@@ -501,6 +519,8 @@ export async function initializeShipmentV2Profile(pool, {
       includeCustomerPrivateDetails,
     });
   });
+  await refreshShipmentBrainBestEffort(pool, scopedOrganizationId, shipmentId);
+  return initialized;
 }
 
 export async function updateShipmentV2Section(pool, {
@@ -514,7 +534,7 @@ export async function updateShipmentV2Section(pool, {
 } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "updateShipmentV2Section");
   try {
-    return await withTransaction(pool, async (client) => {
+    const updated = await withTransaction(pool, async (client) => {
     const shipment = await getShipmentRow(client, {
       organizationId: scopedOrganizationId,
       shipmentId,
@@ -625,7 +645,9 @@ export async function updateShipmentV2Section(pool, {
       }),
       changedSection: sectionKey,
     };
-    });
+  });
+    await refreshShipmentBrainBestEffort(pool, scopedOrganizationId, shipmentId);
+    return updated;
   } catch (error) {
     throw setKnownError(error);
   }
