@@ -5,6 +5,10 @@ import {
   getHamyarIntent,
   listHamyarIntents,
 } from "./hamyar-capability-registry.js";
+import {
+  SHIPMENT_FIELD_LOOKUP_INTENT_ID,
+  matchShipmentFieldQuestion,
+} from "./hamyar-shipment-field-registry.js";
 
 const PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹";
 const ARABIC_DIGITS = "٠١٢٣٤٥٦٧٨٩";
@@ -86,6 +90,17 @@ const COLLECTION_INTENTS = new Set([
   "missing_data.lookup",
   "ambiguity.selection.reply",
   "identity.capability",
+]);
+
+const LEGACY_SHIPMENT_FIELD_KEYS = new Set([
+  "shipment.code",
+  "shipment.customer",
+  "shipment.status",
+]);
+
+const ACTIVE_LEGACY_SHIPMENT_FIELD_KEYS = new Set([
+  ...LEGACY_SHIPMENT_FIELD_KEYS,
+  "shipment.commercial_card",
 ]);
 
 function normalizeDigits(value = "") {
@@ -301,6 +316,22 @@ function extractReference(question = "", definition = {}, activeEntity = null) {
   return { ref: meaningful[0] || "", fromActiveEntity: false };
 }
 
+function extractShipmentFieldReference(question = "", activeEntity = null) {
+  const meaningful = tokens(question)
+    .map((token) => token.replace(/[%_\\]/g, ""))
+    .filter((token) => token.length >= 2 || /^[A-Za-z0-9_-]+$/.test(token))
+    .filter((token) => !isCommandOrStopToken(token));
+  const numeric = meaningful.find((token) => /\d/.test(token));
+  if (numeric) return { ref: numeric, fromActiveEntity: false };
+
+  const activeType = activeEntityType(activeEntity);
+  if (activeType === "shipment") {
+    const ref = activeEntityReference(activeEntity);
+    if (ref) return { ref, fromActiveEntity: true };
+  }
+  return { ref: "", fromActiveEntity: false };
+}
+
 function queryTermsFor(question = "", reference = "") {
   const ref = normalizeHamyarText(reference);
   if (ref) return [ref];
@@ -310,6 +341,38 @@ function queryTermsFor(question = "", reference = "") {
     .filter((token) => !isCommandOrStopToken(token));
   if (meaningful.length === 2 && meaningful.every((token) => !/^\d+$/.test(token))) return [meaningful.join(" ")];
   return unique(meaningful).slice(0, 8);
+}
+
+function buildShipmentFieldLookupPlan(question = "", activeEntity = null) {
+  const match = matchShipmentFieldQuestion(question);
+  const field = match?.field || null;
+  if (!field || LEGACY_SHIPMENT_FIELD_KEYS.has(field.key)) return null;
+  const normalized = normalizeHamyarText(question);
+  if (
+    field.key === "shipment.commercial_card" &&
+    (
+      normalizedIncludesAny(normalized, ["مشتری", "customer"]) ||
+      !normalizedIncludesAny(normalized, ["ثبت", "داره", "دارد", "وجود", "registered", "has"])
+    )
+  ) {
+    return null;
+  }
+
+  const definition = getHamyarIntent(SHIPMENT_FIELD_LOOKUP_INTENT_ID);
+  if (!definition) return null;
+  const reference = extractShipmentFieldReference(question, activeEntity);
+  const hasReference = Boolean(reference.ref);
+  return buildResolvedPlan(question, SHIPMENT_FIELD_LOOKUP_INTENT_ID, definition, hasReference ? 0.97 : 0.9, activeEntity, {
+    reference,
+    queryTerms: reference.ref && !reference.fromActiveEntity ? [reference.ref] : [],
+    relationPath: field.relationPath || definition.relationPath,
+    requestedField: field.key,
+    requestedFields: [field.key],
+    liveTool: field.sourceTool || "",
+    needsLiveVerification: Boolean(field.liveVerificationRequired),
+    needsCompanyBrain: false,
+    fallback: hasReference ? "current_planner_fallback" : "ask_clarification",
+  });
 }
 
 function buildPrimaryEntity(definition = {}, ref = "", activeEntity = null, fromActiveEntity = false) {
@@ -527,6 +590,17 @@ function activeFollowUpIntent(normalized = "", activeEntity = null) {
     "history",
   ]);
   const asksDocuments = normalizedIncludesAny(normalized, ["سند", "اسناد", "مدارک", "document", "file"]);
+  const shipmentFieldMatch = activeType === "shipment" ? matchShipmentFieldQuestion(normalized) : null;
+  if (shipmentFieldMatch?.field && !ACTIVE_LEGACY_SHIPMENT_FIELD_KEYS.has(shipmentFieldMatch.field.key)) {
+    return {
+      intentId: SHIPMENT_FIELD_LOOKUP_INTENT_ID,
+      requestedField: shipmentFieldMatch.field.key,
+      requestedFields: [shipmentFieldMatch.field.key],
+      relationPath: shipmentFieldMatch.field.relationPath,
+      liveTool: shipmentFieldMatch.field.sourceTool || "",
+      needsLiveVerification: Boolean(shipmentFieldMatch.field.liveVerificationRequired),
+    };
+  }
   if (asksDocuments) return null;
 
   if (activeType === "shipment") {
@@ -573,7 +647,9 @@ function buildActiveFollowUpPlan(question = "", normalized = "", activeEntity = 
     queryTerms: [],
     requestedField: activeMatch.requestedField,
     requestedFields: activeMatch.requestedFields,
-    needsLiveVerification: true,
+    relationPath: activeMatch.relationPath,
+    liveTool: activeMatch.liveTool,
+    needsLiveVerification: activeMatch.needsLiveVerification ?? true,
   });
 }
 
@@ -613,6 +689,9 @@ export function resolveHamyarQuestionPlan(question = "", context = {}, activeEnt
   const activeFollowUpPlan = buildActiveFollowUpPlan(question, normalized, activeEntity);
   if (activeFollowUpPlan) return activeFollowUpPlan;
   if (isActiveDocumentFollowUp(normalized, activeEntity)) return emptyPlan(question);
+
+  const shipmentFieldPlan = buildShipmentFieldLookupPlan(question, activeEntity);
+  if (shipmentFieldPlan) return shipmentFieldPlan;
 
   const { id: intentId, definition, confidence } = chooseIntent(normalized, activeEntity);
   if (!intentId || !definition) return emptyPlan(question);

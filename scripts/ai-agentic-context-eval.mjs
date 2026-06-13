@@ -13,6 +13,7 @@ import {
   HAMYAR_CAPABILITY_REGISTRY,
   registryToEvalCases,
 } from "../src/server/ai/hamyar-capability-registry.js";
+import { SHIPMENT_FIELD_LOOKUP_INTENT_ID } from "../src/server/ai/hamyar-shipment-field-registry.js";
 import {
   HAMYAR_QUESTION_DATASET_DEFAULT_PATH,
   loadHamyarQuestionDataset,
@@ -338,12 +339,46 @@ const activeCustomerTasksPlan = resolveHamyarQuestionPlan("وظایفش چیه؟
 assert.equal(activeCustomerTasksPlan.intent, "customer.tasks.lookup", "task follow-up should bind to active customer");
 assert.equal(activeCustomerTasksPlan.requestedField, BUSINESS_REQUESTED_FIELDS.TASKS, "customer task follow-up should preserve tasks requested field");
 
+const exactShipmentFieldPlan = resolveHamyarQuestionPlan("کد ساتا بار 14050305014 چیه؟");
+assert.equal(exactShipmentFieldPlan.intent, SHIPMENT_FIELD_LOOKUP_INTENT_ID, "SATA field should route to shipment field lookup");
+assert.equal(exactShipmentFieldPlan.requestedField, "shipment.bank.sata_code", "SATA field should preserve canonical requested field");
+assert.deepEqual(exactShipmentFieldPlan.queryTerms, ["14050305014"], "SATA lookup should only search by shipment reference");
+
+const exactCommercialCardFieldPlan = resolveHamyarQuestionPlan("کارت بازرگانی بار 14050305014 ثبت شده؟");
+assert.equal(exactCommercialCardFieldPlan.intent, SHIPMENT_FIELD_LOOKUP_INTENT_ID, "commercial card by shipment code should be supported as a field lookup");
+assert.equal(exactCommercialCardFieldPlan.requestedField, "shipment.commercial_card", "commercial card field lookup should preserve canonical field key");
+
+const exactShipmentFieldBusinessPlan = planBusinessSearch("کد ساتا بار 14050305014 چیه؟");
+assert.equal(exactShipmentFieldBusinessPlan.registryIntent, SHIPMENT_FIELD_LOOKUP_INTENT_ID, "business plan should preserve shipment field registry intent");
+assert.equal(exactShipmentFieldBusinessPlan.requestedField, "shipment.bank.sata_code", "business plan should expose the field key");
+assert.deepEqual(exactShipmentFieldBusinessPlan.queryTerms, ["14050305014"], "business plan should not search generic field terms");
+
+const activeGoodsContentsPlan = resolveHamyarQuestionPlan("محتویاتش چیه؟", { activeEntity: activeShipment });
+assert.equal(activeGoodsContentsPlan.intent, SHIPMENT_FIELD_LOOKUP_INTENT_ID, "goods contents follow-up should bind to active shipment");
+assert.equal(activeGoodsContentsPlan.requestedField, "shipment.goods.contents", "goods contents follow-up should preserve field key");
+assert.deepEqual(activeGoodsContentsPlan.queryTerms, [], "active goods contents follow-up should not search pronoun terms");
+
+const activeGoodsExistsPlan = resolveHamyarQuestionPlan("کالا داره؟", { activeEntity: activeShipment });
+assert.equal(activeGoodsExistsPlan.intent, SHIPMENT_FIELD_LOOKUP_INTENT_ID, "goods existence follow-up should bind to active shipment");
+assert.equal(activeGoodsExistsPlan.requestedField, "shipment.goods.exists", "goods existence should preserve field key");
+
 const activeDocumentPlan = resolveHamyarQuestionPlan("اسنادش چیه؟", { activeEntity: activeShipment });
-assert.equal(activeDocumentPlan.intent, null, "document follow-up should remain deferred instead of becoming document lookup");
+assert.equal(activeDocumentPlan.intent, SHIPMENT_FIELD_LOOKUP_INTENT_ID, "document metadata follow-up should use shipment field lookup");
+assert.equal(activeDocumentPlan.requestedField, "shipment.documents.count", "generic document follow-up should answer metadata/count only");
 assert.equal(
   shouldUseActiveEntityForFollowUp("اسنادش چیه؟", activeShipment),
-  false,
-  "active document follow-up should not route to active entity document tools in this PR"
+  true,
+  "active document metadata follow-up should use the focused shipment"
+);
+
+const activeDocumentFilePlan = resolveHamyarQuestionPlan("فایل سندش رو بده", { activeEntity: activeShipment });
+assert.equal(activeDocumentFilePlan.intent, SHIPMENT_FIELD_LOOKUP_INTENT_ID, "document file follow-up should be classified explicitly");
+assert.equal(activeDocumentFilePlan.requestedField, "shipment.documents.file_link", "document file follow-up should preserve deferred field key");
+assert.equal(activeDocumentFilePlan.liveTool, "", "document file lookup must not call a live file/link tool");
+assert.equal(
+  shouldUseActiveEntityForFollowUp("فایل سندش رو بده", activeShipment),
+  true,
+  "active document file follow-up should stay on active shipment for a deferred policy answer"
 );
 
 const activeCustomerStatusBusinessPlan = planBusinessSearch("وضعیتش چیه؟", { activeEntity: activeCustomer });

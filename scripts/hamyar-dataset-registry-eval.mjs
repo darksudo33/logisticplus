@@ -33,7 +33,7 @@ const DATASET_INTENT_COMPATIBILITY = Object.freeze({
   "customer.shipments.lookup": ["customer.shipments.lookup"],
   "task.lookup": ["task.today.lookup", "task.assignee.lookup"],
   "workflow.lookup": ["workflow.latest_step.lookup"],
-  "document.lookup": ["document.shipment.lookup", "document.status.lookup"],
+  "document.lookup": ["document.shipment.lookup", "document.status.lookup", "shipment.field.lookup"],
   "cheque.lookup": ["cheque.customer.lookup", "cheque.due_date.lookup"],
   "company.daily_summary.lookup": ["company.daily_summary.lookup"],
   "company.operational_status.lookup": ["company.daily_summary.lookup", "company.latest_shipment.lookup"],
@@ -49,6 +49,7 @@ const DATASET_INTENT_COMPATIBILITY = Object.freeze({
     "shipment.commercial_card.lookup",
     "shipment.customer.phone.lookup",
     "shipment.customer.lookup",
+    "shipment.field.lookup",
     "shipment.status.lookup",
     "shipment.tasks.lookup",
     "shipment.lookup",
@@ -63,11 +64,33 @@ const REQUESTED_FIELD_COMPATIBILITY = Object.freeze({
   card_status: ["commercial_card"],
   card_summary: ["commercial_card"],
   cheque_summary: ["cheques", "due_date"],
-  contextual_field: ["customer", "customer_phone", "phone", "status", "commercial_card", "shipments", "tasks", "cheques", "documents", "summary", "selection"],
+  contextual_field: [
+    "customer",
+    "customer_phone",
+    "phone",
+    "status",
+    "commercial_card",
+    "shipments",
+    "tasks",
+    "cheques",
+    "documents",
+    "summary",
+    "selection",
+    "shipment.goods.contents",
+    "shipment.goods.exists",
+    "shipment.documents.count",
+    "shipment.documents.exists",
+    "shipment.messages.count",
+    "shipment.current_stage",
+    "shipment.bank.sata_code",
+    "shipment.notes.exists",
+    "shipment.payments.customs_payment_date",
+    "shipment.payments.payment_reference",
+  ],
   counts: ["daily_summary", "latest_shipment", "missing_data", "due_today"],
   daily_summary: ["daily_summary"],
-  document_or_file: ["documents", "document_status"],
-  document_status: ["documents", "document_status"],
+  document_or_file: ["documents", "document_status", "shipment.documents.count", "shipment.documents.exists", "shipment.documents.file_link", "shipment.documents.image", "shipment.documents.private_url"],
+  document_status: ["documents", "document_status", "shipment.documents.count", "shipment.documents.exists"],
   identity: ["capability"],
   missing_field_list: ["missing_data", "document_status"],
   phone: ["phone", "customer_phone", "agent_phone", "captain_phone", "commercial_card_agent_phone"],
@@ -274,6 +297,10 @@ function documentLookupCovered(row, plan = {}, businessPlan = {}) {
   const requestedFields = new Set(plannedRequestedFields(plan, businessPlan));
   return (
     String(plan.intent || "").startsWith("document.") ||
+    (
+      plan.intent === "shipment.field.lookup" &&
+      [...requestedFields].some((field) => field.startsWith("shipment.documents.") || field.startsWith("shipment documents "))
+    ) ||
     candidateTypes.has("document") ||
     requestedFields.has("documents") ||
     requestedFields.has("document status")
@@ -297,7 +324,7 @@ function rowPlanningContext(row = {}) {
 
   if (row.category === "followup_context") {
     if (question.includes("اسناد") || question.includes("سند") || question.includes("مدارک")) {
-      return {};
+      return { activeEntity: shipmentEntity };
     }
     if (question.includes("گزینه") || question.includes("مورد") || question.includes("اولی") || question.includes("دومی") || question === "1" || question.includes("show me")) {
       return {};

@@ -1,3 +1,8 @@
+import {
+  SHIPMENT_FIELD_LOOKUP_INTENT_ID,
+  shipmentFieldCapabilityEntries,
+} from "./hamyar-shipment-field-registry.js";
+
 const FRESHNESS = Object.freeze({
   LIVE_REQUIRED: "live_required",
   SNAPSHOT_OK: "snapshot_ok",
@@ -92,6 +97,8 @@ export const HAMYAR_MEMORY_POLICY = MEMORY_POLICY;
 
 export const HAMYAR_CAPABILITY_REGISTRY_VERSION = 1;
 
+const SHIPMENT_FIELD_CAPABILITY_FIELDS = shipmentFieldCapabilityEntries();
+
 const CUSTOMER_CONTACT_FOLLOWUP_ALIASES = [
   "تماسش",
   "تلفنش",
@@ -185,8 +192,9 @@ export const HAMYAR_CAPABILITY_REGISTRY = deepFreeze({
     },
     shipment: {
       aliases: ["بار", "محموله", "پرونده", "رهگیری", "shipment", "cargo", "load"],
-      sourceOfTruth: ["getShipmentDetailContext", "getShipmentFullProfile", "resolveShipmentRef", "searchShipmentByCode"],
+      sourceOfTruth: ["getShipmentDetailContext", "getShipmentDetailFields", "getShipmentFullProfile", "resolveShipmentRef", "searchShipmentByCode"],
       fields: {
+        ...SHIPMENT_FIELD_CAPABILITY_FIELDS,
         shipment_number: field({
           aliases: ["شماره بار", "کد محموله", "شماره پرونده", "tracking", "shipment number"],
           source: "shipments.shipment_code",
@@ -625,6 +633,7 @@ export const HAMYAR_CAPABILITY_REGISTRY = deepFreeze({
     "shipment.commercial_card.agent": ["shipment", "commercial_card", "contact"],
     "shipment.malvani.agent": ["shipment", "malvani", "contact"],
     "shipment.workflow": ["shipment", "workflow"],
+    "shipment.field": ["shipment", "field"],
     "shipment.documents": ["shipment", "documents"],
     "shipment.tasks": ["shipment", "tasks"],
     "customer.shipments": ["customer", "shipments"],
@@ -678,6 +687,90 @@ export const HAMYAR_CAPABILITY_REGISTRY = deepFreeze({
       legacyIntent: "shipment.summary.lookup",
       answerTemplate: "وضعیت محموله {shipmentCode}: {status}",
       missingTemplate: "برای این محموله وضعیت ثبت نشده است.",
+    }),
+    [SHIPMENT_FIELD_LOOKUP_INTENT_ID]: intent({
+      title: "Shipment detail field lookup",
+      aliases: ["فیلد محموله", "اطلاعات جزئیات محموله", "shipment detail field"],
+      examples: [
+        {
+          question: "شماره ثبت سفارش بار 14050305014 چیه؟",
+          requestedField: "shipment.order_registration_number",
+          relationPath: ["shipment", "field", "order_registration_number"],
+        },
+        {
+          question: "کارت بازرگانی بار 14050305014 ثبت شده؟",
+          requestedField: "shipment.commercial_card",
+          relationPath: ["shipment", "field", "commercial_card"],
+        },
+        {
+          question: "مرحله فعلی بار 14050305014 چیه؟",
+          requestedField: "shipment.current_stage",
+          relationPath: ["shipment", "field", "current_stage"],
+        },
+        {
+          question: "محتویات بار چیه؟",
+          requestedField: "shipment.goods.contents",
+          relationPath: ["shipment", "goods", "contents"],
+        },
+        {
+          question: "کالا داره؟",
+          requestedField: "shipment.goods.exists",
+          relationPath: ["shipment", "goods", "exists"],
+        },
+        {
+          question: "چند تا سند داره؟",
+          requestedField: "shipment.documents.count",
+          relationPath: ["shipment", "documents", "count"],
+        },
+        {
+          question: "چند تا پیام داخلی داره؟",
+          requestedField: "shipment.messages.count",
+          relationPath: ["shipment", "messages", "count"],
+        },
+        {
+          question: "کوتاژ بار 14050305014 چنده؟",
+          requestedField: "shipment.customs.cotage_number",
+          relationPath: ["shipment", "customs", "cotage_number"],
+        },
+        {
+          question: "مسیر گمرکی بار 14050305014 چیه؟",
+          requestedField: "shipment.customs.route",
+          relationPath: ["shipment", "customs", "route"],
+        },
+        {
+          question: "نام بانک بار 14050305014 چیه؟",
+          requestedField: "shipment.bank.name",
+          relationPath: ["shipment", "bank", "name"],
+        },
+        {
+          question: "کد ساتا بار 14050305014 چیه؟",
+          requestedField: "shipment.bank.sata_code",
+          relationPath: ["shipment", "bank", "sata_code"],
+        },
+        {
+          question: "یادداشت داره؟",
+          requestedField: "shipment.notes.exists",
+          relationPath: ["shipment", "notes", "exists"],
+        },
+        {
+          question: "فایل سند رو بده",
+          requestedField: "shipment.documents.file_link",
+          relationPath: ["shipment", "documents", "file_link"],
+          needsLiveVerification: false,
+          liveTool: "",
+        },
+      ],
+      primaryEntity: "shipment",
+      relationPath: ["shipment", "field"],
+      requestedField: "shipment.field",
+      preferredEntityTypes: ["shipment"],
+      liveTool: "getShipmentDetailFields",
+      legacyIntent: SHIPMENT_FIELD_LOOKUP_INTENT_ID,
+      needsCompanyBrain: false,
+      needsLiveVerification: true,
+      memoryPolicy: MEMORY_POLICY.NONE,
+      answerTemplate: "{fieldLabel} بار {shipmentCode}: {value}",
+      missingTemplate: "برای این محموله {fieldLabel} ثبت نشده.",
     }),
     "shipment.customer.lookup": intent({
       title: "Shipment customer",
@@ -1037,18 +1130,22 @@ export function listHamyarIntents() {
 
 export function listHamyarEvalExamples() {
   return listHamyarIntents().flatMap(({ id, examples = [], ...definition }) =>
-    examples.map((question) => ({
-      question,
-      intent: id,
-      primaryEntity: definition.primaryEntity,
-      relationPath: definition.relationPath,
-      requestedField: definition.requestedField,
-      preferredEntityTypes: definition.preferredEntityTypes,
-      needsCompanyBrain: definition.needsCompanyBrain,
-      needsLiveVerification: definition.needsLiveVerification,
-      liveTool: definition.liveTool,
-      fallback: definition.fallback,
-    }))
+    examples.map((example) => {
+      const question = typeof example === "string" ? example : example.question;
+      const overrides = typeof example === "string" ? {} : example;
+      return {
+        question,
+        intent: id,
+        primaryEntity: definition.primaryEntity,
+        relationPath: overrides.relationPath || definition.relationPath,
+        requestedField: overrides.requestedField || definition.requestedField,
+        preferredEntityTypes: definition.preferredEntityTypes,
+        needsCompanyBrain: definition.needsCompanyBrain,
+        needsLiveVerification: overrides.needsLiveVerification ?? definition.needsLiveVerification,
+        liveTool: overrides.liveTool ?? definition.liveTool,
+        fallback: definition.fallback,
+      };
+    })
   );
 }
 

@@ -1,5 +1,10 @@
 import { listCustomerPhoneNumbers } from "../repositories/customers.js";
 import { AI_BUSINESS_SEARCH_ENTITY_TYPES, searchAiBusinessIndex } from "./ai-search-index.js";
+import {
+  HAMYAR_SHIPMENT_FIELD_POLICY,
+  getShipmentFieldDefinition,
+  isShipmentFieldKey,
+} from "./hamyar-shipment-field-registry.js";
 
 const CEO_ONLY_MESSAGE = "دسترسی به همیار لاجستیک در حال حاضر فقط برای مدیرعامل فعال است.";
 const PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹";
@@ -167,6 +172,95 @@ function safeGoodsRows(rows) {
     cbm: numberOrNull(row?.cbm),
     pcs: numberOrNull(row?.pcs),
   })).filter((row) => Object.values(row).some((value) => value !== "" && value !== null));
+}
+
+function jsonArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function hasOwnValue(value, key) {
+  return Boolean(value && typeof value === "object" && Object.prototype.hasOwnProperty.call(value, key));
+}
+
+function moneyText(amount, currency = "IRR") {
+  const numeric = numberOrNull(amount);
+  if (numeric === null) return "";
+  return `${numeric} ${cleanText(currency) || "IRR"}`;
+}
+
+function paidStatusText(value) {
+  if (value === true) return "پرداخت شده";
+  if (value === false) return "پرداخت نشده";
+  return "";
+}
+
+function routeLabel(value) {
+  const labels = {
+    green: "سبز",
+    yellow: "زرد",
+    red: "قرمز",
+  };
+  const key = cleanText(value);
+  return labels[key] || key;
+}
+
+function customsTaxStatusLabel(value) {
+  const labels = {
+    GOOD_STANDING: "مفاصا حساب",
+    PAYABLE: "قابل پرداخت",
+  };
+  const key = cleanText(value);
+  return labels[key] || key;
+}
+
+function goodsContentsText(goodsRows = [], fallback = "") {
+  const rows = safeGoodsRows(goodsRows);
+  const descriptions = rows
+    .map((row) => cleanText(row.description) || cleanText(row.tariffName) || cleanText(row.tariffCode))
+    .filter(Boolean);
+  return descriptions.length ? descriptions.join("، ") : cleanText(fallback);
+}
+
+function goodsListText(goodsRows = [], fallback = "") {
+  const rows = safeGoodsRows(goodsRows);
+  if (!rows.length) return cleanText(fallback);
+  return rows
+    .map((row, index) => {
+      const parts = [
+        cleanText(row.description) || cleanText(row.tariffName) || cleanText(row.tariffCode),
+        row.quantity === null ? "" : `تعداد ${row.quantity}`,
+        row.weight === null ? "" : `وزن ${row.weight}`,
+      ].filter(Boolean);
+      return parts.length ? `${index + 1}. ${parts.join(" - ")}` : "";
+    })
+    .filter(Boolean)
+    .join("؛ ");
+}
+
+function permitListText(rows = []) {
+  return jsonArray(rows)
+    .map((row, index) => {
+      const name = cleanText(row?.permitName);
+      if (!name) return "";
+      const state = cleanText(row?.permitState);
+      return `${index + 1}. ${[name, state].filter(Boolean).join(" - ")}`;
+    })
+    .filter(Boolean)
+    .join("؛ ");
+}
+
+function fieldHasValue(definition = {}, rawValue, displayValue = "") {
+  if (definition.answerPolicy === HAMYAR_SHIPMENT_FIELD_POLICY.EXISTS) return typeof rawValue === "boolean";
+  if (definition.answerPolicy === HAMYAR_SHIPMENT_FIELD_POLICY.COUNT) {
+    return rawValue !== null && rawValue !== undefined && rawValue !== "" && Number.isFinite(Number(rawValue));
+  }
+  if (definition.answerPolicy === HAMYAR_SHIPMENT_FIELD_POLICY.LIST) {
+    if (Array.isArray(rawValue)) return rawValue.length > 0;
+    return Boolean(cleanText(displayValue));
+  }
+  if (typeof rawValue === "boolean") return true;
+  if (rawValue !== null && rawValue !== undefined && rawValue !== "" && Number.isFinite(Number(rawValue))) return true;
+  return Boolean(cleanText(displayValue));
 }
 
 function definitionStepLabel(definition, code) {
@@ -729,6 +823,274 @@ export async function getShipmentDetailContext(pool, context, { shipmentId } = {
     },
     commercialCard,
     commercialCards: commercialCardContext.cards,
+  };
+}
+
+export async function getShipmentDetailFields(pool, context, { shipmentId, requestedFields = [] } = {}) {
+  requireCeoToolContext(context);
+  if (!shipmentId) return null;
+  const fieldKeys = [...new Set((Array.isArray(requestedFields) ? requestedFields : [requestedFields]).filter(isShipmentFieldKey))];
+  if (!fieldKeys.length) return null;
+
+  const result = await pool.query(
+    `SELECT
+       s.id,
+       s.shipment_code,
+       s.customer_id,
+       s.customer_name,
+       s.status,
+       s.current_step_id,
+       s.legacy_data,
+       s.updated_at,
+       c.customer_code,
+       c.company_name AS customer_company_name,
+       c.contact_name AS customer_contact_name,
+       p.sections_json,
+       p.created_at AS profile_created_at,
+       p.updated_at AS profile_updated_at,
+       CASE WHEN profile_updater_member.user_id IS NOT NULL THEN profile_updater.name ELSE NULL END AS profile_updated_by_name,
+       CASE WHEN profile_creator_member.user_id IS NOT NULL THEN profile_creator.name ELSE NULL END AS profile_created_by_name,
+       k.commercial_card_id AS kootaj_commercial_card_id,
+       k.order_registration_number AS kootaj_order_registration_number,
+       k.cotage_number AS kootaj_cotage_number,
+       k.customs_route AS kootaj_customs_route,
+       k.cotage_date AS kootaj_cotage_date,
+       k.currency_amount AS kootaj_currency_amount,
+       k.currency_type AS kootaj_currency_type,
+       k.duties_amount AS kootaj_duties_amount,
+       k.tax_amount AS kootaj_tax_amount,
+       k.tax_payment_status AS kootaj_tax_payment_status,
+       k.customs_payment_date AS kootaj_customs_payment_date,
+       k.payment_reference AS kootaj_payment_reference,
+       k.bank_name AS kootaj_bank_name,
+       k.bank_tracking_number AS kootaj_bank_tracking_number,
+       k.container_summary AS kootaj_container_summary,
+       k.goods_summary AS kootaj_goods_summary,
+       k.internal_note AS kootaj_internal_note,
+       k.updated_at AS kootaj_updated_at,
+       CASE WHEN kootaj_updater_member.user_id IS NOT NULL THEN kootaj_updater.name ELSE NULL END AS kootaj_updated_by_name
+     FROM shipments s
+     LEFT JOIN customers c
+       ON c.id = s.customer_id
+      AND c.organization_id = s.organization_id
+      AND c.archived_at IS NULL
+     LEFT JOIN shipment_v2_profiles p
+       ON p.shipment_id = s.id
+      AND p.organization_id = s.organization_id
+     LEFT JOIN app_users profile_updater
+       ON profile_updater.id = p.updated_by_id
+     LEFT JOIN organization_members profile_updater_member
+       ON profile_updater_member.organization_id = s.organization_id
+      AND profile_updater_member.user_id = profile_updater.id
+      AND profile_updater_member.status = 'active'
+     LEFT JOIN app_users profile_creator
+       ON profile_creator.id = p.created_by_id
+     LEFT JOIN organization_members profile_creator_member
+       ON profile_creator_member.organization_id = s.organization_id
+      AND profile_creator_member.user_id = profile_creator.id
+      AND profile_creator_member.status = 'active'
+     LEFT JOIN shipment_kootaj_details k
+       ON k.shipment_id = s.id
+      AND k.organization_id = s.organization_id
+     LEFT JOIN app_users kootaj_updater
+       ON kootaj_updater.id = k.updated_by_id
+     LEFT JOIN organization_members kootaj_updater_member
+       ON kootaj_updater_member.organization_id = s.organization_id
+      AND kootaj_updater_member.user_id = kootaj_updater.id
+      AND kootaj_updater_member.status = 'active'
+     WHERE s.id = $1
+       AND s.organization_id = $2
+       AND s.archived_at IS NULL
+       AND s.exited_archived_at IS NULL
+     LIMIT 1`,
+    [shipmentId, context.organizationId]
+  );
+
+  const row = result.rows[0];
+  if (!row) return null;
+
+  const sections = jsonObject(row.sections_json);
+  const base = jsonObject(sections.base);
+  const goods = jsonObject(sections.goods);
+  const declaration = jsonObject(sections.declarationKootaj);
+  const permits = jsonObject(sections.permits);
+  const payments = jsonObject(sections.payments);
+  const banking = jsonObject(sections.banking);
+  const notes = jsonObject(sections.notes);
+  const legacy = jsonObject(row.legacy_data);
+  const goodsRows = safeGoodsRows(goods.goodsRows || legacy.goodsRows);
+  const permitRows = jsonArray(permits.permitRows).filter((item) => cleanText(item?.permitName));
+
+  const needsDocumentCount = fieldKeys.some((key) =>
+    ["shipment.document_count", "shipment.documents.count", "shipment.documents.exists"].includes(key)
+  );
+  const documentCount = needsDocumentCount
+    ? Number(
+        (
+          await pool.query(
+            `SELECT COUNT(*)::int AS total_count
+             FROM documents
+             WHERE organization_id = $1
+               AND shipment_id = $2
+               AND archived_at IS NULL`,
+            [context.organizationId, shipmentId]
+          )
+        ).rows[0]?.total_count || 0
+      )
+    : null;
+
+  const needsMessages = fieldKeys.some((key) => key.startsWith("shipment.messages."));
+  const messageSummary = needsMessages
+    ? (
+        await pool.query(
+          `WITH shipment_messages AS (
+             SELECT m.id, m.sender_name, m.content, m.created_at
+             FROM chat_threads t
+             JOIN chat_messages m
+               ON m.thread_id = t.id
+              AND m.organization_id = t.organization_id
+             WHERE t.organization_id = $1
+               AND t.shipment_id = $2
+               AND t.type = 'SHIPMENT'
+               AND t.archived_at IS NULL
+               AND m.status = 'sent'
+           )
+           SELECT
+             (SELECT COUNT(*)::int FROM shipment_messages) AS message_count,
+             id,
+             sender_name,
+             content,
+             created_at
+           FROM shipment_messages
+           ORDER BY created_at DESC
+           LIMIT 1`,
+          [context.organizationId, shipmentId]
+        )
+      ).rows[0] || { message_count: 0 }
+    : { message_count: 0 };
+
+  const container20 = numberOrNull(goods.container20Count);
+  const container40 = numberOrNull(goods.container40Count);
+  const hasContainerBreakdown = container20 !== null || container40 !== null;
+  const containerTotal = hasContainerBreakdown
+    ? (container20 || 0) + (container40 || 0)
+    : numberOrNull(legacy.containerCount);
+  const updatedAt = isoTimestamp(row.profile_updated_at || row.kootaj_updated_at || row.updated_at);
+  const updatedBy = cleanText(row.profile_updated_by_name) || cleanText(row.profile_created_by_name) || cleanText(row.kootaj_updated_by_name);
+  const latestMessage = cleanText(messageSummary.content)
+    ? [cleanText(messageSummary.sender_name), cleanText(messageSummary.content).slice(0, 240)].filter(Boolean).join(": ")
+    : "";
+  const customsDifferenceText = [
+    moneyText(payments.customsDifferenceAmount, payments.customsDifferenceCurrency),
+    hasOwnValue(payments, "customsDifferencePaid") ? paidStatusText(Boolean(payments.customsDifferencePaid)) : "",
+  ].filter(Boolean).join(" - ");
+  const customsTaxText = [
+    customsTaxStatusLabel(payments.customsTaxStatus),
+    moneyText(payments.customsTaxAmount, payments.customsTaxCurrency) || moneyText(row.kootaj_tax_amount, "IRR"),
+    hasOwnValue(payments, "customsTaxPaid") ? paidStatusText(Boolean(payments.customsTaxPaid)) : "",
+  ].filter(Boolean).join(" - ");
+
+  const fieldValues = {
+    "shipment.code": row.shipment_code || row.id,
+    "shipment.customer": customerDisplayName(row),
+    "shipment.status": cleanText(base.statusText) || cleanText(row.status),
+    "shipment.order_registration_number": cleanText(base.orderRegistrationNumber) || cleanText(row.kootaj_order_registration_number),
+    "shipment.commercial_card": cleanText(base.commercialCardDisplayName) || cleanText(base.commercialCardId) || cleanText(row.kootaj_commercial_card_id),
+    "shipment.document_count": documentCount,
+    "shipment.goods_count": goodsRows.length,
+    "shipment.goods.exists": goodsRows.length > 0 || Boolean(cleanText(row.kootaj_goods_summary)),
+    "shipment.container_count": containerTotal,
+    "shipment.current_stage": cleanText(base.currentStage) || cleanText(row.current_step_id),
+    "shipment.updated_at": updatedAt,
+    "shipment.updated_by": updatedBy,
+    "shipment.container_20ft": container20,
+    "shipment.container_40ft": container40,
+    "shipment.goods.contents": goodsContentsText(goodsRows, row.kootaj_goods_summary),
+    "shipment.goods.list": goodsListText(goodsRows, row.kootaj_goods_summary),
+    "shipment.documents.count": documentCount,
+    "shipment.documents.exists": Boolean(documentCount),
+    "shipment.messages.exists": Number(messageSummary.message_count || 0) > 0,
+    "shipment.messages.count": Number(messageSummary.message_count || 0),
+    "shipment.messages.latest": latestMessage,
+    "shipment.customs.cotage_number": cleanText(declaration.cotageNumber) || cleanText(row.kootaj_cotage_number),
+    "shipment.customs.route": routeLabel(declaration.customsRoute || row.kootaj_customs_route),
+    "shipment.customs.cotage_registered_at": cleanText(declaration.cotageRegistrationDate) || cleanText(row.kootaj_cotage_date),
+    "shipment.customs.total_value": moneyText(declaration.totalValueAmount, declaration.totalValueCurrency) || moneyText(row.kootaj_currency_amount, row.kootaj_currency_type),
+    "shipment.customs.final_paid_amount": moneyText(declaration.finalPaidAmount, declaration.finalPaidCurrency),
+    "shipment.permits.exists": permitRows.length > 0,
+    "shipment.permits.count": permitRows.length ? `${permitRows.length}: ${permitListText(permitRows)}` : "",
+    "shipment.payments.customs_amount": moneyText(payments.customsAmount, payments.customsAmountCurrency) || moneyText(row.kootaj_duties_amount, "IRR"),
+    "shipment.payments.customs_difference": customsDifferenceText,
+    "shipment.payments.customs_tax": customsTaxText || cleanText(row.kootaj_tax_payment_status),
+    "shipment.payments.status": hasOwnValue(payments, "customsPaymentPaid") ? Boolean(payments.customsPaymentPaid) : null,
+    "shipment.payments.customs_payment_date": cleanText(row.kootaj_customs_payment_date),
+    "shipment.payments.payment_reference": cleanText(row.kootaj_payment_reference),
+    "shipment.bank.name": cleanText(banking.bankName) || cleanText(row.kootaj_bank_name),
+    "shipment.bank.branch_code": cleanText(banking.branchCode),
+    "shipment.bank.branch_name": cleanText(banking.branchName),
+    "shipment.bank.payment_instrument_code": cleanText(banking.paymentInstrumentCode) || cleanText(row.kootaj_bank_tracking_number),
+    "shipment.bank.sata_code": cleanText(banking.sataCode),
+    "shipment.notes.exists": Boolean(cleanText(notes.internalNote) || cleanText(row.kootaj_internal_note)),
+    "shipment.notes.text": cleanText(notes.internalNote) || cleanText(row.kootaj_internal_note),
+    "shipment.documents.file_link": "",
+    "shipment.documents.image": "",
+    "shipment.documents.private_url": "",
+  };
+
+  return {
+    type: "shipment_detail_fields",
+    shipment: {
+      id: row.id,
+      shipmentCode: row.shipment_code || row.id,
+      customerId: row.customer_id || "",
+      customerName: customerDisplayName(row),
+      actionUrl: `/shipments/${row.id}`,
+    },
+    fields: fieldKeys.map((key) => {
+      const definition = getShipmentFieldDefinition(key);
+      const rawValue = fieldValues[key];
+      if (definition?.deferredUnsupported) {
+        return {
+          key,
+          labelFa: definition.labelFa,
+          labelEn: definition.labelEn,
+          answerPolicy: definition.answerPolicy,
+          value: "",
+          rawValue: null,
+          hasValue: false,
+          missing: true,
+          missingValuePhrase: definition.missingValuePhrase,
+          metadataOnly: Boolean(definition.metadataOnly),
+          deferredUnsupported: true,
+        };
+      }
+      const value =
+        definition?.answerPolicy === HAMYAR_SHIPMENT_FIELD_POLICY.EXISTS
+          ? rawValue === true
+            ? "دارد"
+            : rawValue === false
+              ? "ندارد"
+              : ""
+          : definition?.answerPolicy === HAMYAR_SHIPMENT_FIELD_POLICY.COUNT
+            ? rawValue === null || rawValue === undefined || rawValue === ""
+              ? ""
+              : String(rawValue)
+            : cleanText(rawValue);
+      const hasValue = fieldHasValue(definition, rawValue, value);
+      return {
+        key,
+        labelFa: definition?.labelFa || key,
+        labelEn: definition?.labelEn || key,
+        answerPolicy: definition?.answerPolicy || HAMYAR_SHIPMENT_FIELD_POLICY.VALUE,
+        value,
+        rawValue,
+        hasValue,
+        missing: !hasValue,
+        missingValuePhrase: definition?.missingValuePhrase || "ثبت نشده",
+        metadataOnly: Boolean(definition?.metadataOnly),
+        deferredUnsupported: false,
+      };
+    }),
   };
 }
 

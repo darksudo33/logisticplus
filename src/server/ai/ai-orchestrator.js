@@ -35,6 +35,7 @@ import {
   getShipmentCustomerChatSummary,
   getShipmentDailyStatus,
   getShipmentDetailContext,
+  getShipmentDetailFields,
   getShipmentDocuments,
   getShipmentFinancialSummary,
   getShipmentFullProfile,
@@ -85,6 +86,12 @@ import {
   planBusinessSearch,
   verifyRelationAnswerability,
 } from "./ai-context-planner.js";
+import {
+  HAMYAR_SHIPMENT_FIELD_POLICY,
+  SHIPMENT_FIELD_LOOKUP_INTENT_ID,
+  getShipmentFieldDefinition,
+  isShipmentFieldDeferred,
+} from "./hamyar-shipment-field-registry.js";
 import {
   STALE_MEMORY_MESSAGE,
   getCompanyBrainSnapshot,
@@ -1030,6 +1037,17 @@ async function answerResolvedShipmentReference(pool, context, shipmentCandidate,
 
   const flags = intentFlags(message);
   const intent = detectAiIntent(message);
+  const fieldPlan = planBusinessSearch(message, {
+    activeEntity: {
+      type: "shipment",
+      id: shipment.id,
+      code: shipment.shipmentCode,
+      label: `محموله ${shipment.shipmentCode}`,
+    },
+  });
+  if (isShipmentFieldLookupPlan(fieldPlan)) {
+    return answerShipmentFieldLookup(pool, context, fieldPlan, shipment, toolsCalled);
+  }
   if (!hasExplicitShipmentDetailIntent(flags, intent)) {
     return shipmentResolutionNeedsIntentResult(shipment, toolsCalled);
   }
@@ -2456,6 +2474,135 @@ function groundedShipmentAnswer(plan, detail) {
   return shipmentSummaryFromContext(plan, detail);
 }
 
+function isShipmentFieldLookupPlan(plan = {}) {
+  return Boolean(
+    plan.intent === SHIPMENT_FIELD_LOOKUP_INTENT_ID ||
+    plan.registryIntent === SHIPMENT_FIELD_LOOKUP_INTENT_ID ||
+    plan.hamyarPlan?.intent === SHIPMENT_FIELD_LOOKUP_INTENT_ID
+  );
+}
+
+function shipmentFieldKeyForPlan(plan = {}) {
+  const candidates = [
+    plan.requestedField,
+    ...(Array.isArray(plan.requestedFields) ? plan.requestedFields : []),
+    plan.hamyarPlan?.requestedField,
+    ...(Array.isArray(plan.hamyarPlan?.requestedFields) ? plan.hamyarPlan.requestedFields : []),
+  ];
+  return candidates.find((field) => getShipmentFieldDefinition(field)) || "";
+}
+
+function shipmentFieldPlanForAnswer(plan = {}, fieldKey = "") {
+  const field = getShipmentFieldDefinition(fieldKey);
+  return {
+    ...plan,
+    intent: SHIPMENT_FIELD_LOOKUP_INTENT_ID,
+    registryIntent: SHIPMENT_FIELD_LOOKUP_INTENT_ID,
+    requestedField: fieldKey,
+    requestedFields: [fieldKey],
+    relationPath: field?.relationPath || plan.relationPath || [],
+    liveTool: field?.sourceTool || "",
+    needsCompanyBrain: false,
+    needsLiveVerification: Boolean(field?.liveVerificationRequired),
+  };
+}
+
+function deferredShipmentFieldAnswer(field = {}, shipmentCode = "") {
+  const subject = shipmentCode ? ` بار ${shipmentCode}` : "";
+  return `${field.labelFa || "این فیلد"}${subject}: خواندن یا ارسال فایل، لینک، تصویر، آدرس خصوصی یا کلید ذخیره‌سازی سند هنوز برای همیار فعال نیست. فقط تعداد یا وجود سند به صورت فراداده قابل بررسی است.`;
+}
+
+function shipmentFieldValueAnswer(plan = {}, fieldResult = {}, shipmentCode = "") {
+  const label = fieldResult.labelFa || getShipmentFieldDefinition(fieldResult.key)?.labelFa || fieldResult.key || "فیلد";
+  if (fieldResult.missing) {
+    return relationText(
+      plan,
+      `برای بار ${shipmentCode}، ${fieldResult.missingValuePhrase || `${label} ثبت نشده`}.`,
+      `For shipment ${shipmentCode}, ${fieldResult.labelEn || label} is not recorded.`
+    );
+  }
+  if (fieldResult.answerPolicy === HAMYAR_SHIPMENT_FIELD_POLICY.LIST) {
+    return relationText(
+      plan,
+      `${label} بار ${shipmentCode}: ${labelOrMissing(fieldResult.value)}`,
+      `${fieldResult.labelEn || label} for shipment ${shipmentCode}: ${labelOrMissing(fieldResult.value)}`
+    );
+  }
+  return relationText(
+    plan,
+    `${label} بار ${shipmentCode}: ${labelOrMissing(fieldResult.value)}`,
+    `${fieldResult.labelEn || label} for shipment ${shipmentCode}: ${labelOrMissing(fieldResult.value)}`
+  );
+}
+
+async function answerShipmentFieldLookup(pool, context, plan = {}, shipmentCandidate = {}, toolsCalled = []) {
+  const fieldKey = shipmentFieldKeyForPlan(plan);
+  const field = getShipmentFieldDefinition(fieldKey);
+  if (!field || !shipmentCandidate?.id) return null;
+
+  const answerPlan = shipmentFieldPlanForAnswer(plan, fieldKey);
+  const shipmentCode = cleanText(shipmentCandidate.shipmentCode || shipmentCandidate.code || shipmentCandidate.label || shipmentCandidate.id);
+  const activeEntity = {
+    type: "shipment",
+    id: shipmentCandidate.id,
+    code: shipmentCode,
+    label: `محموله ${shipmentCode}`,
+  };
+
+  if (isShipmentFieldDeferred(fieldKey)) {
+    return relationResult({
+      plan: answerPlan,
+      answer: deferredShipmentFieldAnswer(field, shipmentCode),
+      toolsCalled,
+      sources: [
+        shipmentCandidate.id ? source("shipment", { id: shipmentCandidate.id, label: `محموله ${shipmentCode}`, url: shipmentCandidate.actionUrl || `/shipments/${shipmentCandidate.id}` }) : null,
+        source("system", { label: "سیاست دسترسی سند" }),
+      ].filter(Boolean),
+      recordIds: [shipmentCandidate.id].filter(Boolean),
+      activeEntity,
+      success: false,
+      reason: "document_file_lookup_deferred",
+    });
+  }
+
+  toolsCalled.push("getShipmentDetailFields");
+  const detail = await getShipmentDetailFields(pool, context, { shipmentId: shipmentCandidate.id, requestedFields: [fieldKey] });
+  const fieldResult = detail?.fields?.[0];
+  if (!detail || !fieldResult) {
+    return relationResult({
+      plan: answerPlan,
+      answer: relationText(
+        answerPlan,
+        "زمینه دریافت‌شده برای پاسخ به این فیلد کافی نبود. لطفاً کد محموله را دوباره بررسی کنید.",
+        "The retrieved context was not enough to answer this field. Please check the shipment reference again."
+      ),
+      toolsCalled,
+      recordIds: [shipmentCandidate.id].filter(Boolean),
+      activeEntity,
+      success: false,
+      reason: "shipment_field_context_missing",
+    });
+  }
+
+  const resolvedCode = detail.shipment?.shipmentCode || shipmentCode;
+  return relationResult({
+    plan: answerPlan,
+    answer: shipmentFieldValueAnswer(answerPlan, fieldResult, resolvedCode),
+    toolsCalled,
+    sources: [
+      source("shipment", { id: detail.shipment.id, label: `محموله ${resolvedCode}`, url: detail.shipment.actionUrl }),
+    ],
+    recordIds: [detail.shipment.id].filter(Boolean),
+    activeEntity: {
+      ...activeEntity,
+      code: resolvedCode,
+      label: `محموله ${resolvedCode}`,
+    },
+    success: true,
+    reason: fieldResult.missing ? "shipment_field_missing" : "answered_from_shipment_detail_fields",
+  });
+}
+
 function groundedCustomerAnswer(plan, detail) {
   const customer = detail.customer;
   if (plan.intent === RELATION_INTENTS.CUSTOMER_COMMERCIAL_CARD_LOOKUP) {
@@ -2522,6 +2669,10 @@ async function resolveSingleCustomerForPlan(pool, context, plan, toolsCalled) {
 
 async function answerBusinessCandidate(pool, context, plan, candidate, toolsCalled) {
   if (candidate.type === "shipment") {
+    if (isShipmentFieldLookupPlan(plan)) {
+      const fieldAnswer = await answerShipmentFieldLookup(pool, context, plan, candidate, toolsCalled);
+      if (fieldAnswer) return fieldAnswer;
+    }
     toolsCalled.push("getShipmentDetailContext");
     const detail = await getShipmentDetailContext(pool, context, { shipmentId: candidate.id });
     if (!detail) return missingBusinessContextResult(plan, candidate, toolsCalled);
@@ -3200,12 +3351,13 @@ export function followUpBusinessPlanFromRecentMessages(message = "", recentMessa
 export function shouldUseActiveEntityForFollowUp(message = "", activeEntity = null) {
   if (!activeEntity?.type || !activeEntity?.id) return false;
   if (extractAmbiguitySelection(message)) return false;
-  const plan = planBusinessSearch(message);
+  const plan = planBusinessSearch(message, { activeEntity });
   if (plan.intent === "identity") return false;
   const requested = requestedFieldsForPlan(plan).filter((field) => field && field !== BUSINESS_REQUESTED_FIELDS.SUMMARY);
   if (requested.includes(BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER) && activeEntity.type !== "shipment") return false;
   const flags = intentFlags(message);
-  if (flags.asksDocuments) return false;
+  const activeShipmentFieldLookup = activeEntity.type === "shipment" && isShipmentFieldLookupPlan(plan);
+  if (flags.asksDocuments && !activeShipmentFieldLookup) return false;
   const normalized = normalizeSelectionValue(message);
   const hasContextCue = flags.isFollowUp || hasAny(normalized, [
     "این",
@@ -3271,6 +3423,10 @@ async function runBoundedContextAgent(pool, context, message, { recentMessages =
       return await runBusinessSearchPlan(pool, context, businessPlan, toolsCalled) || relationNotFoundResult(plan, "shipment", toolsCalled);
     }
     if (toolsCalled.length >= AGENTIC_CONTEXT_MAX_STEPS) return relationMissingRefResult(plan);
+    if (isShipmentFieldLookupPlan(plan)) {
+      const fieldAnswer = await answerShipmentFieldLookup(pool, context, plan, resolved.shipment, toolsCalled);
+      if (fieldAnswer) return fieldAnswer;
+    }
 
     toolsCalled.push("getShipmentDetailContext");
     const detail = await getShipmentDetailContext(pool, context, { shipmentId: resolved.shipment.id });
@@ -3535,6 +3691,18 @@ async function answerCustomer(pool, context, candidate, options = {}) {
 async function answerFromActiveEntity(pool, context, activeEntity, message) {
   if (!activeEntity?.type || !activeEntity?.id) return null;
   const flags = intentFlags(message);
+  if (activeEntity.type === "shipment") {
+    const activePlan = planBusinessSearch(message, { activeEntity });
+    if (isShipmentFieldLookupPlan(activePlan)) {
+      return answerShipmentFieldLookup(pool, context, activePlan, {
+        id: activeEntity.id,
+        shipmentCode: activeEntity.code || activeEntity.label || activeEntity.id,
+        code: activeEntity.code,
+        label: activeEntity.label,
+        actionUrl: `/shipments/${activeEntity.id}`,
+      }, []);
+    }
+  }
   if (flags.asksDocuments) {
     return {
       handled: true,

@@ -1,9 +1,9 @@
 {
-  "generatedAt": "2026-06-13T13:23:15.024Z",
-  "datasetPath": "C:\\Users\\Ahmadreza\\Documents\\logisticplus-hamyar-broader-followup\\data\\hamyar\\hamyar_logistic_question_dataset_v1.jsonl",
+  "generatedAt": "2026-06-13T18:49:21.708Z",
+  "datasetPath": "C:\\Users\\Ahmadreza\\Documents\\logisticplus-hamyar-shipment-detail-fields\\data\\hamyar\\hamyar_logistic_question_dataset_v1.jsonl",
   "totalRows": 758,
-  "passCount": 344,
-  "softGapCount": 414,
+  "passCount": 345,
+  "softGapCount": 413,
   "hardFailureCount": 0,
   "datasetSummary": {
     "totalRows": 758,
@@ -171,8 +171,8 @@
     },
     "conversation.followup.resolve": {
       "total": 23,
-      "pass": 22,
-      "soft_gap": 1,
+      "pass": 23,
+      "soft_gap": 0,
       "hard_fail": 0
     },
     "customer.contact.lookup": {
@@ -2130,7 +2130,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2190,7 +2190,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2250,7 +2250,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2278,7 +2278,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -2306,7 +2306,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -2338,7 +2338,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2398,7 +2398,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2426,7 +2426,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -2454,7 +2454,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -2482,7 +2482,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2510,7 +2510,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -2538,7 +2538,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -2570,7 +2570,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2598,7 +2598,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -2626,7 +2626,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -2658,7 +2658,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2686,7 +2686,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -2714,7 +2714,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -2746,7 +2746,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2774,7 +2774,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -2802,7 +2802,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -2830,7 +2830,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2858,7 +2858,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -2886,7 +2886,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -2914,7 +2914,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2942,7 +2942,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -2970,7 +2970,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3002,7 +3002,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3030,7 +3030,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3058,7 +3058,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3090,7 +3090,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3118,7 +3118,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -3146,7 +3146,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3178,7 +3178,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3206,7 +3206,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3234,7 +3234,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3262,7 +3262,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3290,7 +3290,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -3318,7 +3318,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -3346,7 +3346,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3378,7 +3378,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3410,7 +3410,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3446,7 +3446,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3478,7 +3478,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3510,7 +3510,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3546,7 +3546,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3578,7 +3578,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -3610,7 +3610,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3642,7 +3642,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3674,7 +3674,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3706,7 +3706,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3738,7 +3738,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3770,7 +3770,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -3802,7 +3802,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -3830,7 +3830,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3862,7 +3862,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3894,7 +3894,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3930,7 +3930,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3962,7 +3962,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3994,7 +3994,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -4030,7 +4030,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4062,7 +4062,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -4094,7 +4094,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -4126,7 +4126,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4158,7 +4158,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4190,7 +4190,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4222,7 +4222,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4254,7 +4254,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -4286,7 +4286,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -4314,7 +4314,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4342,7 +4342,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4370,7 +4370,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4398,7 +4398,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4426,7 +4426,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4454,7 +4454,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4482,7 +4482,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4510,7 +4510,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4538,7 +4538,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -4566,7 +4566,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4594,7 +4594,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4622,7 +4622,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4650,7 +4650,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4678,7 +4678,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4706,7 +4706,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -5003,30 +5003,6 @@
         {
           "type": "intent_gap",
           "message": "expected compatible registry intent task.today.lookup, task.assignee.lookup, got shipment.tasks.lookup"
-        }
-      ],
-      "hardFailures": []
-    },
-    {
-      "id": "HAMYAR-Q-0634",
-      "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "اسنادش چیه؟",
-      "plannedIntent": "",
-      "plannedRequestedField": "summary",
-      "softGaps": [
-        {
-          "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.lookup, customer.contact.lookup, customer.shipments.lookup, customer.tasks.lookup, cheque.customer.lookup, shipment.activity.lookup, shipment.commercial_card.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.tasks.lookup, shipment.lookup, got (none)"
-        },
-        {
-          "type": "relation_gap",
-          "message": "expected relation path conversation → activeEntity/focusedEntity, got (none)"
-        },
-        {
-          "type": "live_verification_metadata_gap",
-          "message": "dataset requires live verification but planner metadata does not preserve it"
         }
       ],
       "hardFailures": []
@@ -7655,12 +7631,24 @@
       "intent": "analytics.aggregate.lookup",
       "category": "counts_analytics",
       "question": "چند سند ناقص داریم؟",
-      "plannedIntent": "missing_data.lookup",
-      "plannedRequestedField": "missing_data",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.document_count",
       "softGaps": [
         {
           "type": "unsupported_dataset_intent",
           "message": "dataset intent analytics.aggregate.lookup is not implemented in the current registry"
+        },
+        {
+          "type": "entity_gap",
+          "message": "expected primary entity organization, got shipment"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path organization → aggregate_tools, got shipment -> documents -> count"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field counts, got shipment.document_count"
         }
       ],
       "hardFailures": []
@@ -8456,7 +8444,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8484,7 +8472,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8512,7 +8500,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8544,7 +8532,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8592,7 +8580,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8620,7 +8608,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8648,7 +8636,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8680,7 +8668,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8728,7 +8716,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8756,7 +8744,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8784,7 +8772,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8816,7 +8804,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8848,7 +8836,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -8876,7 +8864,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -8904,7 +8892,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -8932,7 +8920,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -8964,7 +8952,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -8996,7 +8984,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -9024,7 +9012,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -9052,7 +9040,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -9080,7 +9068,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -9112,7 +9100,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -9160,7 +9148,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -9188,7 +9176,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -9216,7 +9204,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -9248,7 +9236,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -9280,7 +9268,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9308,7 +9296,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9336,7 +9324,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9364,7 +9352,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9396,7 +9384,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9428,7 +9416,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9456,7 +9444,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9484,7 +9472,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9512,7 +9500,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9544,7 +9532,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9576,7 +9564,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9604,7 +9592,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9632,7 +9620,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9660,7 +9648,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9692,7 +9680,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9724,7 +9712,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9752,7 +9740,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9780,7 +9768,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9808,7 +9796,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9840,7 +9828,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9872,7 +9860,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9900,7 +9888,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9928,7 +9916,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9956,7 +9944,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9988,7 +9976,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -10401,7 +10389,6 @@
     "Add aggregate/count registry capabilities backed by existing live operations summary tools.",
     "Add risk alert registry intents for blockers, overdue tasks, due cheques, and missing daily statuses.",
     "Add commercial-card-primary relation resolver coverage for agent/responsible contact lookups.",
-    "Promote active-entity follow-up resolution into a first-class registry capability with eval rows.",
     "Improve customer-to-shipments aliases and active shipment list routing.",
     "Add task, workflow, and cheque-specific relation aliases for current operational follow-up questions.",
     "For each implemented gap, add/adjust registry examples, regenerate registry eval fixtures, and rerun this dataset eval."
