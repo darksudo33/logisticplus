@@ -20,7 +20,7 @@ function hasFrontendPermission(user: { permissions?: string[] } | null, anyOf: s
 }
 
 function canRenderProtectedRouteBeforeLegacyHydration(pathname: string) {
-  if (pathname === "/dashboard" || pathname === "/tasks" || pathname === "/shipments/new-v2") return true;
+  if (pathname === "/dashboard" || pathname === "/Hamyar" || pathname === "/hamyar" || pathname === "/tasks" || pathname === "/shipments/new-v2") return true;
   const shipmentV2DetailMatch = pathname.match(/^\/shipments\/([^/]+)(?:\/v2)?$/);
   if (!shipmentV2DetailMatch) return false;
   return !["exited", "new-v2"].includes(shipmentV2DetailMatch[1]);
