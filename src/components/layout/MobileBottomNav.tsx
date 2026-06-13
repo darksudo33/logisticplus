@@ -5,11 +5,13 @@
 
 import React from "react";
 import { Link, useLocation } from "react-router-dom";
-import { ClipboardList, FileSearch, MessageSquare, Ship } from "lucide-react";
+import { Bot, ClipboardList, FileSearch, MessageSquare, Ship } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "motion/react";
+import { useMockStore } from "@/src/store/useMockStore";
 
 const navItems = [
+  { icon: Bot, label: "همیار", path: "/Hamyar", ceoOnly: true },
   { icon: ClipboardList, label: "وضعیت روزانه", path: "/daily-status" },
   { icon: Ship, label: "محموله‌ها", path: "/shipments" },
   { icon: MessageSquare, label: "چت داخلی", path: "/chat" },
@@ -18,10 +20,12 @@ const navItems = [
 
 export const MobileBottomNav = () => {
   const location = useLocation();
+  const currentUser = useMockStore((state) => state.currentUser);
+  const visibleItems = navItems.filter((item) => !item.ceoOnly || currentUser?.role === "CEO");
 
   return (
     <nav className="lg:hidden fixed bottom-0 left-0 right-0 h-16 bg-card/90 backdrop-blur-xl border-t border-border/70 flex items-center justify-around px-2 pb-safe z-40 font-sans shadow-[0_-8px_30px_rgba(0,0,0,0.18)]">
-      {navItems.map((item) => {
+      {visibleItems.map((item) => {
         const isActive = location.pathname.startsWith(item.path);
         return (
           <Link
