@@ -63,7 +63,7 @@ Use this checklist before adding a new field to Hamyar. The goal is to add field
 
 - Add registry examples.
 - Run `node scripts/hamyar-generate-eval-cases.mjs`.
-- Add or update JSONL coverage rows in `data/hamyar/hamyar_logistic_question_dataset_v1.jsonl` when the field introduces new customer question wording.
+- Add or update JSONL coverage rows in `data/hamyar/hamyar_logistic_question_dataset_v2.jsonl` when the field introduces new customer question wording. Keep v1 unchanged as the historical baseline.
 - Run `npm run hamyar:dataset:check`.
 - Run `npm run hamyar:dataset:eval`.
 - Add/verify assertions in `scripts/ai-agentic-context-eval.mjs` for:

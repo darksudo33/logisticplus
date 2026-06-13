@@ -493,7 +493,9 @@ Missing-data behavior:
 
 The canonical question-pattern artifact is stored at:
 
-- `data/hamyar/hamyar_logistic_question_dataset_v1.jsonl`
+- `data/hamyar/hamyar_logistic_question_dataset_v2.jsonl`
+
+`data/hamyar/hamyar_logistic_question_dataset_v1.jsonl` is retained as the historical v1 baseline.
 
 Use it for planner/eval/training coverage, not as a runtime replacement for the Capability Registry.
 

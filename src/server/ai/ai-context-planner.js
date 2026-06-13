@@ -1,4 +1,5 @@
 import { resolveHamyarQuestionPlan } from "./hamyar-relation-resolver.js";
+import { SHIPMENT_FIELD_LOOKUP_INTENT_ID } from "./hamyar-shipment-field-registry.js";
 
 const PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹";
 const ARABIC_DIGITS = "٠١٢٣٤٥٦٧٨٩";
@@ -9,6 +10,7 @@ export const RELATION_INTENTS = {
   CUSTOMER_COMMERCIAL_CARD_LOOKUP: "customer.commercial_card.lookup",
   CUSTOMER_SHIPMENTS_LOOKUP: "customer.shipments.lookup",
   SHIPMENT_SUMMARY_LOOKUP: "shipment.summary.lookup",
+  SHIPMENT_FIELD_LOOKUP: SHIPMENT_FIELD_LOOKUP_INTENT_ID,
 };
 
 export const BUSINESS_ENTITY_TYPES = {
@@ -503,6 +505,9 @@ function relationRefFromRegistryPlan(plan = {}) {
 export function detectBusinessRequestedFields(message = "", context = {}) {
   const normalized = normalizeAgentText(message);
   const registryPlan = resolveHamyarQuestionPlan(message, context, context?.activeEntity);
+  if (registryPlan.intent === SHIPMENT_FIELD_LOOKUP_INTENT_ID && registryPlan.requestedField) {
+    return [registryPlan.requestedField];
+  }
   const hasNumber = includesAny(normalized, NUMBER_TERMS);
   const hasPhone = includesAny(normalized, PHONE_TERMS);
   const hasShipment = includesAny(normalized, SHIPMENT_TERMS);
@@ -665,7 +670,8 @@ export function planBusinessSearch(message = "", context = {}) {
   const requestedField = detectBusinessRequestedField(message, context);
   const extractedTerms = extractBusinessSearchTerms(message);
   const registryTerms = Array.isArray(registryPlan.queryTerms) ? registryPlan.queryTerms : [];
-  const queryTerms = extractedTerms.length ? extractedTerms : registryTerms;
+  const isShipmentFieldLookup = registryPlan.intent === SHIPMENT_FIELD_LOOKUP_INTENT_ID;
+  const queryTerms = isShipmentFieldLookup ? registryTerms : extractedTerms.length ? extractedTerms : registryTerms;
   const candidateTypes = unique([
     ...(Array.isArray(registryPlan.preferredEntityTypes) ? registryPlan.preferredEntityTypes : []),
     ...candidateTypesFor(message, requestedField),
@@ -682,7 +688,8 @@ export function planBusinessSearch(message = "", context = {}) {
     includesAny(normalized, PHONE_TERMS) ||
     includesAny(normalized, ADDRESS_TERMS) ||
     includesAny(normalized, ACCOUNTING_TERMS) ||
-    [...HONORIFICS].some((term) => normalized.includes(term));
+    [...HONORIFICS].some((term) => normalized.includes(term)) ||
+    isShipmentFieldLookup;
 
   return {
     intent: "business_search",
@@ -843,6 +850,11 @@ export function verifyRelationAnswerability(intent, context = {}) {
     return context.shipment?.shipmentCode || context.shipment?.status
       ? { answerable: true }
       : { answerable: false, reason: "missing_shipment_summary" };
+  }
+  if (intent === RELATION_INTENTS.SHIPMENT_FIELD_LOOKUP) {
+    return context.shipment?.shipmentCode || Array.isArray(context.fields)
+      ? { answerable: true }
+      : { answerable: false, reason: "missing_shipment_field_context" };
   }
   return { answerable: false, reason: "unsupported_intent" };
 }

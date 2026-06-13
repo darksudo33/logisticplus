@@ -1,29 +1,29 @@
 {
-  "generatedAt": "2026-06-13T13:23:15.024Z",
-  "datasetPath": "C:\\Users\\Ahmadreza\\Documents\\logisticplus-hamyar-broader-followup\\data\\hamyar\\hamyar_logistic_question_dataset_v1.jsonl",
-  "totalRows": 758,
-  "passCount": 344,
-  "softGapCount": 414,
+  "generatedAt": "2026-06-13T19:18:47.709Z",
+  "datasetPath": "C:\\Users\\Ahmadreza\\Documents\\logisticplus-hamyar-shipment-detail-fields\\data\\hamyar\\hamyar_logistic_question_dataset_v2.jsonl",
+  "totalRows": 1174,
+  "passCount": 655,
+  "softGapCount": 519,
   "hardFailureCount": 0,
   "datasetSummary": {
-    "totalRows": 758,
-    "totalIntents": 23,
-    "totalCategories": 23,
+    "totalRows": 1174,
+    "totalIntents": 24,
+    "totalCategories": 43,
     "priorityCounts": {
-      "P0": 421,
-      "P1": 279,
+      "P0": 635,
+      "P1": 481,
       "P2": 58
     },
     "futureActionRows": 10,
-    "requiresLiveVerificationRows": 728,
-    "usesCompanyBrainRows": 703,
+    "requiresLiveVerificationRows": 1144,
+    "usesCompanyBrainRows": 1080,
     "intents": {
       "action.proposed.requires_confirmation": 10,
       "analytics.aggregate.lookup": 12,
       "assistant.identity": 10,
       "cheque.lookup": 16,
       "commercial_card.agent.contact.lookup": 45,
-      "commercial_card.lookup": 35,
+      "commercial_card.lookup": 44,
       "company.daily_summary.lookup": 10,
       "company.operational_status.lookup": 10,
       "conversation.followup.resolve": 23,
@@ -31,13 +31,14 @@
       "customer.profile.lookup": 20,
       "customer.shipments.lookup": 29,
       "data_quality.missing_fields.lookup": 10,
-      "document.lookup": 145,
+      "document.lookup": 190,
       "risk.alerts.lookup": 10,
       "shipment.agent.contact.lookup": 60,
       "shipment.customer.contact.lookup": 56,
-      "shipment.customer.lookup": 35,
+      "shipment.customer.lookup": 44,
+      "shipment.field.lookup": 344,
       "shipment.lookup": 25,
-      "shipment.status.lookup": 67,
+      "shipment.status.lookup": 76,
       "shipment.vessel_captain.lookup": 37,
       "task.lookup": 20,
       "workflow.lookup": 18
@@ -60,6 +61,26 @@
       "shipment_agent": 60,
       "shipment_customer": 35,
       "shipment_customer_contact": 56,
+      "shipment_detail_banking": 25,
+      "shipment_detail_basic": 55,
+      "shipment_detail_clarification": 39,
+      "shipment_detail_conversation": 15,
+      "shipment_detail_customs": 25,
+      "shipment_detail_documents_deferred": 45,
+      "shipment_detail_documents_metadata": 10,
+      "shipment_detail_followup": 120,
+      "shipment_detail_goods": 27,
+      "shipment_detail_mixed_language": 8,
+      "shipment_detail_notes": 10,
+      "shipment_detail_payments": 20,
+      "shipment_detail_permits": 10,
+      "shipment_detail_section_banking": 1,
+      "shipment_detail_section_basic": 1,
+      "shipment_detail_section_customs": 1,
+      "shipment_detail_section_goods": 1,
+      "shipment_detail_section_messages": 1,
+      "shipment_detail_section_notes": 1,
+      "shipment_detail_section_payments": 1,
       "shipment_lookup": 25,
       "shipment_status": 67,
       "shipment_vessel_captain": 37,
@@ -84,6 +105,55 @@
       "profile": 20,
       "risk_summary": 10,
       "shipment_list": 29,
+      "shipment.bank.branch_code": 9,
+      "shipment.bank.branch_name": 9,
+      "shipment.bank.name": 10,
+      "shipment.bank.payment_instrument_code": 9,
+      "shipment.bank.sata_code": 11,
+      "shipment.bank.section": 1,
+      "shipment.basic_info": 1,
+      "shipment.code": 9,
+      "shipment.commercial_card": 10,
+      "shipment.container_20ft": 8,
+      "shipment.container_40ft": 8,
+      "shipment.container_count": 8,
+      "shipment.current_stage": 9,
+      "shipment.customer": 9,
+      "shipment.customs.cotage_number": 10,
+      "shipment.customs.cotage_registered_at": 9,
+      "shipment.customs.final_paid_amount": 9,
+      "shipment.customs.route": 10,
+      "shipment.customs.section": 1,
+      "shipment.customs.total_value": 9,
+      "shipment.document_count": 9,
+      "shipment.documents.count": 10,
+      "shipment.documents.exists": 9,
+      "shipment.documents.file_link": 15,
+      "shipment.documents.image": 15,
+      "shipment.documents.private_url": 15,
+      "shipment.goods_count": 9,
+      "shipment.goods.contents": 11,
+      "shipment.goods.exists": 10,
+      "shipment.goods.list": 10,
+      "shipment.goods.section": 1,
+      "shipment.messages.count": 9,
+      "shipment.messages.exists": 9,
+      "shipment.messages.latest": 9,
+      "shipment.messages.section": 1,
+      "shipment.notes.exists": 10,
+      "shipment.notes.section": 1,
+      "shipment.notes.text": 9,
+      "shipment.order_registration_number": 10,
+      "shipment.payments.customs_amount": 9,
+      "shipment.payments.customs_difference": 9,
+      "shipment.payments.customs_tax": 10,
+      "shipment.payments.section": 1,
+      "shipment.payments.status": 9,
+      "shipment.permits.count": 9,
+      "shipment.permits.exists": 10,
+      "shipment.status": 9,
+      "shipment.updated_at": 9,
+      "shipment.updated_by": 10,
       "status": 67,
       "status_summary": 10,
       "summary": 25,
@@ -108,8 +178,12 @@
       "organization → risk_alerts": 10,
       "shipment": 25,
       "shipment → agent → contact": 60,
+      "shipment → commercial_card": 8,
       "shipment → customer": 35,
       "shipment → customer → contact": 56,
+      "shipment → documents/files": 45,
+      "shipment → field": 356,
+      "shipment → field_group": 7,
       "shipment → status": 67,
       "shipment → vessel/captain": 37,
       "shipment → workflow": 6,
@@ -152,9 +226,9 @@
       "hard_fail": 0
     },
     "commercial_card.lookup": {
-      "total": 35,
+      "total": 44,
       "pass": 22,
-      "soft_gap": 13,
+      "soft_gap": 22,
       "hard_fail": 0
     },
     "company.daily_summary.lookup": {
@@ -171,8 +245,8 @@
     },
     "conversation.followup.resolve": {
       "total": 23,
-      "pass": 22,
-      "soft_gap": 1,
+      "pass": 23,
+      "soft_gap": 0,
       "hard_fail": 0
     },
     "customer.contact.lookup": {
@@ -200,9 +274,9 @@
       "hard_fail": 0
     },
     "document.lookup": {
-      "total": 145,
+      "total": 190,
       "pass": 0,
-      "soft_gap": 145,
+      "soft_gap": 190,
       "hard_fail": 0
     },
     "risk.alerts.lookup": {
@@ -224,9 +298,15 @@
       "hard_fail": 0
     },
     "shipment.customer.lookup": {
-      "total": 35,
+      "total": 44,
       "pass": 32,
-      "soft_gap": 3,
+      "soft_gap": 12,
+      "hard_fail": 0
+    },
+    "shipment.field.lookup": {
+      "total": 344,
+      "pass": 310,
+      "soft_gap": 34,
       "hard_fail": 0
     },
     "shipment.lookup": {
@@ -236,9 +316,9 @@
       "hard_fail": 0
     },
     "shipment.status.lookup": {
-      "total": 67,
+      "total": 76,
       "pass": 52,
-      "soft_gap": 15,
+      "soft_gap": 24,
       "hard_fail": 0
     },
     "shipment.vessel_captain.lookup": {
@@ -263,15 +343,27 @@
   "topMissingIntents": [
     {
       "value": "document.lookup",
-      "count": 145
+      "count": 190
     },
     {
       "value": "shipment.agent.contact.lookup",
       "count": 52
     },
     {
+      "value": "shipment.field.lookup",
+      "count": 34
+    },
+    {
       "value": "commercial_card.agent.contact.lookup",
       "count": 32
+    },
+    {
+      "value": "shipment.status.lookup",
+      "count": 24
+    },
+    {
+      "value": "commercial_card.lookup",
+      "count": 22
     },
     {
       "value": "task.lookup",
@@ -286,19 +378,15 @@
       "count": 15
     },
     {
-      "value": "shipment.status.lookup",
-      "count": 15
-    },
-    {
       "value": "workflow.lookup",
       "count": 14
     },
     {
-      "value": "commercial_card.lookup",
-      "count": 13
+      "value": "analytics.aggregate.lookup",
+      "count": 12
     },
     {
-      "value": "analytics.aggregate.lookup",
+      "value": "shipment.customer.lookup",
       "count": 12
     },
     {
@@ -332,14 +420,6 @@
     {
       "value": "assistant.identity",
       "count": 7
-    },
-    {
-      "value": "customer.profile.lookup",
-      "count": 4
-    },
-    {
-      "value": "shipment.customer.lookup",
-      "count": 3
     }
   ],
   "topMissingRelationPaths": [
@@ -354,6 +434,14 @@
     {
       "value": "shipment → agent → contact",
       "count": 52
+    },
+    {
+      "value": "shipment → field",
+      "count": 46
+    },
+    {
+      "value": "shipment → documents/files",
+      "count": 45
     },
     {
       "value": "commercial_card → agent → contact",
@@ -414,14 +502,6 @@
     {
       "value": "shipment",
       "count": 8
-    },
-    {
-      "value": "(none)",
-      "count": 7
-    },
-    {
-      "value": "entity → tasks",
-      "count": 5
     }
   ],
   "topMissingRequestedFields": [
@@ -447,6 +527,18 @@
     },
     {
       "value": "cheque_summary",
+      "count": 15
+    },
+    {
+      "value": "shipment.documents.file_link",
+      "count": 15
+    },
+    {
+      "value": "shipment.documents.image",
+      "count": 15
+    },
+    {
+      "value": "shipment.documents.private_url",
       "count": 15
     },
     {
@@ -486,24 +578,12 @@
       "count": 9
     },
     {
-      "value": "status_summary",
+      "value": "shipment.commercial_card",
       "count": 9
     },
     {
-      "value": "summary",
-      "count": 8
-    },
-    {
-      "value": "identity",
-      "count": 7
-    },
-    {
-      "value": "profile",
-      "count": 4
-    },
-    {
-      "value": "card_status",
-      "count": 3
+      "value": "shipment.customer",
+      "count": 9
     }
   ],
   "p0Gaps": [
@@ -2130,7 +2210,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2190,7 +2270,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2250,7 +2330,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2278,7 +2358,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -2306,7 +2386,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -2338,7 +2418,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2398,7 +2478,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2426,7 +2506,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -2454,7 +2534,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -2482,7 +2562,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2510,7 +2590,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -2538,7 +2618,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -2570,7 +2650,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2598,7 +2678,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -2626,7 +2706,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -2658,7 +2738,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2686,7 +2766,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -2714,7 +2794,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -2746,7 +2826,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2774,7 +2854,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -2802,7 +2882,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -2830,7 +2910,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2858,7 +2938,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -2886,7 +2966,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -2914,7 +2994,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -2942,7 +3022,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -2970,7 +3050,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3002,7 +3082,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3030,7 +3110,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3058,7 +3138,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3090,7 +3170,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3118,7 +3198,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -3146,7 +3226,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3178,7 +3258,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3206,7 +3286,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3234,7 +3314,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3262,7 +3342,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3290,7 +3370,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -3318,7 +3398,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -3346,7 +3426,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3378,7 +3458,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3410,7 +3490,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3446,7 +3526,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3478,7 +3558,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3510,7 +3590,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3546,7 +3626,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3578,7 +3658,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -3610,7 +3690,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3642,7 +3722,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3674,7 +3754,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3706,7 +3786,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3738,7 +3818,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3770,7 +3850,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -3802,7 +3882,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -3830,7 +3910,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3862,7 +3942,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3894,7 +3974,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -3930,7 +4010,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -3962,7 +4042,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -3994,7 +4074,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -4030,7 +4110,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4062,7 +4142,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -4094,7 +4174,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got (none)"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
@@ -4126,7 +4206,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4158,7 +4238,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4190,7 +4270,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4222,7 +4302,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4254,7 +4334,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -4286,7 +4366,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -4314,7 +4394,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4342,7 +4422,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4370,7 +4450,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4398,7 +4478,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4426,7 +4506,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4454,7 +4534,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4482,7 +4562,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4510,7 +4590,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4538,7 +4618,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -4566,7 +4646,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4594,7 +4674,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4622,7 +4702,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4650,7 +4730,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -4678,7 +4758,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -4706,7 +4786,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -5008,25 +5088,1873 @@
       "hardFailures": []
     },
     {
-      "id": "HAMYAR-Q-0634",
+      "id": "HAMYAR-Q-0763",
       "priority": "P0",
-      "intent": "conversation.followup.resolve",
-      "category": "followup_context",
-      "question": "اسنادش چیه؟",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_followup",
+      "question": "کدش؟",
       "plannedIntent": "",
       "plannedRequestedField": "summary",
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent ambiguity.selection.reply, customer.lookup, customer.contact.lookup, customer.shipments.lookup, customer.tasks.lookup, cheque.customer.lookup, shipment.activity.lookup, shipment.commercial_card.lookup, shipment.customer.phone.lookup, shipment.customer.lookup, shipment.status.lookup, shipment.tasks.lookup, shipment.lookup, got (none)"
+          "message": "expected compatible registry intent shipment.field.lookup, got (none)"
         },
         {
           "type": "relation_gap",
-          "message": "expected relation path conversation → activeEntity/focusedEntity, got (none)"
+          "message": "expected relation path shipment → field, got (none)"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.code, got summary"
         },
         {
           "type": "live_verification_metadata_gap",
           "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0768",
+      "priority": "P0",
+      "intent": "shipment.customer.lookup",
+      "category": "shipment_detail_basic",
+      "question": "مشتری بار 14050305014 چیه؟",
+      "plannedIntent": "shipment.customer.lookup",
+      "plannedRequestedField": "customer",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> customer"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.customer, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0769",
+      "priority": "P0",
+      "intent": "shipment.customer.lookup",
+      "category": "shipment_detail_basic",
+      "question": "برای محموله 14050305014 مشتری ثبت شده؟",
+      "plannedIntent": "shipment.customer.lookup",
+      "plannedRequestedField": "customer",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> customer"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.customer, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0770",
+      "priority": "P0",
+      "intent": "shipment.customer.lookup",
+      "category": "shipment_detail_basic",
+      "question": "صاحب بار بار 14050305014 چیه؟",
+      "plannedIntent": "shipment.customer.lookup",
+      "plannedRequestedField": "customer",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> customer"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.customer, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0771",
+      "priority": "P0",
+      "intent": "shipment.customer.lookup",
+      "category": "shipment_detail_basic",
+      "question": "برای محموله 14050305014 صاحب بار ثبت شده؟",
+      "plannedIntent": "shipment.customer.lookup",
+      "plannedRequestedField": "customer",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> customer"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.customer, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0772",
+      "priority": "P0",
+      "intent": "shipment.customer.lookup",
+      "category": "shipment_detail_followup",
+      "question": "مشتریش؟",
+      "plannedIntent": "shipment.customer.lookup",
+      "plannedRequestedField": "customer",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> customer"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.customer, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0773",
+      "priority": "P0",
+      "intent": "shipment.customer.lookup",
+      "category": "shipment_detail_followup",
+      "question": "صاحبش؟",
+      "plannedIntent": "shipment.customer.lookup",
+      "plannedRequestedField": "customer",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> customer"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.customer, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0774",
+      "priority": "P0",
+      "intent": "shipment.customer.lookup",
+      "category": "shipment_detail_followup",
+      "question": "مال کیه؟",
+      "plannedIntent": "shipment.customer.lookup",
+      "plannedRequestedField": "customer",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> customer"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.customer, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0775",
+      "priority": "P0",
+      "intent": "shipment.customer.lookup",
+      "category": "shipment_detail_basic",
+      "question": "مشتری محموله 1234021 رو بگو",
+      "plannedIntent": "shipment.customer.lookup",
+      "plannedRequestedField": "customer",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> customer"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.customer, got customer"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0776",
+      "priority": "P0",
+      "intent": "shipment.customer.lookup",
+      "category": "shipment_detail_clarification",
+      "question": "مشتری چیه؟",
+      "plannedIntent": "customer.lookup",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent shipment.customer.lookup, got customer.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got customer"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.customer, got summary"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0777",
+      "priority": "P0",
+      "intent": "shipment.status.lookup",
+      "category": "shipment_detail_basic",
+      "question": "وضعیت بار 14050305014 چیه؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.status, got status"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0778",
+      "priority": "P0",
+      "intent": "shipment.status.lookup",
+      "category": "shipment_detail_basic",
+      "question": "برای محموله 14050305014 وضعیت ثبت شده؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.status, got status"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0779",
+      "priority": "P0",
+      "intent": "shipment.status.lookup",
+      "category": "shipment_detail_basic",
+      "question": "وضعیت بار بار 14050305014 چیه؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.status, got status"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0780",
+      "priority": "P0",
+      "intent": "shipment.status.lookup",
+      "category": "shipment_detail_basic",
+      "question": "برای محموله 14050305014 وضعیت بار ثبت شده؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.status, got status"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0781",
+      "priority": "P0",
+      "intent": "shipment.status.lookup",
+      "category": "shipment_detail_followup",
+      "question": "وضعیتش؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.status, got status"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0782",
+      "priority": "P0",
+      "intent": "shipment.status.lookup",
+      "category": "shipment_detail_followup",
+      "question": "الان در چه وضعیه؟",
+      "plannedIntent": "",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent shipment.status.lookup, got (none)"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got (none)"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.status, got summary"
+        },
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0783",
+      "priority": "P0",
+      "intent": "shipment.status.lookup",
+      "category": "shipment_detail_followup",
+      "question": "چی شد؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.status, got status"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0784",
+      "priority": "P0",
+      "intent": "shipment.status.lookup",
+      "category": "shipment_detail_basic",
+      "question": "وضعیت محموله 1234021 رو بگو",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.status, got status"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0785",
+      "priority": "P0",
+      "intent": "shipment.status.lookup",
+      "category": "shipment_detail_clarification",
+      "question": "وضعیت چیه؟",
+      "plannedIntent": "",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent shipment.status.lookup, got (none)"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got (none)"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.status, got summary"
+        },
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0794",
+      "priority": "P0",
+      "intent": "commercial_card.lookup",
+      "category": "shipment_detail_basic",
+      "question": "کارت بازرگانی بار 14050305014 چیه؟",
+      "plannedIntent": "shipment.commercial_card.lookup",
+      "plannedRequestedField": "commercial_card",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.commercial_card, got commercial_card"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0795",
+      "priority": "P0",
+      "intent": "commercial_card.lookup",
+      "category": "shipment_detail_basic",
+      "question": "برای محموله 14050305014 کارت بازرگانی ثبت شده؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.commercial_card",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent shipment.commercial_card.lookup, got shipment.field.lookup"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0796",
+      "priority": "P0",
+      "intent": "commercial_card.lookup",
+      "category": "shipment_detail_basic",
+      "question": "کارت بازرگانی بار بار 14050305014 چیه؟",
+      "plannedIntent": "shipment.commercial_card.lookup",
+      "plannedRequestedField": "commercial_card",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.commercial_card, got commercial_card"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0797",
+      "priority": "P0",
+      "intent": "commercial_card.lookup",
+      "category": "shipment_detail_basic",
+      "question": "برای محموله 14050305014 کارت بازرگانی بار ثبت شده؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.commercial_card",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent shipment.commercial_card.lookup, got shipment.field.lookup"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0798",
+      "priority": "P0",
+      "intent": "commercial_card.lookup",
+      "category": "shipment_detail_followup",
+      "question": "کارت بازرگانیش؟",
+      "plannedIntent": "shipment.commercial_card.lookup",
+      "plannedRequestedField": "commercial_card",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.commercial_card, got commercial_card"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0799",
+      "priority": "P0",
+      "intent": "commercial_card.lookup",
+      "category": "shipment_detail_followup",
+      "question": "کارتش؟",
+      "plannedIntent": "shipment.commercial_card.lookup",
+      "plannedRequestedField": "commercial_card",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.commercial_card, got commercial_card"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0800",
+      "priority": "P0",
+      "intent": "commercial_card.lookup",
+      "category": "shipment_detail_basic",
+      "question": "کارت بازرگانی محموله 1234021 رو بگو",
+      "plannedIntent": "shipment.commercial_card.lookup",
+      "plannedRequestedField": "commercial_card",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.commercial_card, got commercial_card"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0801",
+      "priority": "P0",
+      "intent": "commercial_card.lookup",
+      "category": "shipment_detail_clarification",
+      "question": "کارت بازرگانی چیه؟",
+      "plannedIntent": "",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent shipment.commercial_card.lookup, got (none)"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → commercial_card, got (none)"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.commercial_card, got summary"
+        },
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0806",
+      "priority": "P0",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_followup",
+      "question": "چند تا سند داره؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.count",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.document_count, got shipment.documents.count"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0807",
+      "priority": "P0",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_followup",
+      "question": "تعداد سندهاش؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.count",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.document_count, got shipment.documents.count"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0812",
+      "priority": "P0",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_basic",
+      "question": "برای محموله 14050305014 تعداد کالا ثبت شده؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.goods.exists",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.goods_count, got shipment.goods.exists"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0883",
+      "priority": "P0",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_goods",
+      "question": "برای محموله 14050305014 شرح کالا ثبت شده؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.goods.exists",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.goods.contents, got shipment.goods.exists"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0891",
+      "priority": "P0",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_goods",
+      "question": "کالاها بار 14050305014 چیه؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.goods.contents",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.goods.list, got shipment.goods.contents"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0892",
+      "priority": "P0",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_goods",
+      "question": "برای محموله 14050305014 کالاها ثبت شده؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.goods.contents",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.goods.list, got shipment.goods.contents"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0911",
+      "priority": "P0",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_followup",
+      "question": "سند داره؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.document_count",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.exists, got shipment.document_count"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1105",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "لینک سند بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.file_link",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1106",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "لینک سند رو بده",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.file_link",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1107",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، لینک سند کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.file_link",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1108",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "فایل سند بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.file_link",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1109",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "فایل سند رو بده",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.file_link",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1110",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، فایل سند کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.file_link",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1111",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "دانلود سند بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.file_link",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1112",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "دانلود سند رو بده",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.file_link",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1113",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، دانلود سند کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.file_link",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1114",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "مدرک رو بده بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.file_link, got status"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1115",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "مدرک رو بده رو بده",
+      "plannedIntent": "",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got (none)"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.file_link, got summary"
+        },
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1116",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، مدرک رو بده کجاست؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.file_link, got status"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1117",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "فایل مدرک بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.file_link, got status"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1118",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "فایل مدرک رو بده",
+      "plannedIntent": "",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got (none)"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.file_link, got summary"
+        },
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1119",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، فایل مدرک کجاست؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.file_link, got status"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1120",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "تصویر سند بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.image",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1121",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "تصویر سند رو بده",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.image",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1122",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، تصویر سند کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.image",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1123",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "عکس سند بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.image",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1124",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "عکس سند رو بده",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.image",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1125",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، عکس سند کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.image",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1126",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "تصویر چاپ بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.image, got status"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1127",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "تصویر چاپ رو بده",
+      "plannedIntent": "",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got (none)"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.image, got summary"
+        },
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1128",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، تصویر چاپ کجاست؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.image, got status"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1129",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "عکس چاپ بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.image, got status"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1130",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "عکس چاپ رو بده",
+      "plannedIntent": "",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got (none)"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.image, got summary"
+        },
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1131",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، عکس چاپ کجاست؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.image, got status"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1132",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "اسکن سند بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.image",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1133",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "اسکن سند رو بده",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.image",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1134",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، اسکن سند کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.image",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1135",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "آدرس فایل بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.private_url, got status"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1136",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "آدرس فایل رو بده",
+      "plannedIntent": "",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got (none)"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.private_url, got summary"
+        },
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1137",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، آدرس فایل کجاست؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.private_url, got status"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1138",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "لینک خصوصی سند بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.private_url",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1139",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "لینک خصوصی سند رو بده",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.private_url",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1140",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، لینک خصوصی سند کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.private_url",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1141",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "private url سند بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.private_url",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1142",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "private url سند رو بده",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.private_url",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1143",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، private url سند کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.private_url",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1144",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "storage key سند بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.private_url",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1145",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "storage key سند رو بده",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.private_url",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1146",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، storage key سند کجاست؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.documents.private_url",
+      "softGaps": [
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1147",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "کلید فایل بار 14050305014 کجاست؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.private_url, got status"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1148",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "کلید فایل رو بده",
+      "plannedIntent": "",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got (none)"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got (none)"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.private_url, got summary"
+        },
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1149",
+      "priority": "P0",
+      "intent": "document.lookup",
+      "category": "shipment_detail_documents_deferred",
+      "question": "بعد از انتخاب محموله، کلید فایل کجاست؟",
+      "plannedIntent": "shipment.status.lookup",
+      "plannedRequestedField": "status",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → documents/files, got shipment -> status"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.private_url, got status"
+        },
+        {
+          "type": "document_lookup_deferred",
+          "message": "document/file/image lookup is intentionally deferred for this PR"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1158",
+      "priority": "P0",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_goods",
+      "question": "تو بار 1234021 چی ثبت شده",
+      "plannedIntent": "shipment.lookup",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent shipment.field.lookup, got shipment.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.goods.contents, got summary"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1161",
+      "priority": "P0",
+      "intent": "commercial_card.lookup",
+      "category": "shipment_detail_followup",
+      "question": "کارتش ثبت نشده یا هست؟",
+      "plannedIntent": "shipment.commercial_card.lookup",
+      "plannedRequestedField": "commercial_card",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got shipment -> commercial_card"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.commercial_card, got commercial_card"
         }
       ],
       "hardFailures": []
@@ -7655,12 +9583,24 @@
       "intent": "analytics.aggregate.lookup",
       "category": "counts_analytics",
       "question": "چند سند ناقص داریم؟",
-      "plannedIntent": "missing_data.lookup",
-      "plannedRequestedField": "missing_data",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.document_count",
       "softGaps": [
         {
           "type": "unsupported_dataset_intent",
           "message": "dataset intent analytics.aggregate.lookup is not implemented in the current registry"
+        },
+        {
+          "type": "entity_gap",
+          "message": "expected primary entity organization, got shipment"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path organization → aggregate_tools, got shipment -> documents -> count"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field counts, got shipment.document_count"
         }
       ],
       "hardFailures": []
@@ -8456,7 +10396,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8484,7 +10424,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8512,7 +10452,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8544,7 +10484,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8592,7 +10532,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8620,7 +10560,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8648,7 +10588,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8680,7 +10620,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8728,7 +10668,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8756,7 +10696,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8784,7 +10724,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8816,7 +10756,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -8848,7 +10788,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -8876,7 +10816,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -8904,7 +10844,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -8932,7 +10872,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -8964,7 +10904,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -8996,7 +10936,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -9024,7 +10964,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -9052,7 +10992,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -9080,7 +11020,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -9112,7 +11052,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.customer.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.customer.lookup"
         },
         {
           "type": "relation_gap",
@@ -9160,7 +11100,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -9188,7 +11128,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -9216,7 +11156,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -9248,7 +11188,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.lookup"
         },
         {
           "type": "relation_gap",
@@ -9280,7 +11220,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9308,7 +11248,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9336,7 +11276,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9364,7 +11304,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9396,7 +11336,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9428,7 +11368,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9456,7 +11396,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9484,7 +11424,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9512,7 +11452,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9544,7 +11484,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9576,7 +11516,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9604,7 +11544,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9632,7 +11572,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9660,7 +11600,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9692,7 +11632,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9724,7 +11664,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9752,7 +11692,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9780,7 +11720,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9808,7 +11748,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9840,7 +11780,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9872,7 +11812,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9900,7 +11840,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9928,7 +11868,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9956,7 +11896,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -9988,7 +11928,7 @@
       "softGaps": [
         {
           "type": "intent_gap",
-          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, got shipment.status.lookup"
+          "message": "expected compatible registry intent document.shipment.lookup, document.status.lookup, shipment.field.lookup, got shipment.status.lookup"
         },
         {
           "type": "relation_gap",
@@ -10388,6 +12328,494 @@
         }
       ],
       "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0939",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_followup",
+      "question": "آخرین گفتگوی محموله چیه؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.messages.exists",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.messages.latest, got shipment.messages.exists"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0975",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_followup",
+      "question": "ارزشش چقدره؟",
+      "plannedIntent": "",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent shipment.field.lookup, got (none)"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got (none)"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.customs.total_value, got summary"
+        },
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0990",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_permits",
+      "question": "مجوزها بار 14050305014 چیه؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.permits.count",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.permits.exists, got shipment.permits.count"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0991",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_permits",
+      "question": "برای محموله 14050305014 مجوزها ثبت شده؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.permits.count",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.permits.exists, got shipment.permits.count"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-0994",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_followup",
+      "question": "مجوزهاش چیه؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.permits.count",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.permits.exists, got shipment.permits.count"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1000",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_permits",
+      "question": "برای محموله 14050305014 چند مجوز ثبت شده؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.permits.exists",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.permits.count, got shipment.permits.exists"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1021",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_followup",
+      "question": "تفاوت گمرکی پرداخت شده؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.payments.customs_amount",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.payments.customs_difference, got shipment.payments.customs_amount"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1030",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_followup",
+      "question": "مالیات گمرکی پرداخت شده؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.payments.customs_amount",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.payments.customs_tax, got shipment.payments.customs_amount"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1038",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_followup",
+      "question": "پرداخت‌هاش چه وضعیه؟",
+      "plannedIntent": "",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent shipment.field.lookup, got (none)"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field, got (none)"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.payments.status, got summary"
+        },
+        {
+          "type": "live_verification_metadata_gap",
+          "message": "dataset requires live verification but planner metadata does not preserve it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1087",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_notes",
+      "question": "یادداشت بار 14050305014 چیه؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.notes.text",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.notes.exists, got shipment.notes.text"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1088",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_notes",
+      "question": "برای محموله 14050305014 یادداشت ثبت شده؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.notes.text",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.notes.exists, got shipment.notes.text"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1089",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_notes",
+      "question": "یادداشت‌ها بار 14050305014 چیه؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.notes.text",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.notes.exists, got shipment.notes.text"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1090",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_notes",
+      "question": "برای محموله 14050305014 یادداشت‌ها ثبت شده؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.notes.text",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.notes.exists, got shipment.notes.text"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1092",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_followup",
+      "question": "نوت داره؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.notes.text",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.notes.exists, got shipment.notes.text"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1093",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_followup",
+      "question": "یادداشتی ثبت شده؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.notes.text",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.notes.exists, got shipment.notes.text"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1094",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_notes",
+      "question": "یادداشت محموله 1234021 رو بگو",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.notes.text",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.notes.exists, got shipment.notes.text"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1095",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_clarification",
+      "question": "یادداشت چیه؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.notes.text",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.notes.exists, got shipment.notes.text"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1150",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_section_basic",
+      "question": "اطلاعات پایه بار 14050305014 رو بده",
+      "plannedIntent": "shipment.lookup",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent shipment.field.lookup, got shipment.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field_group, got shipment"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.basic_info, got summary"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1151",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_section_goods",
+      "question": "مشخصات کالاهای بار 14050305014 رو بده",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.goods.list",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field_group, got shipment -> goods -> list"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.goods.section, got shipment.goods.list"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1152",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_section_customs",
+      "question": "اطلاعات اظهار و کوتاژ محموله 14050305014 چیه؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.customs.cotage_number",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field_group, got shipment -> customs -> cotage_number"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.customs.section, got shipment.customs.cotage_number"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1153",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_section_payments",
+      "question": "پرداخت‌های گمرکی این بار چیه؟",
+      "plannedIntent": "shipment.lookup",
+      "plannedRequestedField": "summary",
+      "softGaps": [
+        {
+          "type": "intent_gap",
+          "message": "expected compatible registry intent shipment.field.lookup, got shipment.lookup"
+        },
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field_group, got shipment"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.payments.section, got summary"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1154",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_section_banking",
+      "question": "اطلاعات بانکی بار 14050305014 چیه؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.bank.name",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field_group, got shipment -> bank -> name"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.bank.section, got shipment.bank.name"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1155",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_section_notes",
+      "question": "یادداشت‌های این محموله چیه؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.notes.text",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field_group, got shipment -> notes -> text"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.notes.section, got shipment.notes.text"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1156",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_section_messages",
+      "question": "گفتگوی محموله 14050305014 پیام دارد؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.messages.exists",
+      "softGaps": [
+        {
+          "type": "relation_gap",
+          "message": "expected relation path shipment → field_group, got shipment -> messages -> exists"
+        },
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.messages.section, got shipment.messages.exists"
+        }
+      ],
+      "hardFailures": []
+    },
+    {
+      "id": "HAMYAR-Q-1174",
+      "priority": "P1",
+      "intent": "shipment.field.lookup",
+      "category": "shipment_detail_mixed_language",
+      "question": "document count این بار چنده؟",
+      "plannedIntent": "shipment.field.lookup",
+      "plannedRequestedField": "shipment.document_count",
+      "softGaps": [
+        {
+          "type": "requested_field_gap",
+          "message": "expected requested field shipment.documents.count, got shipment.document_count"
+        },
+        {
+          "type": "company_brain_metadata_gap",
+          "message": "dataset expects Company Brain candidate/search usage but planner metadata does not expose it"
+        }
+      ],
+      "hardFailures": []
     }
   ],
   "hardFailures": [],
@@ -10401,7 +12829,6 @@
     "Add aggregate/count registry capabilities backed by existing live operations summary tools.",
     "Add risk alert registry intents for blockers, overdue tasks, due cheques, and missing daily statuses.",
     "Add commercial-card-primary relation resolver coverage for agent/responsible contact lookups.",
-    "Promote active-entity follow-up resolution into a first-class registry capability with eval rows.",
     "Improve customer-to-shipments aliases and active shipment list routing.",
     "Add task, workflow, and cheque-specific relation aliases for current operational follow-up questions.",
     "For each implemented gap, add/adjust registry examples, regenerate registry eval fixtures, and rerun this dataset eval."
