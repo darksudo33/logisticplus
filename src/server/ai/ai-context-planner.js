@@ -87,6 +87,7 @@ const STOP_WORDS = new Set([
   "این",
   "چندتا",
   "چند",
+  "چنده",
   "چه",
   "چیه",
   "چیست",
@@ -174,6 +175,40 @@ const BUSINESS_FIELD_STOP_WORDS = new Set([
   "balance",
 ]);
 
+const COMMAND_STOP_WORDS = new Set([
+  "بده",
+  "بدهید",
+  "بدین",
+  "بفرست",
+  "بفرستید",
+  "بفرستین",
+  "بیار",
+  "بیارید",
+  "بگو",
+  "بگویید",
+  "لطفا",
+  "لطفاً",
+  "خواهشا",
+  "خواهشاً",
+  "میخوام",
+  "میخواهم",
+  "می‌خوام",
+  "می‌خواهم",
+  "میخواستم",
+  "می‌خواستم",
+  "میشه",
+  "می‌شه",
+  "کن",
+  "کنید",
+  "نشون",
+  "نشان",
+  "نمایش",
+  "show",
+  "give",
+  "send",
+  "please",
+]);
+
 const SHIPMENT_TERMS = ["shipment", "cargo", "load", "tracking", "بار", "محموله", "پرونده"];
 const CUSTOMER_TERMS = ["customer", "client", "مشتری", "صاحب", "مالک", "طرف حساب", "شرکت"];
 const DOCUMENT_TERMS = ["document", "file", "سند", "اسناد", "مدرک", "مدارک", "فایل", "بارنامه", "قبض"];
@@ -251,7 +286,13 @@ function tokenized(text = "") {
 }
 
 function isStopToken(token = "") {
-  return STOP_WORDS.has(token) || BUSINESS_FIELD_STOP_WORDS.has(token) || HONORIFICS.has(token) || /^(ها|های|اش|ش)$/.test(token);
+  return (
+    STOP_WORDS.has(token) ||
+    BUSINESS_FIELD_STOP_WORDS.has(token) ||
+    COMMAND_STOP_WORDS.has(token) ||
+    HONORIFICS.has(token) ||
+    /^(ها|های|اش|ش)$/.test(token)
+  );
 }
 
 function candidateRefs(message = "") {
@@ -375,6 +416,9 @@ export function extractBusinessSearchTerms(message = "", { maxTerms = 8 } = {}) 
     .map((token) => token.replace(/[%_\\]/g, ""))
     .filter((token) => token.length >= 2 || /^[A-Za-z0-9_-]+$/.test(token))
     .filter((token) => !isStopToken(token));
+  if (tokens.length === 2 && tokens.every((token) => !/^\d+$/.test(token))) {
+    return [`${tokens[0]} ${tokens[1]}`].slice(0, Math.min(Math.max(Number(maxTerms) || 8, 1), 12));
+  }
   const phrases = [];
   for (let index = 0; index < tokens.length - 1; index += 1) {
     const left = tokens[index];
@@ -434,10 +478,11 @@ function candidateTypesFor(message = "", requestedField = BUSINESS_REQUESTED_FIE
 }
 
 function alternateTermsFor(terms = []) {
-  if (terms.length <= 1) return [];
-  const joined = terms.slice(0, 4).join(" ");
-  const compact = terms.filter((term) => !term.includes(" "));
-  return unique([joined, ...compact.slice().reverse()]).filter((term) => !terms.includes(term)).slice(0, 6);
+  const parts = unique(terms.flatMap((term) => String(term || "").split(/\s+/)).filter(Boolean));
+  if (parts.length <= 1) return [];
+  const joined = parts.slice(0, 4).join(" ");
+  const reversed = parts.slice(0, 4).reverse().join(" ");
+  return unique([joined, reversed, ...parts.slice().reverse()]).filter((term) => !terms.includes(term)).slice(0, 6);
 }
 
 export function planBusinessSearch(message = "") {

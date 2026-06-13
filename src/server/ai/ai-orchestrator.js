@@ -1791,17 +1791,28 @@ function businessOptionBlock(candidate = {}, index = 0, language = "fa") {
 
 export function renderBusinessAmbiguityMessage({ plan = {}, query = "", candidates = [] } = {}) {
   const language = plan.language === "fa" ? "fa" : "en";
-  const terms = cleanText(query) || (Array.isArray(plan.queryTerms) ? plan.queryTerms.join(" ") : "");
+  const terms = cleanText(query) || businessQueryDisplay(plan);
   if (language !== "fa") {
     return [
-      `I found multiple matches for "${terms || "this request"}". Please send the exact code.`,
+      `I found multiple matches for "${terms || "this request"}". Please send the option number or exact code.`,
       ...candidates.slice(0, 5).map((candidate, index) => businessOptionBlock(candidate, index, language)),
     ].join("\n\n");
   }
   return toPersianDigits([
-    `چند مورد برای «${terms || "این عبارت"}» پیدا شد. لطفا کد مورد درست را بفرستید؛ مثلا «به 214».`,
+    `چند مورد برای «${terms || "این عبارت"}» پیدا شد. لطفا شماره گزینه یا کد مورد درست را بفرستید؛ مثلا «گزینه 1» یا «به 214».`,
     ...candidates.slice(0, 5).map((candidate, index) => businessOptionBlock(candidate, index, language)),
   ].join("\n\n"));
+}
+
+export function businessQueryDisplay(plan = {}) {
+  const terms = Array.isArray(plan.queryTerms) ? plan.queryTerms.map((term) => cleanText(term)).filter(Boolean) : [];
+  const words = [];
+  for (const term of terms) {
+    for (const word of term.split(/\s+/).filter(Boolean)) {
+      if (!words.includes(word)) words.push(word);
+    }
+  }
+  return words.join(" ") || terms.join(" ");
 }
 
 function strongBusinessCandidate(candidates = []) {
@@ -1812,10 +1823,28 @@ function strongBusinessCandidate(candidates = []) {
   return null;
 }
 
+export function rankBusinessCandidatesForPlan(plan = {}, candidates = []) {
+  if (!Array.isArray(candidates) || candidates.length <= 1) return Array.isArray(candidates) ? candidates : [];
+  const order = new Map((Array.isArray(plan.candidateTypes) ? plan.candidateTypes : []).map((type, index) => [type, index]));
+  const priorityFor = (candidate) => {
+    if (!order.has(candidate?.type)) return Number.MAX_SAFE_INTEGER;
+    return order.get(candidate.type);
+  };
+  return [...candidates].sort((left, right) => {
+    const priorityDelta = priorityFor(left) - priorityFor(right);
+    if (priorityDelta !== 0) return priorityDelta;
+    const scoreDelta = Number(right.score || 0) - Number(left.score || 0);
+    if (scoreDelta !== 0) return scoreDelta;
+    const matchedDelta = (right.matchedFields?.length || 0) - (left.matchedFields?.length || 0);
+    if (matchedDelta !== 0) return matchedDelta;
+    return cleanText(left.label).localeCompare(cleanText(right.label), "fa");
+  });
+}
+
 function businessAmbiguousResult(plan, candidates, toolsCalled) {
   return relationResult({
     plan,
-    answer: renderBusinessAmbiguityMessage({ plan, query: plan.queryTerms.join(" "), candidates }),
+    answer: renderBusinessAmbiguityMessage({ plan, query: businessQueryDisplay(plan), candidates }),
     toolsCalled,
     sources: candidates.slice(0, 5).map(businessCandidateSource),
     recordIds: candidates.slice(0, 5).map((item) => item.id).filter(Boolean),
@@ -2634,7 +2663,7 @@ async function runBusinessSearchPlan(pool, context, plan, toolsCalled = []) {
     requestedFields: requestedFieldsForPlan(plan),
     limit: 8,
   });
-  let candidates = searchResult.candidates || [];
+  let candidates = rankBusinessCandidatesForPlan(plan, searchResult.candidates || []);
 
   if (!candidates.length && plan.alternateQueryTerms.length && toolsCalled.length < AGENTIC_CONTEXT_MAX_STEPS) {
     toolsCalled.push("searchBusinessContext:alternate");
@@ -2645,7 +2674,7 @@ async function runBusinessSearchPlan(pool, context, plan, toolsCalled = []) {
       requestedFields: requestedFieldsForPlan(plan),
       limit: 8,
     });
-    candidates = searchResult.candidates || [];
+    candidates = rankBusinessCandidatesForPlan(plan, searchResult.candidates || []);
   }
 
   if (!candidates.length) return businessNotFoundResult(plan, searchResult.searched, toolsCalled);
@@ -2666,12 +2695,197 @@ export function extractAmbiguitySelection(message = "") {
     .toLowerCase();
   if (!normalized) return "";
   const tokens = normalized.split(/\s+/).filter(Boolean);
-  if (tokens.length > 3) return "";
-  const filler = new Set(["به", "گزینه", "مورد", "کد", "شماره", "انتخاب", "option", "number", "code"]);
+  if (tokens.length > 8) return "";
+  const filler = new Set([
+    "به",
+    "را",
+    "رو",
+    "گزینه",
+    "مورد",
+    "کد",
+    "شماره",
+    "انتخاب",
+    "بده",
+    "بدهید",
+    "بدین",
+    "لطفا",
+    "لطفاً",
+    "option",
+    "number",
+    "code",
+    "please",
+  ]);
   const meaningful = tokens.filter((token) => !filler.has(token));
   if (meaningful.length !== 1) return "";
   const selection = meaningful[0];
+  const ordinals = new Map([
+    ["اول", "1"],
+    ["اولی", "1"],
+    ["یک", "1"],
+    ["دوم", "2"],
+    ["دومی", "2"],
+    ["دو", "2"],
+    ["سوم", "3"],
+    ["سومی", "3"],
+    ["سه", "3"],
+    ["چهارم", "4"],
+    ["چهار", "4"],
+    ["پنجم", "5"],
+    ["پنج", "5"],
+    ["first", "1"],
+    ["second", "2"],
+    ["third", "3"],
+    ["fourth", "4"],
+    ["fifth", "5"],
+  ]);
+  if (ordinals.has(selection)) return ordinals.get(selection);
   return /\d/.test(selection) && /^[a-z0-9_-]+$/i.test(selection) ? selection : "";
+}
+
+function extractCandidateLabelSelection(message = "") {
+  const normalized = normalizeAiLookupCode(message)
+    .replace(/[^\p{L}\p{N}\s_-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return "";
+  const filler = new Set([
+    "به",
+    "را",
+    "رو",
+    "گزینه",
+    "مورد",
+    "انتخاب",
+    "لطفا",
+    "لطفاً",
+    "please",
+  ]);
+  const meaningful = normalized.split(/\s+/).filter((token) => token && !filler.has(token));
+  if (!meaningful.length || meaningful.length > 4) return "";
+  return meaningful.join(" ");
+}
+
+function businessCandidateIdentifiers(candidate = {}) {
+  const summary = candidate.safeSummary || {};
+  return uniqueValues([
+    candidate.id,
+    candidate.label,
+    summary.shipmentCode,
+    summary.customerCode,
+    summary.customerName,
+    summary.cardNumber,
+    summary.displayName,
+    summary.holderName,
+    summary.companyName,
+    summary.responsibleName,
+    summary.title,
+    summary.blockerCode,
+    summary.chequeNumber,
+    summary.bankName,
+  ]);
+}
+
+function normalizeSelectionValue(value = "") {
+  return normalizeQueryText(value).replace(/[«»]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function candidateMatchesSelection(candidate = {}, selection = "") {
+  const selected = normalizeSelectionValue(selection);
+  if (!selected) return false;
+  const compactSelected = selected.replace(/\s+/g, "");
+  return businessCandidateIdentifiers(candidate).some((value) => {
+    const normalized = normalizeSelectionValue(value);
+    const compactNormalized = normalized.replace(/\s+/g, "");
+    if (normalized === selected || compactNormalized === compactSelected) return true;
+    return selected.length >= 3 && normalized.length >= 3 && (normalized.includes(selected) || selected.includes(normalized));
+  });
+}
+
+function hasSelectionCue(message = "", cues = []) {
+  const normalized = normalizeSelectionValue(message);
+  return cues.some((cue) => normalized.includes(normalizeSelectionValue(cue)));
+}
+
+export function resolveBusinessCandidateSelection(message = "", candidates = []) {
+  const selection = extractAmbiguitySelection(message) || extractCandidateLabelSelection(message);
+  const list = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
+  if (!selection || !list.length) return { state: "not_found", selection };
+
+  const optionNumber = /^\d+$/.test(selection) ? Number(selection) : 0;
+  const optionCandidate = optionNumber >= 1 && optionNumber <= list.length ? list[optionNumber - 1] : null;
+  const codeCue = hasSelectionCue(message, ["کد", "شماره", "code", "number"]);
+  const optionCue = hasSelectionCue(message, ["گزینه", "مورد", "اول", "اولی", "دوم", "دومی", "سوم", "سومی", "option"]);
+  const matched = list.filter((candidate) => candidateMatchesSelection(candidate, selection));
+
+  if (codeCue && matched.length === 1) return { state: "resolved", selection, candidate: matched[0], reason: "code" };
+  if (codeCue && matched.length > 1) return { state: "ambiguous", selection, candidates: matched, reason: "code" };
+  if ((optionCue || !matched.length) && optionCandidate) return { state: "resolved", selection, candidate: optionCandidate, reason: "option" };
+  if (matched.length === 1) return { state: "resolved", selection, candidate: matched[0], reason: "code" };
+  if (matched.length > 1) return { state: "ambiguous", selection, candidates: matched, reason: "code" };
+  return { state: "not_found", selection };
+}
+
+function parseBusinessOptionLine(line = "") {
+  const match = normalizeAiLookupCode(line).match(/^\s*(\d+)\)\s*(.+)$/);
+  if (!match) return null;
+  const label = cleanText(match[2]);
+  const normalizedLabel = normalizeSelectionValue(label);
+  let type = "";
+  if (normalizedLabel.includes("محموله")) type = "shipment";
+  else if (normalizedLabel.includes("مشتری")) type = "customer";
+  else if (normalizedLabel.includes("کارت بازرگانی")) type = "commercial_card";
+  else if (normalizedLabel.includes("سند")) type = "document";
+  else if (normalizedLabel.includes("کار") || normalizedLabel.includes("مرحله")) type = "workflow_item";
+  else if (normalizedLabel.includes("چک")) type = "cheque";
+  return { optionNumber: Number(match[1]), type, label };
+}
+
+function parseCodeAfterLabel(block = "", labels = []) {
+  for (const line of block.split(/\r?\n/)) {
+    const normalized = normalizeSelectionValue(line);
+    for (const label of labels) {
+      const normalizedLabel = normalizeSelectionValue(label);
+      if (!normalized.startsWith(`${normalizedLabel}:`)) continue;
+      return cleanText(normalizeAiLookupCode(line).split(":").slice(1).join(":"));
+    }
+  }
+  return "";
+}
+
+function parseBusinessAmbiguityCandidates(content = "") {
+  const blocks = String(content || "").split(/\n\s*\n/).map((block) => block.trim()).filter(Boolean);
+  const candidates = [];
+  for (const block of blocks) {
+    const [firstLine = ""] = block.split(/\r?\n/);
+    const parsed = parseBusinessOptionLine(firstLine);
+    if (!parsed?.type) continue;
+    const safeSummary = {
+      shipmentCode: parseCodeAfterLabel(block, ["کد محموله", "Shipment code"]),
+      customerCode: parseCodeAfterLabel(block, ["کد مشتری", "Customer code"]),
+      cardNumber: parseCodeAfterLabel(block, ["شماره کارت", "Card number"]),
+      status: parseCodeAfterLabel(block, ["وضعیت", "Status"]),
+      bankName: parseCodeAfterLabel(block, ["بانک", "Bank"]),
+    };
+    const id = safeSummary.shipmentCode || safeSummary.customerCode || safeSummary.cardNumber || parsed.label;
+    candidates.push({
+      type: parsed.type,
+      id,
+      label: parsed.label,
+      optionNumber: parsed.optionNumber,
+      safeSummary,
+    });
+  }
+  return candidates.slice(0, 5);
+}
+
+function pendingBusinessCandidatesFromRecentMessages(recentMessages = []) {
+  if (!Array.isArray(recentMessages)) return [];
+  for (const item of [...recentMessages].reverse()) {
+    if (!item || item.role !== "assistant" || typeof item.content !== "string") continue;
+    const candidates = parseBusinessAmbiguityCandidates(item.content);
+    if (candidates.length) return candidates;
+  }
+  return [];
 }
 
 function previousBusinessPlanFromRecentMessages(recentMessages = []) {
@@ -2704,21 +2918,66 @@ function candidateTypesForFollowUp(plan = {}) {
   return uniqueValues(types.length ? types : allBusinessTypes);
 }
 
+function queryTermForSelectedCandidate(candidate = {}) {
+  const summary = candidate.safeSummary || {};
+  if (candidate.type === "shipment") return cleanText(summary.shipmentCode) || cleanText(candidate.id) || cleanText(candidate.label);
+  if (candidate.type === "customer") return cleanText(summary.customerCode) || cleanText(summary.customerName) || cleanText(candidate.id) || cleanText(candidate.label);
+  if (candidate.type === "commercial_card") return cleanText(summary.cardNumber) || cleanText(summary.displayName) || cleanText(candidate.id) || cleanText(candidate.label);
+  if (candidate.type === "document") return cleanText(summary.shipmentCode) || cleanText(summary.customerCode) || cleanText(summary.title) || cleanText(candidate.id) || cleanText(candidate.label);
+  if (candidate.type === "workflow_item") return cleanText(summary.shipmentCode) || cleanText(summary.blockerCode) || cleanText(summary.title) || cleanText(candidate.id) || cleanText(candidate.label);
+  if (candidate.type === "cheque") return cleanText(summary.chequeNumber) || cleanText(candidate.id) || cleanText(candidate.label);
+  return cleanText(candidate.id) || cleanText(candidate.label);
+}
+
 export function followUpBusinessPlanFromRecentMessages(message = "", recentMessages = []) {
-  const selection = extractAmbiguitySelection(message);
-  if (!selection) return null;
   const previousPlan = previousBusinessPlanFromRecentMessages(recentMessages);
   if (!previousPlan) return null;
+  const explicitSelection = extractAmbiguitySelection(message);
+  const pendingCandidates = pendingBusinessCandidatesFromRecentMessages(recentMessages);
+  const resolvedSelection = resolveBusinessCandidateSelection(message, pendingCandidates);
+  const selectedCandidate = resolvedSelection.state === "resolved" ? resolvedSelection.candidate : null;
+  const selection = explicitSelection || (selectedCandidate ? resolvedSelection.selection : "");
+  if (!selection) return null;
+  const selectedTerm = selectedCandidate ? queryTermForSelectedCandidate(selectedCandidate) : "";
+  const candidateTypes = selectedCandidate?.type
+    ? uniqueValues([selectedCandidate.type, ...candidateTypesForFollowUp(previousPlan)])
+    : candidateTypesForFollowUp(previousPlan);
   return {
     ...previousPlan,
     intent: "business_search_followup",
     searchBusinessContext: true,
-    queryTerms: [selection],
+    queryTerms: [selectedTerm || selection],
     alternateQueryTerms: [],
-    candidateTypes: candidateTypesForFollowUp(previousPlan),
+    candidateTypes,
     requestedFields: requestedFieldsForPlan(previousPlan),
     confidence: 0.94,
   };
+}
+
+export function shouldUseActiveEntityForFollowUp(message = "", activeEntity = null) {
+  if (!activeEntity?.type || !activeEntity?.id) return false;
+  if (extractAmbiguitySelection(message)) return false;
+  const plan = planBusinessSearch(message);
+  if (plan.intent === "identity") return false;
+  const requested = requestedFieldsForPlan(plan).filter((field) => field && field !== BUSINESS_REQUESTED_FIELDS.SUMMARY);
+  const flags = intentFlags(message);
+  const normalized = normalizeSelectionValue(message);
+  const hasContextCue = flags.isFollowUp || hasAny(normalized, [
+    "این",
+    "همین",
+    "قبلی",
+    "اون",
+    "آن",
+    "وضعیتش",
+    "شماره اش",
+    "شماره‌اش",
+    "مشتریش",
+    "تماسش",
+    "آدرسش",
+    "its",
+    "that",
+  ]);
+  return !plan.queryTerms.length && (requested.length > 0 || hasContextCue);
 }
 
 async function runBoundedContextAgent(pool, context, message, { recentMessages = [] } = {}) {
@@ -3237,6 +3496,10 @@ export async function runAiChat({
   const candidates = entityResolution.codeCandidates;
   const hints = messageHints(message);
   const flags = intentFlags(message);
+  if (shouldUseActiveEntityForFollowUp(message, activeEntity)) {
+    const activeFollowUpResult = await answerFromActiveEntity(pool, toolContext, activeEntity, message);
+    if (activeFollowUpResult) return activeFollowUpResult;
+  }
   const boundedContextResult = await runBoundedContextAgent(pool, toolContext, message, { recentMessages });
   if (boundedContextResult) return boundedContextResult;
 
