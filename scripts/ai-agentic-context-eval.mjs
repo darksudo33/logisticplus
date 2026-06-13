@@ -9,9 +9,13 @@ import {
   verifyRelationAnswerability,
 } from "../src/server/ai/ai-context-planner.js";
 import {
+  businessQueryDisplay,
   extractAmbiguitySelection,
   followUpBusinessPlanFromRecentMessages,
+  rankBusinessCandidatesForPlan,
   renderBusinessAmbiguityMessage,
+  resolveBusinessCandidateSelection,
+  shouldUseActiveEntityForFollowUp,
 } from "../src/server/ai/ai-orchestrator.js";
 import { llmProviderStatus } from "../src/server/ai/llm-provider.js";
 
@@ -64,10 +68,19 @@ const businessCases = [
   },
   {
     message: "اون بار چاپ آنتویس",
-    terms: ["چاپ", "آنتویس"],
+    terms: ["چاپ آنتویس"],
+    forbiddenTerms: ["چاپ", "آنتویس"],
     types: ["shipment"],
     requestedField: BUSINESS_REQUESTED_FIELDS.SUMMARY,
     requestedFields: [BUSINESS_REQUESTED_FIELDS.SUMMARY],
+  },
+  {
+    message: "بار موتور برق مال کیه؟",
+    terms: ["موتور برق"],
+    forbiddenTerms: ["موتور", "برق", "بار"],
+    types: ["shipment", "customer"],
+    requestedField: BUSINESS_REQUESTED_FIELDS.CUSTOMER,
+    requestedFields: [BUSINESS_REQUESTED_FIELDS.CUSTOMER],
   },
   {
     message: "بار آقای سنجری",
@@ -190,6 +203,29 @@ assert.equal(isIdentityQuestion("تو کی هستی"), true, "identity phrase sh
 assert.equal(identityPlan.intent, "identity", "identity query should use identity intent");
 assert.equal(identityPlan.searchBusinessContext, false, "identity query must not trigger business search");
 
+const commandOnlyFollowUpPlan = planBusinessSearch("شماره تماس مشتری رو بده");
+assert.equal(commandOnlyFollowUpPlan.searchBusinessContext, false, "field-only command follow-up should not search for command words");
+assert.deepEqual(commandOnlyFollowUpPlan.queryTerms, [], "field-only command follow-up should not keep بده/رو as query terms");
+assert.equal(commandOnlyFollowUpPlan.requestedField, BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE, "field-only command follow-up should preserve phone intent");
+assert.equal(
+  shouldUseActiveEntityForFollowUp("شماره تماس مشتری رو بده", { type: "customer", id: "customer-156", code: "156", label: "مشتری 156" }),
+  true,
+  "field-only phone follow-up should use the active selected customer"
+);
+
+assert.equal(
+  businessQueryDisplay({ queryTerms: ["موتور", "برق", "موتور برق"] }),
+  "موتور برق",
+  "business query display should not duplicate overlapping phrase terms"
+);
+
+const shipmentIntentPlan = planBusinessSearch("بار موتور برق مال کیه؟");
+const rankedCandidates = rankBusinessCandidatesForPlan(shipmentIntentPlan, [
+  { type: "customer", id: "customer-1", label: "مشتری موتور برق", score: 0.99, matchedFields: ["customer_name"] },
+  { type: "shipment", id: "shipment-1", label: "محموله موتور برق", score: 0.62, matchedFields: ["goods_description"] },
+]);
+assert.equal(rankedCandidates[0].type, "shipment", "shipment wording should rank shipment candidates before customer candidates");
+
 assert.equal(
   classifyResolutionState([
     { id: "customer-a", customerCode: "X" },
@@ -215,6 +251,45 @@ assert.deepEqual(
 
 assert.equal(extractAmbiguitySelection("به 214"), "214", "short ambiguity follow-up should extract selected code");
 assert.equal(extractAmbiguitySelection("به ۲۱۴"), "214", "Persian digit ambiguity follow-up should normalize selected code");
+assert.equal(extractAmbiguitySelection("گزینه دوم رو بده"), "2", "ordinal ambiguity follow-up should resolve option number");
+
+const candidateSelectionCases = [
+  {
+    message: "گزینه دوم",
+    expectedId: "customer-156",
+    reason: "option",
+  },
+  {
+    message: "به 156",
+    expectedId: "customer-156",
+    reason: "code",
+  },
+  {
+    message: "آقای سنجری",
+    expectedId: "customer-214",
+    reason: "code",
+  },
+];
+const selectableCandidates = [
+  {
+    type: "customer",
+    id: "customer-214",
+    label: "مشتری آقای سنجری",
+    safeSummary: { customerCode: "214", customerName: "آقای سنجری" },
+  },
+  {
+    type: "customer",
+    id: "customer-156",
+    label: "مشتری شرکت سنجری",
+    safeSummary: { customerCode: "156", customerName: "شرکت سنجری" },
+  },
+];
+for (const testCase of candidateSelectionCases) {
+  const resolved = resolveBusinessCandidateSelection(testCase.message, selectableCandidates);
+  assert.equal(resolved.state, "resolved", `${testCase.message} should resolve to one candidate`);
+  assert.equal(resolved.candidate.id, testCase.expectedId, `${testCase.message} should pick the expected candidate`);
+  assert.equal(resolved.reason, testCase.reason, `${testCase.message} should expose resolution reason`);
+}
 
 const followUpPlan = followUpBusinessPlanFromRecentMessages("به 214", [
   { role: "user", content: "شماره آقای سنجری" },
@@ -258,9 +333,18 @@ const ambiguityText = renderBusinessAmbiguityMessage({
   ],
 });
 assert.ok(ambiguityText.includes("\n\n"), "ambiguity renderer should separate options with blank lines");
+assert.match(ambiguityText, /شماره گزینه یا کد/, "ambiguity renderer should ask for option number or exact code");
 assert.match(ambiguityText, /۱\)/, "ambiguity renderer should use Persian option digits");
 assert.match(ambiguityText, /کد مشتری: ۲۱۴/, "ambiguity renderer should show customer code with Persian digits");
 assert.match(ambiguityText, /وضعیت:/, "ambiguity renderer should include status per option");
+
+const optionFollowUpPlan = followUpBusinessPlanFromRecentMessages("گزینه دوم", [
+  { role: "user", content: "شماره آقای سنجری" },
+  { role: "assistant", content: ambiguityText },
+]);
+assert.ok(optionFollowUpPlan, "option follow-up should rebuild a business plan from assistant ambiguity text");
+assert.deepEqual(optionFollowUpPlan.queryTerms, ["14051102036"], "option follow-up should search the selected candidate code only");
+assert.equal(optionFollowUpPlan.candidateTypes[0], "shipment", "option follow-up should preserve the selected candidate type first");
 
 const oldKey = process.env.LLM_API_KEY;
 delete process.env.LLM_API_KEY;
