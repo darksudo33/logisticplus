@@ -27,6 +27,7 @@ export const BUSINESS_REQUESTED_FIELDS = {
   CUSTOMER: "customer",
   CUSTOMER_PHONE: "customer_phone",
   CUSTOMER_NUMBER: "customer_number",
+  SHIPMENTS: "shipments",
   COMMERCIAL_CARD: "commercial_card",
   COMMERCIAL_CARD_NUMBER: "commercial_card_number",
   SHIPMENT_NUMBER: "shipment_number",
@@ -127,6 +128,7 @@ const STOP_WORDS = new Set([
   "کارت",
   "کدام",
   "کدوم",
+  "کدومه",
   "کجاست",
   "کجاس",
   "کیه",
@@ -246,10 +248,21 @@ const SHIPMENT_LIST_TERMS = [
   "active shipments",
   "بارهای",
   "بار ها",
+  "بارهاش",
+  "بار هاش",
+  "بارهای این مشتری",
+  "بارهای فعال مشتری",
   "محموله‌های",
   "محموله ها",
+  "محموله‌هاش",
+  "محموله هاش",
+  "محموله‌های مشتری",
+  "آخرین محموله‌های مشتری",
   "پرونده‌های",
   "پرونده ها",
+  "پرونده‌هاش",
+  "پرونده هاش",
+  "پرونده‌های مشتری",
   "چندتا پرونده",
   "چند پرونده",
 ];
@@ -356,13 +369,29 @@ function tokenized(text = "") {
   return normalizeAgentText(text).match(/[\p{L}\p{N}_-]+/gu) || [];
 }
 
+function stripPersianPossessive(token = "") {
+  return String(token || "").replace(/(هایش|هاش|اش|ش)$/u, "");
+}
+
 function isStopToken(token = "") {
+  const strippedPossessive = stripPersianPossessive(token);
   return (
+    !token ||
     STOP_WORDS.has(token) ||
     BUSINESS_FIELD_STOP_WORDS.has(token) ||
     COMMAND_STOP_WORDS.has(token) ||
     HONORIFICS.has(token) ||
-    /^(ها|های|اش|ش)$/.test(token)
+    /^(ها|های|هاش|هایش|اش|ش|همون|همونو|اولی)$/.test(token) ||
+    (
+      strippedPossessive !== token &&
+      (
+        !strippedPossessive ||
+        STOP_WORDS.has(strippedPossessive) ||
+        BUSINESS_FIELD_STOP_WORDS.has(strippedPossessive) ||
+        COMMAND_STOP_WORDS.has(strippedPossessive) ||
+        HONORIFICS.has(strippedPossessive)
+      )
+    )
   );
 }
 
@@ -398,7 +427,7 @@ export function isIdentityQuestion(message = "") {
   return IDENTITY_TERMS.some((term) => normalized === normalizeAgentText(term) || normalized.includes(normalizeAgentText(term)));
 }
 
-export function detectRelationIntent(message = "") {
+export function detectRelationIntent(message = "", context = {}) {
   const normalized = normalizeAgentText(message);
   if (!normalized) {
     return {
@@ -410,7 +439,7 @@ export function detectRelationIntent(message = "") {
   }
 
   const language = hasPersian(message) ? "fa" : "en";
-  const registryPlan = resolveHamyarQuestionPlan(message);
+  const registryPlan = resolveHamyarQuestionPlan(message, context, context?.activeEntity);
   if (registryPlan.legacyIntent && SUPPORTED_RELATION_INTENTS.has(registryPlan.legacyIntent)) {
     return {
       intent: registryPlan.legacyIntent,
@@ -478,6 +507,7 @@ export function detectBusinessRequestedFields(message = "") {
   const hasPhone = includesAny(normalized, PHONE_TERMS);
   const hasShipment = includesAny(normalized, SHIPMENT_TERMS);
   const hasCustomer = includesAny(normalized, CUSTOMER_TERMS);
+  const hasShipmentList = includesAny(normalized, SHIPMENT_LIST_TERMS);
   const hasCard = includesAny(normalized, CARD_TERMS) || includesAny(normalized, COMMERCIAL_CARD_TERMS);
   const hasStatus = includesAny(normalized, SUMMARY_TERMS) || includesAny(normalized, SHIPMENT_STATUS_TERMS);
   const hasLocation = includesAny(normalized, LOCATION_TERMS);
@@ -488,6 +518,16 @@ export function detectBusinessRequestedFields(message = "") {
 
   if (hasAccounting) return [BUSINESS_REQUESTED_FIELDS.ACCOUNTING];
   if (hasAddress) return [BUSINESS_REQUESTED_FIELDS.ADDRESS];
+  if (
+    hasShipmentList &&
+    (
+      hasCustomer ||
+      registryPlan.intent === "customer.shipments.lookup" ||
+      includesAny(normalized, ["این مشتری", "همین مشتری", "محموله‌هاش", "محموله هاش", "بارهاش", "بار هاش"])
+    )
+  ) {
+    return [BUSINESS_REQUESTED_FIELDS.SHIPMENTS];
+  }
   if (hasCard && hasNumber) return [BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD_NUMBER];
   if (hasCard) return [BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD];
   if ((hasPhone && !hasShipment) || (hasPhone && (hasCustomer || hasPersonCue)) || (hasNumber && (hasCustomer || hasPersonCue) && !hasShipment)) {
@@ -557,6 +597,8 @@ function candidateTypesFor(message = "", requestedField = BUSINESS_REQUESTED_FIE
     types.push(BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD, BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.SHIPMENT);
   } else if (hasWorkflow) {
     types.push(BUSINESS_ENTITY_TYPES.WORKFLOW_ITEM, BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.CUSTOMER);
+  } else if (requestedField === BUSINESS_REQUESTED_FIELDS.SHIPMENTS) {
+    types.push(BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.SHIPMENT);
   } else if (needsCustomerField) {
     types.push(BUSINESS_ENTITY_TYPES.CUSTOMER, BUSINESS_ENTITY_TYPES.SHIPMENT, BUSINESS_ENTITY_TYPES.COMMERCIAL_CARD);
   } else if (hasShipment && hasCustomer) {
@@ -587,10 +629,10 @@ function alternateTermsFor(terms = []) {
   return unique([joined, reversed, ...parts.slice().reverse()]).filter((term) => !terms.includes(term)).slice(0, 6);
 }
 
-export function planBusinessSearch(message = "") {
+export function planBusinessSearch(message = "", context = {}) {
   const normalized = normalizeAgentText(message);
   const language = hasPersian(message) ? "fa" : "en";
-  const registryPlan = resolveHamyarQuestionPlan(message);
+  const registryPlan = resolveHamyarQuestionPlan(message, context, context?.activeEntity);
   if (!normalized) {
     return {
       intent: "empty",
@@ -661,7 +703,7 @@ export function planBusinessSearch(message = "") {
   };
 }
 
-export function planCompanyBrainLookup(message = "") {
+export function planCompanyBrainLookup(message = "", context = {}) {
   const normalized = normalizeAgentText(message);
   const language = hasPersian(message) ? "fa" : "en";
   if (!normalized || isIdentityQuestion(message)) {
@@ -680,7 +722,7 @@ export function planCompanyBrainLookup(message = "") {
     };
   }
 
-  const businessPlan = planBusinessSearch(message);
+  const businessPlan = planBusinessSearch(message, context);
   const hasStatusQuestion = includesAny(normalized, COMPANY_BRAIN_STATUS_TERMS);
   const hasTodayCue = includesAny(normalized, ["امروز", "today"]);
   const hasDailyQuestion =

@@ -197,9 +197,16 @@ const AI_INTENTS = {
 
 const ENTITY_CLUE_STOP_WORDS = new Set([
   "شماره",
+  "شماره‌ش",
+  "شماره‌اش",
+  "شمارهش",
   "تماس",
+  "تماسش",
   "تلفن",
+  "تلفنش",
   "موبایل",
+  "موبایلش",
+  "باهاش",
   "ایجنت",
   "نماینده",
   "مخاطب",
@@ -213,8 +220,13 @@ const ENTITY_CLUE_STOP_WORDS = new Set([
   "ملوانی",
   "لنج",
   "محموله",
+  "محموله‌هاش",
+  "محمولههاش",
   "بار",
+  "بارهاش",
   "پرونده",
+  "پرونده‌هاش",
+  "پروندههاش",
   "مشتری",
   "شرکت",
   "کارت",
@@ -270,6 +282,9 @@ const ENTITY_CLUE_STOP_WORDS = new Set([
   "این",
   "اون",
   "آن",
+  "همون",
+  "همونو",
+  "اولی",
   "من",
   "هم",
   "که",
@@ -405,7 +420,19 @@ function intentFlags(message = "") {
   const text = normalizeQueryText(message);
   const asksPhone = hasAny(text, ["شماره", "تماس", "تلفن", "موبایل", "phone"]);
   const asksCaptain = hasAny(text, ["ناخدا", "کاپیتان", "ایجنت", "ملوانی", "لنج"]);
-  const asksCustomer = hasAny(text, ["مشتری", "شرکت", "تماسش", "شماره اش", "شماره‌اش", "شماره اش"]);
+  const customerContactPossessives = [
+    "تماسش",
+    "تلفنش",
+    "موبایلش",
+    "شماره اش",
+    "شماره‌اش",
+    "شماره ش",
+    "شماره‌ش",
+    "شماره تماسش",
+    "اطلاعات تماسش",
+    "باهاش چطور تماس",
+  ];
+  const asksCustomer = hasAny(text, ["مشتری", "شرکت", ...customerContactPossessives]);
   const asksShipment = hasAny(text, ["محموله", "بار", "پرونده"]);
   const asksShipmentStatus = hasAny(text, ["وضعیت", "مرحله", "پیگیری", "کجاست", "کجاس", "status", "وضعیتش"]);
   const asksDocuments = hasAny(text, ["اسناد", "سند", "مدارک"]);
@@ -429,12 +456,26 @@ function intentFlags(message = "") {
   const asksOverdue = hasAny(text, ["عقب افتاده", "معوق", "دیرکرد", "overdue"]);
   const asksDueToday = hasAny(text, ["امروز", "today"]);
   const asksMissing = hasAny(text, ["ناقص", "کامل", "کم", "ندارد", "missing", "complete"]);
-  const asksCustomerShipments = hasAny(text, ["محموله های", "محموله‌های", "محموله هاش", "محموله‌هاش", "پرونده های", "پرونده‌های"]);
+  const asksCustomerShipments = hasAny(text, [
+    "محموله های",
+    "محموله‌های",
+    "محموله هاش",
+    "محموله‌هاش",
+    "پرونده های",
+    "پرونده‌های",
+    "پرونده هاش",
+    "پرونده‌هاش",
+    "بارهای این مشتری",
+    "بارهای فعال مشتری",
+    "بار هاش",
+    "بارهاش",
+  ]);
   const asksLatest = hasAny(text, ["آخرین", "جدیدترین"]);
+  const asksShipmentNumber = hasAny(text, ["شماره بار", "شماره محموله", "شماره پرونده", "کد محموله", "کد بار", "shipment number"]);
   const asksReport = hasAny(text, ["گزارش", "report"]);
   const asksSummary = hasAny(text, ["خلاصه", "گزارش", "پرونده", "summary"]);
   const asksCaptainPhone = asksPhone && asksCaptain;
-  const asksCustomerPhone = asksPhone && (asksCustomer || hasAny(text, ["تماسش", "شماره اش", "شماره‌اش"]));
+  const asksCustomerPhone = asksPhone && (asksCustomer || hasAny(text, customerContactPossessives));
 
   return {
     text,
@@ -469,6 +510,7 @@ function intentFlags(message = "") {
     asksMissing,
     asksCustomerShipments,
     asksLatest,
+    asksShipmentNumber,
     asksSummary,
     asksReport,
     isFollowUp: hasAny(text, [
@@ -483,9 +525,14 @@ function intentFlags(message = "") {
       "اسنادش",
       "وظایفش",
       "تماسش",
+      "تلفنش",
+      "موبایلش",
+      "شماره تماسش",
       "محموله هاش",
       "محموله‌هاش",
-    ]) || asksShipmentStatus || asksCaptainPhone || asksCustomerPhone || asksDocuments || asksTasks || asksCustomerShipments || asksGoods || asksRoute || asksDates || asksArchive || asksKootaj || asksBlockers || asksPublicTracking || asksChat || asksAudit || asksFinance,
+      "بار هاش",
+      "بارهاش",
+    ]) || asksShipmentNumber || asksShipmentStatus || asksCaptainPhone || asksCustomerPhone || asksDocuments || asksTasks || asksCustomerShipments || asksGoods || asksRoute || asksDates || asksArchive || asksKootaj || asksBlockers || asksPublicTracking || asksChat || asksAudit || asksFinance,
   };
 }
 
@@ -504,6 +551,7 @@ const FIELD_ALIASES = {
   [BUSINESS_REQUESTED_FIELDS.STATUS]: [BUSINESS_REQUESTED_FIELDS.STATUS],
   [BUSINESS_REQUESTED_FIELDS.ADDRESS]: [BUSINESS_REQUESTED_FIELDS.ADDRESS],
   [BUSINESS_REQUESTED_FIELDS.ACCOUNTING]: [BUSINESS_REQUESTED_FIELDS.ACCOUNTING],
+  [BUSINESS_REQUESTED_FIELDS.SHIPMENTS]: [BUSINESS_REQUESTED_FIELDS.SHIPMENTS],
 };
 
 function toPersianDigits(value = "") {
@@ -613,6 +661,7 @@ function shipmentAnswer({ shipment, captain, workflow, customerProfile, message 
     return `برای مشتری محموله ${code} شماره تماس ثبت نشده است.`;
   }
 
+  if (flags.asksShipmentNumber) return `شماره محموله: ${labelOrMissing(code)}.`;
   if (flags.asksShipmentCustomer && !flags.asksShipmentStatus && !flags.asksCaptainPhone) return customerLine;
   if (flags.asksCaptainPhone && flags.asksShipmentStatus) return joinLines([customerLine, statusLine, captainLine]);
   if (flags.asksCaptainPhone) return captainLine;
@@ -2009,7 +2058,7 @@ function businessCustomerAnswer(plan, detail) {
   if (field === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD || field === BUSINESS_REQUESTED_FIELDS.COMMERCIAL_CARD_NUMBER) {
     return groundedCustomerAnswer({ ...plan, intent: RELATION_INTENTS.CUSTOMER_COMMERCIAL_CARD_LOOKUP }, detail);
   }
-  if (field === BUSINESS_REQUESTED_FIELDS.LOCATION) {
+  if (field === BUSINESS_REQUESTED_FIELDS.SHIPMENTS || field === BUSINESS_REQUESTED_FIELDS.LOCATION) {
     return groundedCustomerAnswer({ ...plan, intent: RELATION_INTENTS.CUSTOMER_SHIPMENTS_LOOKUP }, detail);
   }
   return joinLines([
@@ -2496,7 +2545,18 @@ async function answerBusinessCandidate(pool, context, plan, candidate, toolsCall
     const answer = shouldKeepBusinessAnswerDeterministic(plan)
       ? deterministicAnswer
       : await maybePolishAnswer({ deterministicAnswer, queryType: "business_search", tone: "direct" });
-    const activeEntity = activeEntityFromBusinessCandidate(candidate, detail);
+    const activeEntity = detail.customer?.id && (
+      planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.PHONE, BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE, BUSINESS_REQUESTED_FIELDS.ADDRESS) ||
+      plan.requestedField === BUSINESS_REQUESTED_FIELDS.CUSTOMER ||
+      plan.registryIntent === "shipment.customer.phone.lookup"
+    )
+      ? {
+        type: "customer",
+        id: detail.customer.id,
+        code: detail.customer.customerCode,
+        label: customerDisplayFromDetail(detail.customer),
+      }
+      : activeEntityFromBusinessCandidate(candidate, detail);
     return relationResult({
       plan,
       answer,
@@ -3080,6 +3140,7 @@ export function shouldUseActiveEntityForFollowUp(message = "", activeEntity = nu
   const plan = planBusinessSearch(message);
   if (plan.intent === "identity") return false;
   const requested = requestedFieldsForPlan(plan).filter((field) => field && field !== BUSINESS_REQUESTED_FIELDS.SUMMARY);
+  if (requested.includes(BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER) && activeEntity.type !== "shipment") return false;
   const flags = intentFlags(message);
   const normalized = normalizeSelectionValue(message);
   const hasContextCue = flags.isFollowUp || hasAny(normalized, [
@@ -3091,9 +3152,19 @@ export function shouldUseActiveEntityForFollowUp(message = "", activeEntity = nu
     "وضعیتش",
     "شماره اش",
     "شماره‌اش",
+    "شماره ش",
+    "شماره‌ش",
     "مشتریش",
     "تماسش",
+    "تلفنش",
+    "موبایلش",
+    "شماره تماسش",
+    "اطلاعات تماسش",
     "آدرسش",
+    "بارهاش",
+    "بار هاش",
+    "محموله‌هاش",
+    "محموله هاش",
     "its",
     "that",
   ]);

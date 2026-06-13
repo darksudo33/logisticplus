@@ -180,6 +180,26 @@
     },
     {
       "id": "hamyar-capability-011",
+      "question": "اطلاعات تماس صاحب بار LP-178072282908 رو بده",
+      "intent": "shipment.customer.phone.lookup",
+      "primaryEntity": "shipment",
+      "relationPath": [
+        "shipment",
+        "customer",
+        "contact"
+      ],
+      "requestedField": "customer_phone",
+      "preferredEntityTypes": [
+        "shipment",
+        "customer"
+      ],
+      "needsCompanyBrain": true,
+      "needsLiveVerification": true,
+      "liveTool": "getShipmentDetailContext",
+      "fallback": "ask_clarification"
+    },
+    {
+      "id": "hamyar-capability-012",
       "question": "کارت بازرگانی محموله 14051102036 چیه؟",
       "intent": "shipment.commercial_card.lookup",
       "primaryEntity": "shipment",
@@ -199,7 +219,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-012",
+      "id": "hamyar-capability-013",
       "question": "این بار با کدوم کارت ترخیص می‌شود؟",
       "intent": "shipment.commercial_card.lookup",
       "primaryEntity": "shipment",
@@ -219,7 +239,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-013",
+      "id": "hamyar-capability-014",
       "question": "شماره ایجنت کارت بازرگانی بار 1234021 رو بده",
       "intent": "shipment.commercial_card.agent.lookup",
       "primaryEntity": "shipment",
@@ -239,7 +259,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-014",
+      "id": "hamyar-capability-015",
       "question": "مسئول کارت این محموله کیه؟",
       "intent": "shipment.commercial_card.agent.lookup",
       "primaryEntity": "shipment",
@@ -259,7 +279,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-015",
+      "id": "hamyar-capability-016",
       "question": "شماره ایجنت محموله 14051102036 رو بده",
       "intent": "shipment.agent.phone.lookup",
       "primaryEntity": "shipment",
@@ -279,7 +299,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-016",
+      "id": "hamyar-capability-017",
       "question": "نماینده ملووانی این بار کیه؟",
       "intent": "shipment.agent.phone.lookup",
       "primaryEntity": "shipment",
@@ -299,7 +319,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-017",
+      "id": "hamyar-capability-018",
       "question": "شماره ناخدای محموله 14051102036 چنده؟",
       "intent": "shipment.captain.phone.lookup",
       "primaryEntity": "shipment",
@@ -318,7 +338,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-018",
+      "id": "hamyar-capability-019",
       "question": "تلفن کاپیتان این بار رو بده",
       "intent": "shipment.captain.phone.lookup",
       "primaryEntity": "shipment",
@@ -337,7 +357,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-019",
+      "id": "hamyar-capability-020",
       "question": "نام لنج محموله 14051102036 چیه؟",
       "intent": "shipment.vessel.lookup",
       "primaryEntity": "shipment",
@@ -356,7 +376,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-020",
+      "id": "hamyar-capability-021",
       "question": "این بار با کدوم شناور میاد؟",
       "intent": "shipment.vessel.lookup",
       "primaryEntity": "shipment",
@@ -375,7 +395,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-021",
+      "id": "hamyar-capability-022",
       "question": "شماره کانتینرهای محموله 14051102036 رو بده",
       "intent": "shipment.container_numbers.lookup",
       "primaryEntity": "shipment",
@@ -393,7 +413,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-022",
+      "id": "hamyar-capability-023",
       "question": "کانتینر این بار چیه؟",
       "intent": "shipment.container_numbers.lookup",
       "primaryEntity": "shipment",
@@ -411,7 +431,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-023",
+      "id": "hamyar-capability-024",
       "question": "مشتری 214 رو پیدا کن",
       "intent": "customer.lookup",
       "primaryEntity": "customer",
@@ -429,7 +449,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-024",
+      "id": "hamyar-capability-025",
       "question": "اطلاعات مشتری سنجری رو بده",
       "intent": "customer.lookup",
       "primaryEntity": "customer",
@@ -447,7 +467,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-025",
+      "id": "hamyar-capability-026",
       "question": "شماره تماس مشتری 214 چنده؟",
       "intent": "customer.contact.lookup",
       "primaryEntity": "customer",
@@ -467,7 +487,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-026",
+      "id": "hamyar-capability-027",
       "question": "تلفن آقای سنجری رو بده",
       "intent": "customer.contact.lookup",
       "primaryEntity": "customer",
@@ -487,7 +507,47 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-027",
+      "id": "hamyar-capability-028",
+      "question": "شماره تماس این مشتری چنده؟",
+      "intent": "customer.contact.lookup",
+      "primaryEntity": "customer",
+      "relationPath": [
+        "customer",
+        "contact"
+      ],
+      "requestedField": "phone",
+      "preferredEntityTypes": [
+        "customer",
+        "shipment",
+        "commercial_card"
+      ],
+      "needsCompanyBrain": true,
+      "needsLiveVerification": true,
+      "liveTool": "getCustomerContactInfo",
+      "fallback": "ask_clarification"
+    },
+    {
+      "id": "hamyar-capability-029",
+      "question": "اطلاعات تماس مشتری رو بده",
+      "intent": "customer.contact.lookup",
+      "primaryEntity": "customer",
+      "relationPath": [
+        "customer",
+        "contact"
+      ],
+      "requestedField": "phone",
+      "preferredEntityTypes": [
+        "customer",
+        "shipment",
+        "commercial_card"
+      ],
+      "needsCompanyBrain": true,
+      "needsLiveVerification": true,
+      "liveTool": "getCustomerContactInfo",
+      "fallback": "ask_clarification"
+    },
+    {
+      "id": "hamyar-capability-030",
       "question": "بارهای مشتری 214 کدومن؟",
       "intent": "customer.shipments.lookup",
       "primaryEntity": "customer",
@@ -506,7 +566,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-028",
+      "id": "hamyar-capability-031",
       "question": "محموله‌های فعال سنجری رو بده",
       "intent": "customer.shipments.lookup",
       "primaryEntity": "customer",
@@ -525,7 +585,45 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-029",
+      "id": "hamyar-capability-032",
+      "question": "این مشتری چه بارهایی دارد؟",
+      "intent": "customer.shipments.lookup",
+      "primaryEntity": "customer",
+      "relationPath": [
+        "customer",
+        "shipments"
+      ],
+      "requestedField": "shipments",
+      "preferredEntityTypes": [
+        "customer",
+        "shipment"
+      ],
+      "needsCompanyBrain": true,
+      "needsLiveVerification": true,
+      "liveTool": "getCustomerShipments",
+      "fallback": "ask_clarification"
+    },
+    {
+      "id": "hamyar-capability-033",
+      "question": "محموله‌هاش چیه؟",
+      "intent": "customer.shipments.lookup",
+      "primaryEntity": "customer",
+      "relationPath": [
+        "customer",
+        "shipments"
+      ],
+      "requestedField": "shipments",
+      "preferredEntityTypes": [
+        "customer",
+        "shipment"
+      ],
+      "needsCompanyBrain": true,
+      "needsLiveVerification": true,
+      "liveTool": "getCustomerShipments",
+      "fallback": "ask_clarification"
+    },
+    {
+      "id": "hamyar-capability-034",
       "question": "امروز چه وظایفی داریم؟",
       "intent": "task.today.lookup",
       "primaryEntity": "task",
@@ -543,7 +641,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-030",
+      "id": "hamyar-capability-035",
       "question": "تسک‌های امروز رو بده",
       "intent": "task.today.lookup",
       "primaryEntity": "task",
@@ -561,7 +659,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-031",
+      "id": "hamyar-capability-036",
       "question": "مسئول این وظیفه کیه؟",
       "intent": "task.assignee.lookup",
       "primaryEntity": "task",
@@ -581,7 +679,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-032",
+      "id": "hamyar-capability-037",
       "question": "تسک بار 14051102036 به عهده کیه؟",
       "intent": "task.assignee.lookup",
       "primaryEntity": "task",
@@ -601,7 +699,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-033",
+      "id": "hamyar-capability-038",
       "question": "آخرین مرحله محموله 14051102036 چیه؟",
       "intent": "workflow.latest_step.lookup",
       "primaryEntity": "shipment",
@@ -621,7 +719,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-034",
+      "id": "hamyar-capability-039",
       "question": "این بار در کدام مرحله است؟",
       "intent": "workflow.latest_step.lookup",
       "primaryEntity": "shipment",
@@ -641,7 +739,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-035",
+      "id": "hamyar-capability-040",
       "question": "اسناد محموله 14051102036 رو بده",
       "intent": "document.shipment.lookup",
       "primaryEntity": "shipment",
@@ -661,7 +759,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-036",
+      "id": "hamyar-capability-041",
       "question": "مدارک این بار کامل است؟",
       "intent": "document.shipment.lookup",
       "primaryEntity": "shipment",
@@ -681,7 +779,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-037",
+      "id": "hamyar-capability-042",
       "question": "وضعیت سند بار 14051102036 چیه؟",
       "intent": "document.status.lookup",
       "primaryEntity": "document",
@@ -700,7 +798,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-038",
+      "id": "hamyar-capability-043",
       "question": "این مدرک قابل مشاهده برای مشتری هست؟",
       "intent": "document.status.lookup",
       "primaryEntity": "document",
@@ -719,7 +817,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-039",
+      "id": "hamyar-capability-044",
       "question": "چک‌های مشتری 214 رو بده",
       "intent": "cheque.customer.lookup",
       "primaryEntity": "customer",
@@ -739,7 +837,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-040",
+      "id": "hamyar-capability-045",
       "question": "برای سنجری چه چک‌هایی داریم؟",
       "intent": "cheque.customer.lookup",
       "primaryEntity": "customer",
@@ -759,7 +857,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-041",
+      "id": "hamyar-capability-046",
       "question": "سررسید چک 991122 کیه؟",
       "intent": "cheque.due_date.lookup",
       "primaryEntity": "cheque",
@@ -778,7 +876,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-042",
+      "id": "hamyar-capability-047",
       "question": "تاریخ چک مشتری 214 رو بده",
       "intent": "cheque.due_date.lookup",
       "primaryEntity": "cheque",
@@ -797,7 +895,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-043",
+      "id": "hamyar-capability-048",
       "question": "آخرین محموله ثبت شده چیه؟",
       "intent": "company.latest_shipment.lookup",
       "primaryEntity": "shipment",
@@ -816,7 +914,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-044",
+      "id": "hamyar-capability-049",
       "question": "جدیدترین بار شرکت رو بده",
       "intent": "company.latest_shipment.lookup",
       "primaryEntity": "shipment",
@@ -835,7 +933,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-045",
+      "id": "hamyar-capability-050",
       "question": "امروز چه اتفاقی افتاده؟",
       "intent": "company.daily_summary.lookup",
       "primaryEntity": "organization",
@@ -851,7 +949,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-046",
+      "id": "hamyar-capability-051",
       "question": "وضعیت کلی شرکت چیه؟",
       "intent": "company.daily_summary.lookup",
       "primaryEntity": "organization",
@@ -867,7 +965,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-047",
+      "id": "hamyar-capability-052",
       "question": "کدوم محموله‌ها وضعیت روزانه ندارن؟",
       "intent": "missing_data.lookup",
       "primaryEntity": "organization",
@@ -887,7 +985,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-048",
+      "id": "hamyar-capability-053",
       "question": "مدارک کدام بار ناقصه؟",
       "intent": "missing_data.lookup",
       "primaryEntity": "organization",
@@ -907,7 +1005,7 @@
       "fallback": "ask_clarification"
     },
     {
-      "id": "hamyar-capability-049",
+      "id": "hamyar-capability-054",
       "question": "گزینه دوم",
       "intent": "ambiguity.selection.reply",
       "primaryEntity": "organization",
@@ -929,7 +1027,7 @@
       "fallback": "resolve_pending_selection"
     },
     {
-      "id": "hamyar-capability-050",
+      "id": "hamyar-capability-055",
       "question": "به 214",
       "intent": "ambiguity.selection.reply",
       "primaryEntity": "organization",

@@ -262,6 +262,39 @@ assert.equal(
 );
 assert.ok(!commandOnlyFollowUpPlan.queryTerms.includes("بده"), "business search term must not be command-only word بده");
 
+const activeCustomer = { type: "customer", id: "customer-3", code: "CUS-00003", label: "مشتری CUS-00003" };
+for (const message of ["شماره تماسش چنده", "تلفنش چیه؟", "موبایلش رو بده", "شماره‌ش رو بده"]) {
+  const plan = planBusinessSearch(message);
+  assert.equal(plan.searchBusinessContext, false, `${message} should not search possessive contact words`);
+  assert.deepEqual(plan.queryTerms, [], `${message} should not keep possessive contact terms`);
+  assert.equal(plan.requestedField, BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE, `${message} should preserve customer phone intent`);
+  assert.equal(
+    shouldUseActiveEntityForFollowUp(message, activeCustomer),
+    true,
+    `${message} should use the focused customer instead of searching the possessive word`
+  );
+}
+
+for (const message of ["محموله‌هاش چیه؟", "بارهاش چیه؟"]) {
+  const plan = planBusinessSearch(message);
+  assert.equal(plan.searchBusinessContext, false, `${message} should not search possessive shipment-list words`);
+  assert.deepEqual(plan.queryTerms, [], `${message} should not keep hāš as an entity term`);
+  assert.equal(plan.requestedField, BUSINESS_REQUESTED_FIELDS.SHIPMENTS, `${message} should preserve customer shipment-list intent`);
+  assert.equal(
+    shouldUseActiveEntityForFollowUp(message, activeCustomer),
+    true,
+    `${message} should use the focused customer for shipment list follow-up`
+  );
+}
+
+const shipmentNumberFollowUp = planBusinessSearch("شماره بار چیه");
+assert.equal(shipmentNumberFollowUp.requestedField, BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER, "شماره بار should mean shipment number");
+assert.equal(
+  shouldUseActiveEntityForFollowUp("شماره بار چیه", activeCustomer),
+  false,
+  "shipment-number wording must not be routed to a focused customer phone lookup"
+);
+
 const hamyarCases = registryToEvalCases();
 assert.ok(hamyarCases.length >= 40, "Hamyar registry should provide broad eval coverage");
 for (const [intentId, definition] of Object.entries(HAMYAR_CAPABILITY_REGISTRY.intents)) {
@@ -339,6 +372,9 @@ assert.deepEqual(
 assert.equal(extractAmbiguitySelection("به 214"), "214", "short ambiguity follow-up should extract selected code");
 assert.equal(extractAmbiguitySelection("به ۲۱۴"), "214", "Persian digit ambiguity follow-up should normalize selected code");
 assert.equal(extractAmbiguitySelection("گزینه دوم رو بده"), "2", "ordinal ambiguity follow-up should resolve option number");
+assert.equal(extractAmbiguitySelection("1"), "1", "bare numeric option should resolve option number");
+assert.equal(extractAmbiguitySelection("گزینه ۱"), "1", "Persian digit option should resolve option number");
+assert.equal(extractAmbiguitySelection("اولی"), "1", "bare Persian ordinal should resolve first option");
 
 const candidateSelectionCases = [
   {
@@ -355,6 +391,16 @@ const candidateSelectionCases = [
     message: "آقای سنجری",
     expectedId: "customer-214",
     reason: "code",
+  },
+  {
+    message: "اولی",
+    expectedId: "customer-214",
+    reason: "option",
+  },
+  {
+    message: "1",
+    expectedId: "customer-214",
+    reason: "option",
   },
 ];
 const selectableCandidates = [
