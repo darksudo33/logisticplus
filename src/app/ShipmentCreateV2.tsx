@@ -1,6 +1,6 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
-import { Anchor, ArrowRight, Loader2, Package, Plus, Save, Ship, Users, X } from "lucide-react";
+import { Anchor, ArrowRight, Check, Loader2, Package, Plus, Save, Search, Ship, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -100,6 +100,41 @@ function customerOptionLabel(customer: Customer) {
   return customer.customerCode || customer.code || customer.id;
 }
 
+function customerDisplayName(customer: Customer) {
+  const code = customerOptionLabel(customer);
+  return [customer.company, customer.name]
+    .filter((value) => value && value !== code)
+    .join(" - ");
+}
+
+function normalizeCustomerSearch(value: string) {
+  return toEnglishDigits(value || "").trim().toLowerCase();
+}
+
+function customerSearchTokens(customer: Customer) {
+  return [
+    customer.customerCode,
+    customer.code,
+    customer.id,
+    customer.company,
+    customer.name,
+    customer.phone,
+    customer.email,
+  ]
+    .map((value) => normalizeCustomerSearch(String(value || "")))
+    .filter(Boolean);
+}
+
+function customerSearchRank(customer: Customer, query: string) {
+  const codeTokens = [customer.customerCode, customer.code, customer.id]
+    .map((value) => normalizeCustomerSearch(String(value || "")))
+    .filter(Boolean);
+  if (codeTokens.some((token) => token === query)) return 0;
+  if (codeTokens.some((token) => token.startsWith(query))) return 1;
+  if (codeTokens.some((token) => token.includes(query))) return 2;
+  return 3;
+}
+
 function formatDraftGoodsTotal(value: number | null) {
   if (value === null) return "ثبت نشده";
   return value.toLocaleString("fa-IR", { maximumFractionDigits: 6 });
@@ -131,10 +166,25 @@ export default function ShipmentCreateV2() {
   const [state, setState] = React.useState<CreateState>(initialState);
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = React.useState(false);
+  const [customerSearch, setCustomerSearch] = React.useState("");
+  const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = React.useState(false);
 
   const selectedFlow = flowOptions.find((flow) => flow.value === state.flowCode) || flowOptions[0];
   const showContainerCounts = state.flowCode === "IMPORT_SHIP";
-  const canUseExistingCode = currentUser?.role === "CEO" || currentUser?.permissions?.includes("platform.admin");
+  const currentUserRole = String(currentUser?.role || "").toUpperCase();
+  const canUseExistingCode = currentUserRole === "CEO" || currentUserRole === "MANAGER" || currentUser?.permissions?.includes("platform.admin");
+  const selectedCustomer = React.useMemo(
+    () => customers.find((customer) => customer.id === state.customerId) || null,
+    [customers, state.customerId]
+  );
+  const customerSearchQuery = normalizeCustomerSearch(customerSearch);
+  const customerSuggestions = React.useMemo(() => {
+    if (!customerSearchQuery) return [];
+    return customers
+      .filter((customer) => customerSearchTokens(customer).some((token) => token.includes(customerSearchQuery)))
+      .sort((a, b) => customerSearchRank(a, customerSearchQuery) - customerSearchRank(b, customerSearchQuery))
+      .slice(0, 8);
+  }, [customers, customerSearchQuery]);
 
   React.useEffect(() => {
     if (!canUseExistingCode && state.codeMode === "existing") {
@@ -142,9 +192,28 @@ export default function ShipmentCreateV2() {
     }
   }, [canUseExistingCode, state.codeMode]);
 
+  React.useEffect(() => {
+    if (selectedCustomer) {
+      setCustomerSearch(customerOptionLabel(selectedCustomer));
+    }
+  }, [selectedCustomer]);
+
   const updateField = <TKey extends keyof CreateState>(key: TKey, value: CreateState[TKey]) => {
     setErrors((current) => ({ ...current, [key]: "" }));
     setState((current) => ({ ...current, [key]: value }));
+  };
+
+  const handleCustomerSearchChange = (value: string) => {
+    setCustomerSearch(value);
+    setIsCustomerDropdownOpen(true);
+    setErrors((current) => ({ ...current, customerId: "" }));
+    setState((current) => (current.customerId ? { ...current, customerId: "" } : current));
+  };
+
+  const selectCustomer = (customer: Customer) => {
+    updateField("customerId", customer.id);
+    setCustomerSearch(customerOptionLabel(customer));
+    setIsCustomerDropdownOpen(false);
   };
 
   const updateGoodsRow = (rowId: string, updates: Partial<DraftGoodsRow>) => {
@@ -322,21 +391,91 @@ export default function ShipmentCreateV2() {
                 <Label htmlFor="shipment-v2-customer" className="text-xs font-bold text-muted-foreground">
                   مشتری
                 </Label>
-                <select
-                  id="shipment-v2-customer"
-                  data-testid="shipment-v2-customer"
-                  className="h-10 w-full rounded-md border border-border bg-background px-3 text-xs font-bold outline-none focus:ring-1 focus:ring-primary/50"
-                  value={state.customerId}
-                  onChange={(event) => updateField("customerId", event.target.value)}
-                  disabled={customersResource.isLoading}
+                <div
+                  className="relative"
+                  onBlur={(event) => {
+                    if (!event.relatedTarget || !event.currentTarget.contains(event.relatedTarget as Node)) {
+                      setIsCustomerDropdownOpen(false);
+                    }
+                  }}
                 >
-                  <option value="">{customersResource.isLoading ? "در حال بارگذاری..." : "انتخاب مشتری"}</option>
-                  {customers.map((customer) => (
-                    <option key={customer.id} value={customer.id}>
-                      {customerOptionLabel(customer)}
-                    </option>
-                  ))}
-                </select>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="shipment-v2-customer"
+                      data-testid="shipment-v2-customer"
+                      className="h-10 rounded-md bg-background pr-9 pl-9 text-xs font-bold"
+                      value={customerSearch}
+                      onChange={(event) => handleCustomerSearchChange(event.target.value)}
+                      onFocus={() => setIsCustomerDropdownOpen(true)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          setIsCustomerDropdownOpen(false);
+                        }
+                        if (event.key === "Enter" && customerSuggestions[0]) {
+                          event.preventDefault();
+                          selectCustomer(customerSuggestions[0]);
+                        }
+                      }}
+                      disabled={customersResource.isLoading}
+                      placeholder={customersResource.isLoading ? "در حال بارگذاری..." : "کد مشتری را تایپ کنید"}
+                      role="combobox"
+                      aria-expanded={isCustomerDropdownOpen}
+                      aria-controls="shipment-v2-customer-suggestions"
+                      aria-autocomplete="list"
+                      autoComplete="off"
+                    />
+                    {state.customerId ? (
+                      <Check className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-600" />
+                    ) : null}
+                  </div>
+
+                  {isCustomerDropdownOpen && !customersResource.isLoading ? (
+                    <div
+                      id="shipment-v2-customer-suggestions"
+                      data-testid="shipment-v2-customer-suggestions"
+                      role="listbox"
+                      className="absolute z-30 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-border bg-background p-1 text-xs shadow-lg"
+                    >
+                      {!customerSearchQuery ? (
+                        <p className="px-3 py-2 font-bold text-muted-foreground">برای جستجو، کد مشتری را وارد کنید.</p>
+                      ) : customerSuggestions.length ? (
+                        customerSuggestions.map((customer, index) => {
+                          const displayName = customerDisplayName(customer);
+                          const optionLabel = customerOptionLabel(customer);
+                          return (
+                            <button
+                              key={customer.id}
+                              type="button"
+                              data-testid={`shipment-v2-customer-suggestion-${index}`}
+                              role="option"
+                              aria-selected={customer.id === state.customerId}
+                              className="flex w-full min-w-0 items-center justify-between gap-2 rounded-md px-3 py-2 text-right hover:bg-muted focus:bg-muted focus:outline-none"
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => selectCustomer(customer)}
+                            >
+                              <span className="min-w-0">
+                                <span className="block truncate font-black text-foreground">{optionLabel}</span>
+                                {displayName ? (
+                                  <span className="mt-0.5 block truncate text-[11px] font-bold text-muted-foreground">{displayName}</span>
+                                ) : null}
+                              </span>
+                              {customer.id === state.customerId ? <Check className="h-4 w-4 shrink-0 text-emerald-600" /> : null}
+                            </button>
+                          );
+                        })
+                      ) : (
+                        <p className="px-3 py-2 font-bold text-muted-foreground">مشتری با این کد پیدا نشد.</p>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+                {selectedCustomer ? (
+                  <p className="text-[11px] font-bold text-muted-foreground">
+                    مشتری انتخاب‌شده: <span className="font-black text-foreground">{customerOptionLabel(selectedCustomer)}</span>
+                    {customerDisplayName(selectedCustomer) ? ` - ${customerDisplayName(selectedCustomer)}` : ""}
+                  </p>
+                ) : null}
                 <FieldError message={errors.customerId} />
               </div>
 

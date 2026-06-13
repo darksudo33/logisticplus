@@ -21,6 +21,11 @@ function isShipmentV2SchemaMissing(error) {
   );
 }
 
+function canManageShipmentCodes(user, permissions = []) {
+  const role = String(user?.role || "").toUpperCase();
+  return role === "CEO" || role === "MANAGER" || permissions.includes("platform.admin");
+}
+
 export function registerShipmentV2Routes(
   app,
   {
@@ -63,7 +68,7 @@ export function registerShipmentV2Routes(
         ownerUserId: user.id,
         actorUserId: user.id,
         body,
-        canUseExistingCode: user.role === "CEO" || permissions.includes("platform.admin"),
+        canUseExistingCode: canManageShipmentCodes(user, permissions),
         includeCustomerPrivateDetails: user.role === "CEO",
       });
 
@@ -165,7 +170,7 @@ export function registerShipmentV2Routes(
         sectionKey: params.sectionKey,
         actorUserId: user.id,
         payload,
-        canEditShipmentCode: user.role === "CEO" || permissions.includes("platform.admin"),
+        canEditShipmentCode: canManageShipmentCodes(user, permissions),
         includeCustomerPrivateDetails: user.role === "CEO",
       });
       if (!result) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
