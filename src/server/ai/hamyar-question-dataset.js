@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 export const HAMYAR_QUESTION_DATASET_DEFAULT_PATH = path.resolve(
-  "data/hamyar/hamyar_logistic_question_dataset_v1.jsonl"
+  "data/hamyar/hamyar_logistic_question_dataset_v2.jsonl"
 );
 
 export const HAMYAR_QUESTION_DATASET_REQUIRED_FIELDS = Object.freeze([

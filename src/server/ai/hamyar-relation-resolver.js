@@ -93,7 +93,6 @@ const COLLECTION_INTENTS = new Set([
 ]);
 
 const LEGACY_SHIPMENT_FIELD_KEYS = new Set([
-  "shipment.code",
   "shipment.customer",
   "shipment.status",
 ]);

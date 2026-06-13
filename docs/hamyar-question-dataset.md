@@ -1,6 +1,8 @@
 # Hamyar Question Dataset
 
-`data/hamyar/hamyar_logistic_question_dataset_v1.jsonl` is the canonical Hamyar question-pattern artifact.
+`data/hamyar/hamyar_logistic_question_dataset_v2.jsonl` is the active canonical Hamyar question-pattern artifact.
+
+`data/hamyar/hamyar_logistic_question_dataset_v1.jsonl` remains in the repository as a historical baseline for coverage comparison.
 
 It is used for evals, training review, planner coverage, and product planning. It is not a runtime replacement for the Hamyar Capability Registry.
 
@@ -13,7 +15,7 @@ It is used for evals, training review, planner coverage, and product planning. I
 
 ## JSONL Format
 
-The canonical file is JSONL: one valid JSON object per line, UTF-8 encoded.
+The canonical active file is JSONL: one valid JSON object per line, UTF-8 encoded.
 
 Required fields:
 

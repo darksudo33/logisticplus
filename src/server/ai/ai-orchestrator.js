@@ -3354,7 +3354,12 @@ export function shouldUseActiveEntityForFollowUp(message = "", activeEntity = nu
   const plan = planBusinessSearch(message, { activeEntity });
   if (plan.intent === "identity") return false;
   const requested = requestedFieldsForPlan(plan).filter((field) => field && field !== BUSINESS_REQUESTED_FIELDS.SUMMARY);
-  if (requested.includes(BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER) && activeEntity.type !== "shipment") return false;
+  if (
+    (requested.includes(BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER) || requested.includes("shipment.code")) &&
+    activeEntity.type !== "shipment"
+  ) {
+    return false;
+  }
   const flags = intentFlags(message);
   const activeShipmentFieldLookup = activeEntity.type === "shipment" && isShipmentFieldLookupPlan(plan);
   if (flags.asksDocuments && !activeShipmentFieldLookup) return false;

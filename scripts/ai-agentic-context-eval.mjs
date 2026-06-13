@@ -196,8 +196,8 @@ const businessCases = [
     terms: ["1234021"],
     forbiddenTerms: ["شماره", "بار"],
     types: ["shipment"],
-    requestedField: BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER,
-    requestedFields: [BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER],
+    requestedField: "shipment.code",
+    requestedFields: ["shipment.code"],
   },
   {
     message: "سند محموله 14051102036",
@@ -381,6 +381,73 @@ assert.equal(
   "active document file follow-up should stay on active shipment for a deferred policy answer"
 );
 
+function assertShipmentFieldPlan(message, expectedField, { active = false, liveTool = "getShipmentDetailFields" } = {}) {
+  const plan = resolveHamyarQuestionPlan(message, active ? { activeEntity: activeShipment } : {});
+  assert.equal(plan.intent, SHIPMENT_FIELD_LOOKUP_INTENT_ID, `${message} should route to shipment field lookup`);
+  assert.equal(plan.requestedField, expectedField, `${message} should preserve ${expectedField}`);
+  assert.equal(plan.liveTool, liveTool, `${message} live tool`);
+  return plan;
+}
+
+for (const [message, expectedField, options] of [
+  ["شماره ثبت سفارش بار 14050305014 چیه؟", "shipment.order_registration_number"],
+  ["کارت بازرگانی محموله 14050305014 ثبت شده؟", "shipment.commercial_card"],
+  ["چند تا سند داره؟", "shipment.documents.count", { active: true }],
+  ["چند تا کالا داره؟", "shipment.goods_count", { active: true }],
+  ["تعداد کانتینرش چنده؟", "shipment.container_count", { active: true }],
+  ["مرحله فعلیش چیه؟", "shipment.current_stage", { active: true }],
+  ["آخرین بار کی آپدیت شده؟", "shipment.updated_at", { active: true }],
+  ["کی آپدیتش کرده؟", "shipment.updated_by", { active: true }],
+  ["محتویات بار چیه؟", "shipment.goods.contents", { active: true }],
+  ["چیا توشه؟", "shipment.goods.contents", { active: true }],
+  ["شرح کالا چیه؟", "shipment.goods.contents", { active: true }],
+  ["کانتینر 20 فوت داره؟", "shipment.container_20ft", { active: true }],
+  ["کانتینر 40 فوت داره؟", "shipment.container_40ft", { active: true }],
+  ["سندی براش بارگذاری شده؟", "shipment.documents.exists", { active: true }],
+  ["کوتاژش چنده؟", "shipment.customs.cotage_number", { active: true }],
+  ["مسیر گمرکیش چیه؟", "shipment.customs.route", { active: true }],
+  ["تاریخ ثبت کوتاژ چیه؟", "shipment.customs.cotage_registered_at", { active: true }],
+  ["ارزش کلش چقدره؟", "shipment.customs.total_value", { active: true }],
+  ["مبلغ نهایی پرداختیش چقدره؟", "shipment.customs.final_paid_amount", { active: true }],
+  ["مجوز داره؟", "shipment.permits.exists", { active: true }],
+  ["مبلغ گمرکیش پرداخت شده؟", "shipment.payments.customs_amount", { active: true }],
+  ["تفاوت گمرکیش چقدره؟", "shipment.payments.customs_difference", { active: true }],
+  ["مالیات گمرکیش چقدره؟", "shipment.payments.customs_tax", { active: true }],
+  ["نام بانک چیه؟", "shipment.bank.name", { active: true }],
+  ["کد شعبه چیه؟", "shipment.bank.branch_code", { active: true }],
+  ["نام شعبه چیه؟", "shipment.bank.branch_name", { active: true }],
+  ["کد ابزار پرداخت چیه؟", "shipment.bank.payment_instrument_code", { active: true }],
+  ["کد ساتا چیه؟", "shipment.bank.sata_code", { active: true }],
+  ["یادداشت داره؟", "shipment.notes.exists", { active: true }],
+  ["گفتگوی محموله پیام داره؟", "shipment.messages.exists", { active: true }],
+  ["آخرین پیام داخلی چیه؟", "shipment.messages.latest", { active: true }],
+]) {
+  assertShipmentFieldPlan(message, expectedField, options);
+}
+
+for (const [message, expectedField] of [
+  ["فایل سند رو بده", "shipment.documents.file_link"],
+  ["تصویر سند کجاست؟", "shipment.documents.image"],
+]) {
+  const deferredPlan = assertShipmentFieldPlan(message, expectedField, { active: true, liveTool: "" });
+  assert.equal(deferredPlan.needsLiveVerification, false, `${message} should remain deferred without live verification`);
+}
+
+for (const [message, expectedIntent, expectedField] of [
+  ["مشتری بار 14050305014 کیه؟", "shipment.customer.lookup", BUSINESS_REQUESTED_FIELDS.CUSTOMER],
+  ["شماره تماس مشتری بار 14050305014 چیه؟", "shipment.customer.phone.lookup", BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE],
+  ["وضعیت بار 14050305014 چیه؟", "shipment.status.lookup", BUSINESS_REQUESTED_FIELDS.STATUS],
+  ["خلاصه بار 14050305014 رو بده", "shipment.lookup", BUSINESS_REQUESTED_FIELDS.SUMMARY],
+  ["تو کی هستی؟", "identity.capability", "capability"],
+]) {
+  const plan = resolveHamyarQuestionPlan(message);
+  assert.equal(plan.intent, expectedIntent, `${message} regression intent`);
+  assert.equal(plan.requestedField, expectedField, `${message} regression requested field`);
+}
+
+const futureActionPlan = resolveHamyarQuestionPlan("این بار رو حذف کن", { activeEntity: activeShipment });
+assert.doesNotMatch(JSON.stringify(futureActionPlan), /execute_now|auto_execute|write_now/i, "future action commands must not become executable planner output");
+
 const activeCustomerStatusBusinessPlan = planBusinessSearch("وضعیتش چیه؟", { activeEntity: activeCustomer });
 assert.equal(activeCustomerStatusBusinessPlan.searchBusinessContext, false, "active customer status follow-up should not search pronoun terms");
 assert.equal(activeCustomerStatusBusinessPlan.requestedField, BUSINESS_REQUESTED_FIELDS.STATUS, "active customer status business plan should keep status field");
@@ -415,7 +482,7 @@ for (const message of ["محموله‌هاش چیه؟", "بارهاش چیه؟"
 }
 
 const shipmentNumberFollowUp = planBusinessSearch("شماره بار چیه");
-assert.equal(shipmentNumberFollowUp.requestedField, BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER, "شماره بار should mean shipment number");
+assert.equal(shipmentNumberFollowUp.requestedField, "shipment.code", "شماره بار should mean shipment code");
 assert.equal(
   shouldUseActiveEntityForFollowUp("شماره بار چیه", activeCustomer),
   false,

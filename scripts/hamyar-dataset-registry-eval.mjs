@@ -21,6 +21,7 @@ const MARKDOWN_REPORT_PATH = path.resolve("reports/hamyar-dataset-coverage-repor
 const DATASET_INTENT_COMPATIBILITY = Object.freeze({
   "assistant.identity": ["identity.capability"],
   "shipment.lookup": ["shipment.lookup"],
+  "shipment.field.lookup": ["shipment.field.lookup"],
   "shipment.status.lookup": ["shipment.status.lookup"],
   "shipment.customer.lookup": ["shipment.customer.lookup"],
   "shipment.customer.contact.lookup": ["shipment.customer.phone.lookup", "customer.contact.lookup"],
@@ -104,6 +105,17 @@ const REQUESTED_FIELD_COMPATIBILITY = Object.freeze({
   task_list: ["due_today", "assignee", "tasks"],
   vessel_or_captain_contact: ["vessel_name", "captain_phone"],
   workflow_status: ["latest_step"],
+  "shipment.document_count": ["shipment.documents.count", "shipment.documents.exists"],
+  "shipment.documents.count": ["shipment.document_count", "shipment.documents.exists"],
+  "shipment.documents.exists": ["shipment.document_count", "shipment.documents.count", "documents"],
+  "shipment.goods.contents": ["shipment.goods.list"],
+  "shipment.goods.list": ["shipment.goods.contents"],
+  "shipment.goods.exists": ["shipment.goods.contents", "shipment.goods.list", "shipment.goods_count"],
+  "shipment.messages.exists": ["shipment.messages.count", "shipment.messages.latest"],
+  "shipment.messages.count": ["shipment.messages.exists"],
+  "shipment.notes.exists": ["shipment.notes.text"],
+  "shipment.permits.exists": ["shipment.permits.count"],
+  "shipment.permits.count": ["shipment.permits.exists"],
 });
 
 const TOKEN_SYNONYMS = Object.freeze({
@@ -155,6 +167,12 @@ const FOLLOW_UP_FORBIDDEN_TERMS = new Set(
     "please",
   ].map(normalizeToken)
 );
+
+const DEFERRED_SHIPMENT_DOCUMENT_FIELDS = new Set([
+  "shipment.documents.file_link",
+  "shipment.documents.image",
+  "shipment.documents.private_url",
+]);
 
 function normalizeToken(value = "") {
   return normalizeHamyarText(String(value || ""))
@@ -253,6 +271,15 @@ function isEntityCompatible(row, plan = {}, businessPlan = {}) {
 function isRelationCompatible(row, plan = {}) {
   const expected = relationTokens(row.relation_path);
   const actual = new Set(relationTokens(plan.relationPath || []));
+  if (
+    row.intent === "shipment.field.lookup" &&
+    plan.intent === "shipment.field.lookup" &&
+    expected.includes("shipment") &&
+    expected.includes("field") &&
+    actual.has("shipment")
+  ) {
+    return true;
+  }
   if (!expected.length) return !actual.size || plan.intent === "identity.capability";
   const generic = new Set(["entity", "organization", "shipment", "customer", "task", "user"]);
   const significantExpected = expected.filter((token) => !generic.has(token));
@@ -307,6 +334,21 @@ function documentLookupCovered(row, plan = {}, businessPlan = {}) {
   );
 }
 
+function isLiveShipmentFieldRoute(row, plan = {}, fieldCompatible = false) {
+  return (
+    row.intent === "shipment.field.lookup" &&
+    plan.intent === "shipment.field.lookup" &&
+    fieldCompatible &&
+    plan.liveTool === "getShipmentDetailFields" &&
+    Boolean(plan.needsLiveVerification) &&
+    !DEFERRED_SHIPMENT_DOCUMENT_FIELDS.has(normalizeToken(row.requested_field))
+  );
+}
+
+function isDeferredShipmentDocumentField(row = {}) {
+  return row.intent === "shipment.field.lookup" && DEFERRED_SHIPMENT_DOCUMENT_FIELDS.has(normalizeToken(row.requested_field));
+}
+
 function rowPlanningContext(row = {}) {
   const question = normalizeToken(row.question);
   const shipmentEntity = {
@@ -356,6 +398,10 @@ function rowPlanningContext(row = {}) {
       return { activeEntity: shipmentEntity };
     }
     return {};
+  }
+
+  if (row.category === "shipment_detail_followup") {
+    return { activeEntity: shipmentEntity };
   }
 
   if (
@@ -458,7 +504,8 @@ function evaluateDatasetRow(row) {
     plan.needsCompanyBrain ||
     companyPlan.checkCompanyBrain ||
     companyPlan.searchCompanyBrain ||
-    businessPlan.searchBusinessContext;
+    businessPlan.searchBusinessContext ||
+    isLiveShipmentFieldRoute(row, plan, fieldCompatible);
   if (row.uses_company_brain === "yes" && !companyBrainCompatible) {
     addIssue(softGaps, "company_brain_metadata_gap", "dataset expects Company Brain candidate/search usage but planner metadata does not expose it");
   }
@@ -474,6 +521,9 @@ function evaluateDatasetRow(row) {
 
   if (!documentLookupCovered(row, plan, businessPlan)) {
     addIssue(softGaps, "document_lookup_gap", "document/file/image row did not map to a document/file lookup capability");
+  }
+  if (isDeferredShipmentDocumentField(row)) {
+    addIssue(softGaps, "document_field_deferred", "document file/link/image/private URL lookup is intentionally deferred for this PR");
   }
   if (row.intent === "document.lookup") {
     addIssue(softGaps, "document_lookup_deferred", "document/file/image lookup is intentionally deferred for this PR");
