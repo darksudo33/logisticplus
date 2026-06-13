@@ -10,6 +10,11 @@ import {
   verifyRelationAnswerability,
 } from "../src/server/ai/ai-context-planner.js";
 import {
+  HAMYAR_CAPABILITY_REGISTRY,
+  registryToEvalCases,
+} from "../src/server/ai/hamyar-capability-registry.js";
+import { resolveHamyarQuestionPlan } from "../src/server/ai/hamyar-relation-resolver.js";
+import {
   businessQueryDisplay,
   extractAmbiguitySelection,
   followUpBusinessPlanFromRecentMessages,
@@ -161,8 +166,8 @@ const businessCases = [
     terms: ["14051102036"],
     forbiddenTerms: ["سند", "محموله"],
     types: ["document", "shipment", "customer"],
-    requestedField: BUSINESS_REQUESTED_FIELDS.SUMMARY,
-    requestedFields: [BUSINESS_REQUESTED_FIELDS.SUMMARY],
+    requestedField: BUSINESS_REQUESTED_FIELDS.DOCUMENTS,
+    requestedFields: [BUSINESS_REQUESTED_FIELDS.DOCUMENTS],
   },
   {
     message: "مانع محموله 14051102036",
@@ -250,6 +255,29 @@ assert.equal(
   "field-only phone follow-up should use the active selected customer"
 );
 assert.ok(!commandOnlyFollowUpPlan.queryTerms.includes("بده"), "business search term must not be command-only word بده");
+
+const hamyarCases = registryToEvalCases();
+assert.ok(hamyarCases.length >= 40, "Hamyar registry should provide broad eval coverage");
+for (const [intentId, definition] of Object.entries(HAMYAR_CAPABILITY_REGISTRY.intents)) {
+  assert.ok(Array.isArray(definition.examples) && definition.examples.length > 0, `${intentId} should have at least one eval example`);
+}
+
+for (const testCase of hamyarCases) {
+  const plan = resolveHamyarQuestionPlan(testCase.question);
+  assert.equal(plan.intent, testCase.intent, `${testCase.question} registry intent`);
+  assert.deepEqual(plan.relationPath, testCase.relationPath, `${testCase.question} relation path`);
+  assert.equal(plan.requestedField, testCase.requestedField, `${testCase.question} requested field`);
+  for (const type of testCase.preferredEntityTypes || []) {
+    assert.ok(plan.preferredEntityTypes.includes(type), `${testCase.question} should prefer ${type}`);
+  }
+  assert.equal(plan.needsCompanyBrain, testCase.needsCompanyBrain, `${testCase.question} Company Brain policy`);
+  assert.equal(plan.needsLiveVerification, testCase.needsLiveVerification, `${testCase.question} live verification policy`);
+  if (/بده|give|send/i.test(testCase.question)) {
+    assert.ok(!plan.queryTerms.includes("بده"), `${testCase.question} should not keep Persian command words`);
+    assert.ok(!plan.queryTerms.includes("give"), `${testCase.question} should not keep English command words`);
+    assert.ok(!plan.queryTerms.includes("send"), `${testCase.question} should not keep English command words`);
+  }
+}
 
 assert.equal(
   businessQueryDisplay({ queryTerms: ["موتور", "برق", "موتور برق"] }),

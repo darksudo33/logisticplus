@@ -1,3 +1,5 @@
+import { resolveHamyarQuestionPlan } from "./hamyar-relation-resolver.js";
+
 const PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹";
 const ARABIC_DIGITS = "٠١٢٣٤٥٦٧٨٩";
 
@@ -31,6 +33,22 @@ export const BUSINESS_REQUESTED_FIELDS = {
   LOCATION: "location",
   ADDRESS: "address",
   ACCOUNTING: "accounting",
+  AGENT_PHONE: "agent_phone",
+  CAPTAIN_PHONE: "captain_phone",
+  VESSEL_NAME: "vessel_name",
+  CONTAINER_NUMBERS: "container_numbers",
+  COMMERCIAL_CARD_AGENT_PHONE: "commercial_card_agent_phone",
+  DOCUMENTS: "documents",
+  DOCUMENT_STATUS: "document_status",
+  TASKS: "tasks",
+  ASSIGNEE: "assignee",
+  DUE_DATE: "due_date",
+  CHEQUES: "cheques",
+  LATEST_STEP: "latest_step",
+  DUE_TODAY: "due_today",
+  LATEST_SHIPMENT: "latest_shipment",
+  DAILY_SUMMARY: "daily_summary",
+  MISSING_DATA: "missing_data",
 };
 
 const SUPPORTED_RELATION_INTENTS = new Set(Object.values(RELATION_INTENTS));
@@ -392,6 +410,26 @@ export function detectRelationIntent(message = "") {
   }
 
   const language = hasPersian(message) ? "fa" : "en";
+  const registryPlan = resolveHamyarQuestionPlan(message);
+  if (registryPlan.legacyIntent && SUPPORTED_RELATION_INTENTS.has(registryPlan.legacyIntent)) {
+    return {
+      intent: registryPlan.legacyIntent,
+      entities: {
+        shipmentRef: registryPlan.entities.shipmentRef,
+        customerRef: registryPlan.entities.customerRef,
+        commercialCardRef: registryPlan.entities.commercialCardRef,
+      },
+      confidence: Math.max(registryPlan.confidence, confidenceFor(registryPlan.legacyIntent, relationRefFromRegistryPlan(registryPlan))),
+      language: registryPlan.language || language,
+      relationPath: registryPlan.relationPath,
+      requestedField: registryPlan.requestedField,
+      requestedFields: registryPlan.requestedFields,
+      preferredEntityTypes: registryPlan.preferredEntityTypes,
+      registryIntent: registryPlan.intent,
+      hamyarPlan: registryPlan,
+    };
+  }
+
   const hasShipment = includesAny(normalized, SHIPMENT_TERMS);
   const hasCustomer = includesAny(normalized, CUSTOMER_TERMS);
   const hasCardWord = includesAny(normalized, CARD_TERMS);
@@ -429,8 +467,13 @@ export function detectRelationIntent(message = "") {
   };
 }
 
+function relationRefFromRegistryPlan(plan = {}) {
+  return plan.entities?.shipmentRef || plan.entities?.customerRef || plan.entities?.commercialCardRef || plan.primaryEntity?.ref || "";
+}
+
 export function detectBusinessRequestedFields(message = "") {
   const normalized = normalizeAgentText(message);
+  const registryPlan = resolveHamyarQuestionPlan(message);
   const hasNumber = includesAny(normalized, NUMBER_TERMS);
   const hasPhone = includesAny(normalized, PHONE_TERMS);
   const hasShipment = includesAny(normalized, SHIPMENT_TERMS);
@@ -455,6 +498,12 @@ export function detectBusinessRequestedFields(message = "") {
   if (asksOwner && hasShipment) return [BUSINESS_REQUESTED_FIELDS.CUSTOMER];
   if (hasLocation) return [BUSINESS_REQUESTED_FIELDS.LOCATION];
   if (hasStatus) return [BUSINESS_REQUESTED_FIELDS.STATUS];
+  if (
+    registryPlan.requestedField &&
+    !["summary", "capability", "selection"].includes(registryPlan.requestedField)
+  ) {
+    return [registryPlan.requestedField];
+  }
   return [BUSINESS_REQUESTED_FIELDS.SUMMARY];
 }
 
@@ -541,6 +590,7 @@ function alternateTermsFor(terms = []) {
 export function planBusinessSearch(message = "") {
   const normalized = normalizeAgentText(message);
   const language = hasPersian(message) ? "fa" : "en";
+  const registryPlan = resolveHamyarQuestionPlan(message);
   if (!normalized) {
     return {
       intent: "empty",
@@ -571,8 +621,13 @@ export function planBusinessSearch(message = "") {
 
   const requestedFields = detectBusinessRequestedFields(message);
   const requestedField = detectBusinessRequestedField(message);
-  const queryTerms = extractBusinessSearchTerms(message);
-  const candidateTypes = candidateTypesFor(message, requestedField);
+  const extractedTerms = extractBusinessSearchTerms(message);
+  const registryTerms = Array.isArray(registryPlan.queryTerms) ? registryPlan.queryTerms : [];
+  const queryTerms = extractedTerms.length ? extractedTerms : registryTerms;
+  const candidateTypes = unique([
+    ...(Array.isArray(registryPlan.preferredEntityTypes) ? registryPlan.preferredEntityTypes : []),
+    ...candidateTypesFor(message, requestedField),
+  ]);
   const hasBusinessCue =
     includesAny(normalized, SHIPMENT_TERMS) ||
     includesAny(normalized, CUSTOMER_TERMS) ||
@@ -596,6 +651,12 @@ export function planBusinessSearch(message = "") {
     candidateTypes,
     requestedField,
     requestedFields,
+    relationPath: registryPlan.relationPath || [],
+    registryIntent: registryPlan.intent || "",
+    hamyarPlan: registryPlan.intent ? registryPlan : null,
+    needsCompanyBrain: Boolean(registryPlan.needsCompanyBrain),
+    needsLiveVerification: Boolean(registryPlan.needsLiveVerification),
+    liveTool: registryPlan.liveTool || "",
     confidence: queryTerms.length >= 2 ? 0.86 : hasBusinessCue ? 0.72 : 0.35,
   };
 }

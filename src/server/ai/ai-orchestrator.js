@@ -1650,6 +1650,13 @@ function relationResult({
       success,
       reason,
       detectedIntent: plan?.intent || null,
+      registryIntent: plan?.registryIntent || plan?.hamyarPlan?.intent || null,
+      relationPath: plan?.relationPath || plan?.hamyarPlan?.relationPath || [],
+      requestedField: plan?.requestedField || plan?.hamyarPlan?.requestedField || null,
+      preferredEntityTypes: plan?.preferredEntityTypes || plan?.candidateTypes || plan?.hamyarPlan?.preferredEntityTypes || [],
+      needsCompanyBrain: Boolean(plan?.needsCompanyBrain || plan?.hamyarPlan?.needsCompanyBrain),
+      needsLiveVerification: Boolean(plan?.needsLiveVerification || plan?.hamyarPlan?.needsLiveVerification),
+      liveTool: plan?.liveTool || plan?.hamyarPlan?.liveTool || "",
       confidence: plan?.confidence || 0,
     },
   };
