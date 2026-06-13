@@ -500,9 +500,9 @@ function relationRefFromRegistryPlan(plan = {}) {
   return plan.entities?.shipmentRef || plan.entities?.customerRef || plan.entities?.commercialCardRef || plan.primaryEntity?.ref || "";
 }
 
-export function detectBusinessRequestedFields(message = "") {
+export function detectBusinessRequestedFields(message = "", context = {}) {
   const normalized = normalizeAgentText(message);
-  const registryPlan = resolveHamyarQuestionPlan(message);
+  const registryPlan = resolveHamyarQuestionPlan(message, context, context?.activeEntity);
   const hasNumber = includesAny(normalized, NUMBER_TERMS);
   const hasPhone = includesAny(normalized, PHONE_TERMS);
   const hasShipment = includesAny(normalized, SHIPMENT_TERMS);
@@ -547,8 +547,8 @@ export function detectBusinessRequestedFields(message = "") {
   return [BUSINESS_REQUESTED_FIELDS.SUMMARY];
 }
 
-export function detectBusinessRequestedField(message = "") {
-  const [requestedField = BUSINESS_REQUESTED_FIELDS.SUMMARY] = detectBusinessRequestedFields(message);
+export function detectBusinessRequestedField(message = "", context = {}) {
+  const [requestedField = BUSINESS_REQUESTED_FIELDS.SUMMARY] = detectBusinessRequestedFields(message, context);
   if (requestedField === BUSINESS_REQUESTED_FIELDS.PHONE) return BUSINESS_REQUESTED_FIELDS.CUSTOMER_PHONE;
   return requestedField;
 }
@@ -661,8 +661,8 @@ export function planBusinessSearch(message = "", context = {}) {
     };
   }
 
-  const requestedFields = detectBusinessRequestedFields(message);
-  const requestedField = detectBusinessRequestedField(message);
+  const requestedFields = detectBusinessRequestedFields(message, context);
+  const requestedField = detectBusinessRequestedField(message, context);
   const extractedTerms = extractBusinessSearchTerms(message);
   const registryTerms = Array.isArray(registryPlan.queryTerms) ? registryPlan.queryTerms : [];
   const queryTerms = extractedTerms.length ? extractedTerms : registryTerms;

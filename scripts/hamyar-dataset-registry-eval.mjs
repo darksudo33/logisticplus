@@ -40,11 +40,17 @@ const DATASET_INTENT_COMPATIBILITY = Object.freeze({
   "data_quality.missing_fields.lookup": ["missing_data.lookup", "document.status.lookup"],
   "conversation.followup.resolve": [
     "ambiguity.selection.reply",
+    "customer.lookup",
     "customer.contact.lookup",
     "customer.shipments.lookup",
+    "customer.tasks.lookup",
+    "cheque.customer.lookup",
+    "shipment.activity.lookup",
+    "shipment.commercial_card.lookup",
     "shipment.customer.phone.lookup",
     "shipment.customer.lookup",
     "shipment.status.lookup",
+    "shipment.tasks.lookup",
     "shipment.lookup",
   ],
   "analytics.aggregate.lookup": [],
@@ -57,7 +63,7 @@ const REQUESTED_FIELD_COMPATIBILITY = Object.freeze({
   card_status: ["commercial_card"],
   card_summary: ["commercial_card"],
   cheque_summary: ["cheques", "due_date"],
-  contextual_field: ["customer_phone", "phone", "status", "documents", "summary", "selection"],
+  contextual_field: ["customer", "customer_phone", "phone", "status", "commercial_card", "shipments", "tasks", "cheques", "documents", "summary", "selection"],
   counts: ["daily_summary", "latest_shipment", "missing_data", "due_today"],
   daily_summary: ["daily_summary"],
   document_or_file: ["documents", "document_status"],
@@ -290,6 +296,12 @@ function rowPlanningContext(row = {}) {
   };
 
   if (row.category === "followup_context") {
+    if (question.includes("اسناد") || question.includes("سند") || question.includes("مدارک")) {
+      return {};
+    }
+    if (question.includes("گزینه") || question.includes("مورد") || question.includes("اولی") || question.includes("دومی") || question === "1" || question.includes("show me")) {
+      return {};
+    }
     if (
       question.includes("شماره") ||
       question.includes("تماس") ||
@@ -297,11 +309,23 @@ function rowPlanningContext(row = {}) {
       question.includes("موبایل") ||
       question.includes("phone") ||
       question.includes("محموله") ||
-      question.includes("بارها")
+      question.includes("بارها") ||
+      question.includes("چک")
     ) {
       return { activeEntity: customerEntity };
     }
-    if (question.includes("وضعیت") || question.includes("مشتریش")) {
+    if (
+      question.includes("وضعیت") ||
+      question.includes("مشتریش") ||
+      question.includes("کارتش") ||
+      question.includes("وظایف") ||
+      question.includes("وظیفه") ||
+      question.includes("تسک") ||
+      question.includes("کارها") ||
+      question.includes("آخرین فعالیت") ||
+      question.includes("فعالیتش") ||
+      question.includes("تاریخچه")
+    ) {
       return { activeEntity: shipmentEntity };
     }
     return {};

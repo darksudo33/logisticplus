@@ -436,7 +436,7 @@ function intentFlags(message = "") {
   const asksShipment = hasAny(text, ["محموله", "بار", "پرونده"]);
   const asksShipmentStatus = hasAny(text, ["وضعیت", "مرحله", "پیگیری", "کجاست", "کجاس", "status", "وضعیتش"]);
   const asksDocuments = hasAny(text, ["اسناد", "سند", "مدارک"]);
-  const asksTasks = hasAny(text, ["وظایف", "وظیفه", "تسک", "کارها"]);
+  const asksTasks = hasAny(text, ["وظایف", "وظیفه", "وظایفش", "تسک", "تسکش", "کارها", "کارهاش"]);
   const asksGoods = hasAny(text, ["کالا", "بارنامه", "شرح کالا", "goods", "commodity"]);
   const asksRoute = hasAny(text, ["مسیر", "مبدا", "مبدأ", "مقصد", "بندر", "port", "route"]);
   const asksDates = hasAny(text, ["تاریخ", "موعد", "زمان", "فری تایم", "free time", "eta", "etd"]);
@@ -445,10 +445,10 @@ function intentFlags(message = "") {
   const asksBlockers = hasAny(text, ["مانع", "گیر کرده", "گیر کرده‌اند", "متوقف", "بلاک", "blocker", "blocked"]);
   const asksPublicTracking = hasAny(text, ["رهگیری مشتری", "دسترسی مشتری", "لینک رهگیری", "tracking", "public"]);
   const asksChat = hasAny(text, ["پیام", "چت", "chat", "unread"]);
-  const asksAudit = hasAny(text, ["تاریخچه", "تغییر", "آخرین بار", "چه کسی", "کی", "audit"]);
+  const asksAudit = hasAny(text, ["تاریخچه", "تغییر", "آخرین بار", "آخرین فعالیت", "فعالیتش", "چه کسی", "کی", "audit"]);
   const asksFinance = hasAny(text, ["مالی", "هزینه", "فاکتور", "پرداخت", "finance"]);
-  const asksCommercialCard = hasAny(text, ["کارت بازرگانی", "commercial card"]);
-  const asksCheque = hasAny(text, ["چک", "cheque", "check"]);
+  const asksCommercialCard = hasAny(text, ["کارت بازرگانی", "کارتش", "commercial card"]);
+  const asksCheque = hasAny(text, ["چک", "چک‌هاش", "چک هاش", "cheque", "check"]);
   const asksRate = hasAny(text, ["نرخ ارز", "دلار", "یورو", "درهم", "ارز", "currency", "rate"]);
   const asksTariff = hasAny(text, ["تعرفه", "hs", "hs code", "tariff"]);
   const asksEmployee = hasAny(text, ["کارمند", "پرسنل", "همکار", "employee", "user"]);
@@ -524,6 +524,10 @@ function intentFlags(message = "") {
       "مشتریش",
       "اسنادش",
       "وظایفش",
+      "کارتش",
+      "چک‌هاش",
+      "چک هاش",
+      "فعالیتش",
       "تماسش",
       "تلفنش",
       "موبایلش",
@@ -532,7 +536,7 @@ function intentFlags(message = "") {
       "محموله‌هاش",
       "بار هاش",
       "بارهاش",
-    ]) || asksShipmentNumber || asksShipmentStatus || asksCaptainPhone || asksCustomerPhone || asksDocuments || asksTasks || asksCustomerShipments || asksGoods || asksRoute || asksDates || asksArchive || asksKootaj || asksBlockers || asksPublicTracking || asksChat || asksAudit || asksFinance,
+    ]) || asksShipmentNumber || asksShipmentStatus || asksCaptainPhone || asksCustomerPhone || asksDocuments || asksTasks || asksCustomerShipments || asksCommercialCard || asksCheque || asksGoods || asksRoute || asksDates || asksArchive || asksKootaj || asksBlockers || asksPublicTracking || asksChat || asksAudit || asksFinance,
   };
 }
 
@@ -2874,6 +2878,9 @@ export function extractAmbiguitySelection(message = "") {
     .trim()
     .toLowerCase();
   if (!normalized) return "";
+  if (/^(همین مورد|همون مورد|همونو|همونو باز کن|اون یکی|show me the first one|show me first one)$/u.test(normalized)) {
+    return "1";
+  }
   const tokens = normalized.split(/\s+/).filter(Boolean);
   if (tokens.length > 8) return "";
   const filler = new Set([
@@ -2884,6 +2891,14 @@ export function extractAmbiguitySelection(message = "") {
     "مورد",
     "کد",
     "شماره",
+    "همین",
+    "همون",
+    "همونو",
+    "اون",
+    "آن",
+    "یکی",
+    "باز",
+    "کن",
     "انتخاب",
     "بده",
     "بدهید",
@@ -2893,6 +2908,10 @@ export function extractAmbiguitySelection(message = "") {
     "option",
     "number",
     "code",
+    "show",
+    "me",
+    "the",
+    "one",
     "please",
   ]);
   const meaningful = tokens.filter((token) => !filler.has(token));
@@ -2994,7 +3013,7 @@ export function resolveBusinessCandidateSelection(message = "", candidates = [])
   const optionNumber = /^\d+$/.test(selection) ? Number(selection) : 0;
   const optionCandidate = optionNumber >= 1 && optionNumber <= list.length ? list[optionNumber - 1] : null;
   const codeCue = hasSelectionCue(message, ["کد", "شماره", "code", "number"]);
-  const optionCue = hasSelectionCue(message, ["گزینه", "مورد", "اول", "اولی", "دوم", "دومی", "سوم", "سومی", "option"]);
+  const optionCue = hasSelectionCue(message, ["گزینه", "مورد", "همین", "همون", "همونو", "اون یکی", "اول", "اولی", "دوم", "دومی", "سوم", "سومی", "first", "second", "third", "option"]);
   const matched = list.filter((candidate) => candidateMatchesSelection(candidate, selection));
 
   if (codeCue && matched.length === 1) return { state: "resolved", selection, candidate: matched[0], reason: "code" };
@@ -3142,6 +3161,7 @@ export function shouldUseActiveEntityForFollowUp(message = "", activeEntity = nu
   const requested = requestedFieldsForPlan(plan).filter((field) => field && field !== BUSINESS_REQUESTED_FIELDS.SUMMARY);
   if (requested.includes(BUSINESS_REQUESTED_FIELDS.SHIPMENT_NUMBER) && activeEntity.type !== "shipment") return false;
   const flags = intentFlags(message);
+  if (flags.asksDocuments) return false;
   const normalized = normalizeSelectionValue(message);
   const hasContextCue = flags.isFollowUp || hasAny(normalized, [
     "این",
@@ -3165,6 +3185,10 @@ export function shouldUseActiveEntityForFollowUp(message = "", activeEntity = nu
     "بار هاش",
     "محموله‌هاش",
     "محموله هاش",
+    "کارتش",
+    "چک‌هاش",
+    "چک هاش",
+    "فعالیتش",
     "its",
     "that",
   ]);
@@ -3479,6 +3503,20 @@ async function answerCustomer(pool, context, candidate, options = {}) {
 
 async function answerFromActiveEntity(pool, context, activeEntity, message) {
   if (!activeEntity?.type || !activeEntity?.id) return null;
+  const flags = intentFlags(message);
+  if (flags.asksDocuments) {
+    return {
+      handled: true,
+      data: {
+        answer: "خواندن یا بازکردن اسناد از طریق این پیگیری هنوز برای همیار فعال نیست.",
+        tone: "concise",
+        responseMode: RESPONSE_MODE_DIRECT,
+        sources: [source("system", { label: "اسناد" })],
+        suggestions: [],
+      },
+      audit: { queryType: "document_followup_deferred", toolsCalled: [], recordIds: [], success: false },
+    };
+  }
   if (activeEntity.type === "shipment") {
     return answerShipmentById(pool, context, activeEntity.id, {
       message,
