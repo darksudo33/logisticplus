@@ -39,8 +39,10 @@ const QUESTION_STOP_WORDS = new Set([
   "چی",
   "چیه",
   "چند",
+  "چندتا",
   "چنده",
   "کدوم",
+  "کدومه",
   "کدام",
   "کجاست",
   "کجاس",
@@ -58,6 +60,15 @@ const QUESTION_STOP_WORDS = new Set([
   "آقای",
   "خانم",
   "شرکت",
+  "ها",
+  "های",
+  "هاش",
+  "هایش",
+  "اش",
+  "ش",
+  "همون",
+  "همونو",
+  "اولی",
 ]);
 
 const COLLECTION_INTENTS = new Set([
@@ -143,6 +154,7 @@ function isCommandOrStopToken(token = "") {
     !token ||
     QUESTION_STOP_WORDS.has(token) ||
     ALIAS_TOKENS.has(token) ||
+    !strippedPossessive ||
     QUESTION_STOP_WORDS.has(strippedPossessive) ||
     ALIAS_TOKENS.has(strippedPossessive) ||
     HAMYAR_CAPABILITY_REGISTRY.commandAliases.map(normalizeHamyarText).includes(token)
@@ -192,9 +204,17 @@ function scoreIntent(definition, normalized, activeEntity) {
   if (activeEntity?.type && (definition.primaryEntity === activeEntity.type || relationHasEntity(definition.relationPath, activeEntity.type))) {
     score += 0.1;
   }
+  if (
+    activeEntity?.type &&
+    definition.primaryEntity !== activeEntity.type &&
+    relationHasEntity(definition.relationPath, activeEntity.type) &&
+    !explicitEntities.includes(definition.primaryEntity)
+  ) {
+    score -= 0.18;
+  }
 
   if (definition.primaryEntity === "shipment" && explicitEntities.length && !explicitEntities.includes("shipment") && !activeEntity?.type) {
-    score -= 0.12;
+    score -= 0.35;
   }
   if (definition.primaryEntity === "customer" && explicitEntities.includes("shipment")) {
     score -= 0.1;
@@ -250,12 +270,6 @@ function activeEntityReference(activeEntity) {
 }
 
 function extractReference(question = "", definition = {}, activeEntity = null) {
-  const activeType = activeEntityType(activeEntity);
-  if (activeType && (definition.primaryEntity === activeType || relationHasEntity(definition.relationPath, activeType))) {
-    const ref = activeEntityReference(activeEntity);
-    if (ref) return { ref, fromActiveEntity: true };
-  }
-
   const meaningful = tokens(question)
     .map((token) => token.replace(/[%_\\]/g, ""))
     .filter((token) => token.length >= 2 || /^[A-Za-z0-9_-]+$/.test(token))
@@ -264,6 +278,13 @@ function extractReference(question = "", definition = {}, activeEntity = null) {
   if (numeric) return { ref: numeric, fromActiveEntity: false };
   if (meaningful.length >= 2 && meaningful.every((token) => !/^\d+$/.test(token))) {
     return { ref: meaningful.slice(0, 3).join(" "), fromActiveEntity: false };
+  }
+  if (meaningful[0]) return { ref: meaningful[0], fromActiveEntity: false };
+
+  const activeType = activeEntityType(activeEntity);
+  if (activeType && (definition.primaryEntity === activeType || relationHasEntity(definition.relationPath, activeType))) {
+    const ref = activeEntityReference(activeEntity);
+    if (ref) return { ref, fromActiveEntity: true };
   }
   return { ref: meaningful[0] || "", fromActiveEntity: false };
 }

@@ -38,7 +38,15 @@ const DATASET_INTENT_COMPATIBILITY = Object.freeze({
   "company.daily_summary.lookup": ["company.daily_summary.lookup"],
   "company.operational_status.lookup": ["company.daily_summary.lookup", "company.latest_shipment.lookup"],
   "data_quality.missing_fields.lookup": ["missing_data.lookup", "document.status.lookup"],
-  "conversation.followup.resolve": ["ambiguity.selection.reply"],
+  "conversation.followup.resolve": [
+    "ambiguity.selection.reply",
+    "customer.contact.lookup",
+    "customer.shipments.lookup",
+    "shipment.customer.phone.lookup",
+    "shipment.customer.lookup",
+    "shipment.status.lookup",
+    "shipment.lookup",
+  ],
   "analytics.aggregate.lookup": [],
   "risk.alerts.lookup": [],
   "action.proposed.requires_confirmation": [],
@@ -60,6 +68,7 @@ const REQUESTED_FIELD_COMPATIBILITY = Object.freeze({
   profile: ["summary"],
   risk_summary: ["missing_data", "cheques", "due_date", "due_today", "latest_step"],
   shipment_list: ["shipments"],
+  shipments: ["shipments"],
   status: ["status", "latest_step"],
   status_summary: ["daily_summary", "latest_shipment", "missing_data"],
   summary: ["summary"],
@@ -99,6 +108,13 @@ const FOLLOW_UP_FORBIDDEN_TERMS = new Set(
     "قبلی",
     "همین",
     "بده",
+    "تماسش",
+    "تلفنش",
+    "موبایلش",
+    "شماره‌ش",
+    "شماره اش",
+    "همون",
+    "اولی",
     "رو",
     "را",
     "this",
@@ -222,7 +238,8 @@ function isRequestedFieldCompatible(row, plan = {}, businessPlan = {}) {
   const actual = new Set(plannedRequestedFields(plan, businessPlan));
   if (!expected) return true;
   if (actual.has(expected)) return true;
-  for (const compatible of REQUESTED_FIELD_COMPATIBILITY[expected] || []) {
+  const compatibilityKey = expected.replace(/\s+/g, "_");
+  for (const compatible of REQUESTED_FIELD_COMPATIBILITY[expected] || REQUESTED_FIELD_COMPATIBILITY[compatibilityKey] || []) {
     if (actual.has(normalizeToken(compatible))) return true;
   }
   return false;
@@ -257,6 +274,56 @@ function documentLookupCovered(row, plan = {}, businessPlan = {}) {
   );
 }
 
+function rowPlanningContext(row = {}) {
+  const question = normalizeToken(row.question);
+  const shipmentEntity = {
+    type: "shipment",
+    id: "shipment-fixture",
+    code: "LP-178072282908",
+    label: "محموله LP-178072282908",
+  };
+  const customerEntity = {
+    type: "customer",
+    id: "customer-fixture",
+    code: "CUS-00003",
+    label: "مشتری CUS-00003",
+  };
+
+  if (row.category === "followup_context") {
+    if (
+      question.includes("شماره") ||
+      question.includes("تماس") ||
+      question.includes("تلفن") ||
+      question.includes("موبایل") ||
+      question.includes("phone") ||
+      question.includes("محموله") ||
+      question.includes("بارها")
+    ) {
+      return { activeEntity: customerEntity };
+    }
+    if (question.includes("وضعیت") || question.includes("مشتریش")) {
+      return { activeEntity: shipmentEntity };
+    }
+    return {};
+  }
+
+  if (
+    row.intent === "shipment.customer.contact.lookup" &&
+    (question.includes("این محموله") || question.includes("همین بار"))
+  ) {
+    return { activeEntity: shipmentEntity };
+  }
+
+  if (
+    (row.intent === "customer.contact.lookup" || row.intent === "customer.shipments.lookup") &&
+    (question.includes("این مشتری") || question.includes("همین مشتری"))
+  ) {
+    return { activeEntity: customerEntity };
+  }
+
+  return {};
+}
+
 function addIssue(target, type, message) {
   target.push({ type, message });
 }
@@ -284,10 +351,11 @@ function evaluateDatasetRow(row) {
   let relationIntent;
 
   try {
-    plan = resolveHamyarQuestionPlan(row.question);
-    businessPlan = planBusinessSearch(row.question);
-    companyPlan = planCompanyBrainLookup(row.question);
-    relationIntent = detectRelationIntent(row.question);
+    const planningContext = rowPlanningContext(row);
+    plan = resolveHamyarQuestionPlan(row.question, planningContext, planningContext.activeEntity);
+    businessPlan = planBusinessSearch(row.question, planningContext);
+    companyPlan = planCompanyBrainLookup(row.question, planningContext);
+    relationIntent = detectRelationIntent(row.question, planningContext);
   } catch (error) {
     addIssue(hardFailures, "runtime_exception", error.stack || error.message);
     return { row, status: "hard_fail", plan: null, businessPlan: null, companyPlan: null, relationIntent: null, hardFailures, softGaps };
@@ -355,6 +423,9 @@ function evaluateDatasetRow(row) {
 
   if (!documentLookupCovered(row, plan, businessPlan)) {
     addIssue(softGaps, "document_lookup_gap", "document/file/image row did not map to a document/file lookup capability");
+  }
+  if (row.intent === "document.lookup") {
+    addIssue(softGaps, "document_lookup_deferred", "document/file/image lookup is intentionally deferred for this PR");
   }
 
   const status = hardFailures.length ? "hard_fail" : softGaps.length ? "soft_gap" : "pass";
