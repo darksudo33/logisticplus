@@ -110,6 +110,7 @@ const DocumentView = ({ shipmentId }: { shipmentId: string }) => {
   const [isAddDocOpen, setIsAddDocOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [documentToArchive, setDocumentToArchive] = useState<{ id: string; name: string } | null>(null);
   const [newDoc, setNewDoc] = useState({
@@ -124,13 +125,38 @@ const DocumentView = ({ shipmentId }: { shipmentId: string }) => {
 
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
+  const selectDocumentFile = (file: File) => {
+    setSelectedFile(file);
+    setNewDoc(prev => ({ ...prev, name: file.name }));
+    toast.info(`فایل "${file.name}" انتخاب شد.`);
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setSelectedFile(file);
-      setNewDoc(prev => ({ ...prev, name: file.name }));
-      toast.info(`فایل "${file.name}" انتخاب شد.`);
+    if (file) selectDocumentFile(file);
+  };
+
+  const handleFileDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingFile(true);
+  };
+
+  const handleFileDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const nextTarget = event.relatedTarget;
+    if (!nextTarget || !(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+      setIsDraggingFile(false);
     }
+  };
+
+  const handleFileDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingFile(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) selectDocumentFile(file);
   };
 
   const handleAddDoc = async () => {
@@ -255,8 +281,24 @@ const DocumentView = ({ shipmentId }: { shipmentId: string }) => {
               </DialogHeader>
               <div className="space-y-4 py-4">
                 <div 
-                  className="bg-muted/50 border-2 border-dashed border-border rounded-2xl p-8 flex flex-col items-center justify-center text-center group cursor-pointer hover:border-primary/50 transition-colors"
+                  className={cn(
+                    "bg-muted/50 border-2 border-dashed border-border rounded-2xl p-8 flex flex-col items-center justify-center text-center group cursor-pointer hover:border-primary/50 transition-colors",
+                    isDraggingFile && "border-primary bg-primary/5"
+                  )}
                   onClick={() => fileInputRef.current?.click()}
+                  onDragEnter={handleFileDragOver}
+                  onDragOver={handleFileDragOver}
+                  onDragLeave={handleFileDragLeave}
+                  onDrop={handleFileDrop}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      fileInputRef.current?.click();
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  data-testid="shipment-document-dropzone"
                 >
                   <input 
                     type="file" 
@@ -1916,7 +1958,7 @@ export default function ShipmentDetail() {
                          <MapPin className="w-3.5 h-3.5 md:w-4 md:h-4" />
                       </div>
                       <div className="min-w-0">
-                         <p className="text-[9px] md:text-[10px] text-muted-foreground mb-0.5">بندر تخلیه (POD)</p>
+                         <p className="text-[9px] md:text-[10px] text-muted-foreground mb-0.5">محل تخلیه (POD)</p>
                          <p className="text-[11px] md:text-xs font-bold text-foreground truncate">{shipment.destination}</p>
                       </div>
                    </div>
