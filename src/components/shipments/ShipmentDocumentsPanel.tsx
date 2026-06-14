@@ -48,6 +48,7 @@ function ShipmentDocumentView({ shipmentId }: { shipmentId: string }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>(DOCUMENT_TYPE_ALL);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [documentToArchive, setDocumentToArchive] = useState<{ id: string; name: string } | null>(null);
   const [newDoc, setNewDoc] = useState({
@@ -66,6 +67,12 @@ function ShipmentDocumentView({ shipmentId }: { shipmentId: string }) {
 
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
+  const selectDocumentFile = (file: File) => {
+    setSelectedFile(file);
+    setNewDoc((current) => ({ ...current, name: file.name }));
+    toast.info(`فایل "${file.name}" انتخاب شد.`);
+  };
+
   const resetDocumentFilters = () => {
     setSearchTerm("");
     setTypeFilter(DOCUMENT_TYPE_ALL);
@@ -73,11 +80,30 @@ function ShipmentDocumentView({ shipmentId }: { shipmentId: string }) {
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file) {
-      setSelectedFile(file);
-      setNewDoc((current) => ({ ...current, name: file.name }));
-      toast.info(`فایل "${file.name}" انتخاب شد.`);
+    if (file) selectDocumentFile(file);
+  };
+
+  const handleFileDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingFile(true);
+  };
+
+  const handleFileDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const nextTarget = event.relatedTarget;
+    if (!nextTarget || !(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+      setIsDraggingFile(false);
     }
+  };
+
+  const handleFileDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDraggingFile(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) selectDocumentFile(file);
   };
 
   const handleAddDoc = async () => {
@@ -207,8 +233,24 @@ function ShipmentDocumentView({ shipmentId }: { shipmentId: string }) {
               </DialogHeader>
               <div className="space-y-4 py-4">
                 <div
-                  className="group flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border bg-muted/50 p-8 text-center transition-colors hover:border-primary/50"
+                  className={cn(
+                    "group flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border bg-muted/50 p-8 text-center transition-colors hover:border-primary/50",
+                    isDraggingFile && "border-primary bg-primary/5"
+                  )}
                   onClick={() => fileInputRef.current?.click()}
+                  onDragEnter={handleFileDragOver}
+                  onDragOver={handleFileDragOver}
+                  onDragLeave={handleFileDragLeave}
+                  onDrop={handleFileDrop}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      fileInputRef.current?.click();
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  data-testid="shipment-document-dropzone"
                 >
                   <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileChange} />
                   <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground transition-colors group-hover:text-primary">

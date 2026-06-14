@@ -2136,7 +2136,7 @@ export default function ShipmentDetailV2() {
   const updatedByName = resolveUserName(profile?.updatedById || profile?.createdById, users, currentUser);
   const routeSteps = [
     { key: "origin", label: "مبدا", value: baseSection?.origin || shipment.origin },
-    { key: "dischargePort", label: "بندر تخلیه", value: baseSection?.dischargePort },
+    { key: "dischargePort", label: "محل تخلیه", value: baseSection?.dischargePort },
     { key: "deliveryPort", label: "بندر تحویل", value: baseSection?.deliveryPort || shipment.destination },
   ];
 

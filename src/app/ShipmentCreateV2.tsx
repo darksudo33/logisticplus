@@ -147,7 +147,7 @@ function validateCreateState(state: CreateState) {
   }
   if (!state.customerId) errors.customerId = "مشتری را انتخاب کنید.";
   if (!state.origin.trim()) errors.origin = "مبدا را وارد کنید.";
-  if (!state.dischargePort.trim()) errors.dischargePort = "بندر تخلیه را وارد کنید.";
+  if (!state.dischargePort.trim()) errors.dischargePort = "محل تخلیه را وارد کنید.";
   if (!state.deliveryPort.trim()) errors.deliveryPort = "بندر تحویل را وارد کنید.";
   if (state.flowCode === "IMPORT_LANJ" && !state.lenjType) errors.lenjType = "نوع لنج را انتخاب کنید.";
   return errors;
@@ -555,7 +555,7 @@ export default function ShipmentCreateV2() {
 
               <div className="space-y-1.5">
                 <Label htmlFor="shipment-v2-discharge-port" className="text-xs font-bold text-muted-foreground">
-                  بندر تخلیه
+                  محل تخلیه
                 </Label>
                 <Input
                   id="shipment-v2-discharge-port"

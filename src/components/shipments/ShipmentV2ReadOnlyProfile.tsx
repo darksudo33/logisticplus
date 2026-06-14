@@ -433,7 +433,7 @@ export function ShipmentV2ReadOnlyProfile({
             <ReadField label="بندر تحویل">
               {base.deliveryPort || shipment.destination}
             </ReadField>
-            <ReadField label="بندر تخلیه">
+            <ReadField label="محل تخلیه">
               {base.dischargePort}
             </ReadField>
             <ReadField label="گیرنده کالا">

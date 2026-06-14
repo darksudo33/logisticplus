@@ -778,7 +778,7 @@ function DailyBaseInfoGrid({
         <DailyBaseInfoBox label="بندر تحویل" testId={testId("delivery-port")}>
           {displayValue(base?.deliveryPort || row.shipment.destination)}
         </DailyBaseInfoBox>
-        <DailyBaseInfoBox label="بندر تخلیه" testId={testId("discharge-port")}>
+        <DailyBaseInfoBox label="محل تخلیه" testId={testId("discharge-port")}>
           {displayValue(base?.dischargePort)}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="گیرنده کالا" testId={testId("consignee")}>
