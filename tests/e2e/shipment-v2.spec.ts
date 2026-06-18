@@ -115,7 +115,9 @@ test.describe.serial("shipment module v2", () => {
     await page.goto("/shipments/new-v2");
     await expect(page.getByTestId("shipment-v2-create-page")).toBeVisible();
     await page.getByTestId("shipment-v2-flow-IMPORT_LANJ").click();
-    await page.getByTestId("shipment-v2-customer").selectOption(customer.id);
+    await page.getByTestId("shipment-v2-customer").fill(customerIdentifier);
+    await expect(page.getByTestId("shipment-v2-customer-suggestions")).toBeVisible();
+    await page.getByTestId("shipment-v2-customer-suggestion-0").click();
     await expect(page.getByTestId("shipment-v2-code-mode-new")).toBeVisible();
     await expect(page.getByText("کد محموله به صورت خودکار ساخته می‌شود")).toBeVisible();
     await page.getByTestId("shipment-v2-origin").fill("Dubai");
@@ -293,7 +295,7 @@ test.describe.serial("shipment module v2", () => {
     expect(credentialSuggestionCount).toBeGreaterThan(0);
     expect(credentialSuggestionCount).toBeLessThanOrEqual(5);
     await page.getByTestId("shipment-v2-base-business-credential-suggestion-0").click();
-    await page.getByTestId("shipment-v2-base-status-input").fill("در حال هماهنگی تست");
+    await page.getByTestId("shipment-v2-base-status-select").selectOption("KOOTAJ_DONE");
     await page.getByTestId("shipment-v2-base-current-stage-input").fill("مرحله فعلی V2 برای تست");
     await page.getByTestId("shipment-v2-base-save").click();
     await expect(page.getByTestId("shipment-v2-base-order-registration-number")).toContainText("123456789");
@@ -304,7 +306,7 @@ test.describe.serial("shipment module v2", () => {
     await expect(page.getByTestId("shipment-v2-base-business-credential-contacts")).toContainText(malvaniContactName);
     await expect(page.getByTestId("shipment-v2-base-business-credential-contacts")).toContainText(malvaniContactPhone);
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("shipment-v2-base-status")).toContainText("در حال هماهنگی تست");
+    await expect(page.getByTestId("shipment-v2-base-status")).toContainText("کوتاژ شده");
     await expect(page.getByTestId("shipment-v2-base-current-stage")).toContainText("مرحله فعلی V2 برای تست");
 
     await page.getByTestId("shipment-v2-base-customer-button").click();
@@ -337,7 +339,7 @@ test.describe.serial("shipment module v2", () => {
     await expect(shipmentRow).toContainText(customerIdentifier);
     await expect(shipmentRow).toContainText("Dubai");
     await expect(shipmentRow).toContainText("Tehran");
-    await expect(shipmentRow).toContainText(detailStatusText);
+    await expect(shipmentRow).toContainText("کوتاژ شده");
     await expect(shipmentRow).toContainText(detailCurrentStage);
     await expect(shipmentRow).not.toContainText(`${marker} Company`);
     await expect(shipmentRow).not.toContainText("100%");

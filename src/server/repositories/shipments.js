@@ -1,5 +1,7 @@
 import { organizationScopeClause, requireOrganizationScope } from "../tenant-scope.js";
 import { DEFAULT_SHIPMENT_TYPE_CODE } from "../../shared/shipment-form-fields.js";
+import { normalizeShipmentStatus, shipmentStatusLabel } from "../../shared/shipment-statuses.js";
+import { shipmentTimerOrderBy } from "./shipment-sort.js";
 
 function jsonObjectValue(value) {
   if (!value) return {};
@@ -24,7 +26,6 @@ export function toUiShipment(row, { includeCustomerPrivateDetails = true } = {})
   const v2Sections = jsonObjectValue(row.v2_sections_json);
   const v2Base = jsonObjectValue(v2Sections.base);
   const hasV2Profile = Boolean(row.v2_profile_id || row.v2_flow_code);
-  const v2StatusText = textValue(v2Base.statusText);
   const v2CurrentStage = textValue(v2Base.currentStage);
   const v2Origin = textValue(v2Base.origin);
   const v2DischargePort = textValue(v2Base.dischargePort);
@@ -41,11 +42,11 @@ export function toUiShipment(row, { includeCustomerPrivateDetails = true } = {})
     customerName,
     origin: v2Origin || row.origin || legacy.origin || "",
     destination: v2DeliveryPort || row.destination || legacy.destination || "",
-    status: row.status || legacy.status || "PENDING",
+    status: normalizeShipmentStatus(row.status || legacy.status),
     v2ProfileId: row.v2_profile_id || null,
     v2FlowCode: row.v2_flow_code || null,
     hasV2Profile,
-    displayStatusText: v2StatusText,
+    displayStatusText: shipmentStatusLabel(row.status || legacy.status),
     currentStage: v2CurrentStage,
     dischargePort: v2DischargePort,
     deliveryPort: v2DeliveryPort || row.destination || legacy.destination || "",
@@ -56,6 +57,10 @@ export function toUiShipment(row, { includeCustomerPrivateDetails = true } = {})
     estimatedDelivery: row.estimated_delivery_at || legacy.estimatedDelivery || "",
     actualDelivery: row.actual_delivery_at || legacy.actualDelivery || undefined,
     freeTimeDays: Number.isFinite(freeTimeDays) ? freeTimeDays : 0,
+    timerStartedAt: row.timer_started_at || null,
+    timerDeadlineAt: row.timer_deadline_at || null,
+    timerCompletedAt: row.timer_completed_at || null,
+    timerRemovedAt: row.timer_removed_at || null,
     isArchived: Boolean(row.archived_at || legacy.isArchived),
     isExitedArchived: Boolean(row.exited_archived_at),
     exitedArchivedAt: row.exited_archived_at || null,
@@ -98,7 +103,7 @@ export async function listBootstrapShipments(
        FROM shipments
        WHERE owner_user_id = $1
          AND exited_archived_at IS NULL
-       ORDER BY updated_at DESC, created_at DESC`,
+       ORDER BY ${shipmentTimerOrderBy("")}`,
       [ownerUserId]
     );
     return result.rows.map((row) => toUiShipment(row, { includeCustomerPrivateDetails }));
@@ -125,7 +130,7 @@ export async function listBootstrapShipments(
           s.organization_id = $1
           OR (s.owner_user_id = $2 AND s.organization_id IS NULL)
         )
-      ORDER BY COALESCE(p.updated_at, s.updated_at) DESC, s.created_at DESC`,
+      ORDER BY ${shipmentTimerOrderBy("s")}`,
     [organizationId, ownerUserId]
   );
   return result.rows.map((row) => toUiShipment(row, { includeCustomerPrivateDetails }));
@@ -153,7 +158,7 @@ export async function listShipmentRecords(pool, { organizationId, includeExited 
        ON p.shipment_id = s.id
       AND p.organization_id = s.organization_id
      WHERE ${organizationFilter}${exitedFilter}
-     ORDER BY COALESCE(p.updated_at, s.updated_at) DESC, s.created_at DESC`,
+     ORDER BY ${shipmentTimerOrderBy("s")}`,
     values
   );
   return result.rows;

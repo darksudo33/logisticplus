@@ -52,15 +52,22 @@ import {
 import { toEnglishDigits, toPersianDigits } from "@/src/components/ShamsiDateTimeField";
 import { dailyStatusApi, type DailyStatusListFilters } from "@/src/lib/dailyStatusApi";
 import { businessEntitiesApi } from "@/src/lib/businessEntitiesApi";
+import {
+  isShipmentTerminalStatus,
+  SHIPMENT_STATUS_OPTIONS,
+  shipmentStatusLabel,
+} from "@/src/shared/shipment-statuses.js";
 import { cn } from "@/lib/utils";
 import { useMockStore } from "@/src/store/useMockStore";
-import type { BusinessEntityContact, CommercialCard, Customer, DailyStatusBoardRow, DailyStatusPatch, MalvaniProfile, Shipment } from "@/src/types";
+import type { BusinessEntityContact, CommercialCard, Customer, DailyStatusBoardRow, DailyStatusPatch, MalvaniProfile, Shipment, ShipmentStatus } from "@/src/types";
 
 const ALL_VALUE = "__all__";
 const NONE_VALUE = "__none__";
 const EMPTY_TEXT = "ثبت نشده";
 
 type ActiveMode = "view" | "edit";
+type DailyBaseInfoDraft = NonNullable<DailyStatusPatch["baseInfo"]>;
+type DailyBaseInfoDraftKey = keyof DailyBaseInfoDraft;
 type CustomerEditDraft = {
   name: string;
   company: string;
@@ -79,17 +86,6 @@ const emptyCustomerEditDraft: CustomerEditDraft = {
   address: "",
   referrer: "",
   notes: "",
-};
-
-const shipmentStatusLabels: Record<string, string> = {
-  PENDING: "در انتظار",
-  BOOKED: "رزرو شده",
-  IN_TRANSIT: "در مسیر",
-  ARRIVED: "رسیده",
-  CUSTOMS: "گمرک",
-  CLEARED: "ترخیص شده",
-  DELIVERED: "تحویل شده",
-  CLOSED: "بسته شده",
 };
 
 const v2CustomsRouteLabels: Record<string, string> = {
@@ -165,15 +161,15 @@ function optionLabel(options: Array<{ value: string; label: string }>, value?: s
 
 function statusBadge(status: string, label?: string) {
   const tone: Record<string, string> = {
-    CLEARED: "border-emerald-500/20 bg-emerald-500/10 text-emerald-700",
-    DELIVERED: "border-emerald-500/20 bg-emerald-500/10 text-emerald-700",
-    CUSTOMS: "border-amber-500/30 bg-amber-500/10 text-amber-700",
+    LOADING: "border-slate-500/20 bg-slate-500/10 text-slate-700",
     IN_TRANSIT: "border-sky-500/20 bg-sky-500/10 text-sky-700",
-    CLOSED: "border-rose-500/20 bg-rose-500/10 text-rose-700",
+    ARRIVED: "border-green-500/20 bg-green-500/10 text-green-700",
+    KOOTAJ_DONE: "border-violet-500/20 bg-violet-500/10 text-violet-700",
+    EXITED: "border-emerald-500/20 bg-emerald-500/10 text-emerald-700",
   };
   return (
     <Badge variant="outline" className={cn("whitespace-nowrap text-[11px] font-black", tone[status])}>
-      {label || shipmentStatusLabels[status] || status}
+      {label || shipmentStatusLabel(status)}
     </Badge>
   );
 }
@@ -213,7 +209,7 @@ function activeBusinessContacts(contacts?: Array<{ archivedAt?: string | null }>
 }
 
 function isActiveCustomerShipment(shipment: Shipment) {
-  return !shipment.isArchived && !shipment.isExitedArchived && !["DELIVERED", "CLOSED"].includes(shipment.status);
+  return !shipment.isArchived && !shipment.isExitedArchived && !isShipmentTerminalStatus(shipment.status);
 }
 
 function formatShamsiDateForDialog(value?: string | null) {
@@ -254,9 +250,29 @@ function normalizeCustomDraftValue(field: IranImportProfileField, value: unknown
   return field.type === "date" ? normalizeIsoDateForInput(trimmed) || trimmed : trimmed;
 }
 
+function normalizeBaseInfoText(value: unknown) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const trimmed = String(value).trim();
+  return trimmed || null;
+}
+
+function baseInfoDraftFromRow(row: DailyStatusBoardRow): DailyBaseInfoDraft {
+  return {
+    status: row.shipment.status as ShipmentStatus,
+    currentStage: row.baseInfo?.currentStage || row.workflow?.currentStepLabel || "",
+    origin: row.baseInfo?.origin || row.shipment.origin || "",
+    deliveryPort: row.baseInfo?.deliveryPort || row.shipment.destination || "",
+    dischargePort: row.baseInfo?.dischargePort || "",
+    consigneeName: row.baseInfo?.consigneeName || "",
+    orderRegistrationNumber: row.baseInfo?.orderRegistrationNumber || row.kootaj.orderRegistrationNumber || "",
+  };
+}
+
 function draftFromRow(row: DailyStatusBoardRow, fields: IranImportProfileField[] = iranImportEditableFields): DailyStatusPatch {
   const draft: DailyStatusPatch = {};
   const writableDraft = draft as Record<string, unknown>;
+  writableDraft.baseInfo = baseInfoDraftFromRow(row);
   for (const field of editableProfileFields(fields)) {
     if (field.customFieldKey) {
       writableDraft.customFields = {
@@ -295,7 +311,21 @@ function normalizePatchValue(field: keyof DailyStatusPatch, value: unknown) {
   return iranImportDateFieldKeys.has(field) ? normalizeIsoDateForInput(trimmed) || trimmed : trimmed;
 }
 
-function cleanPatch(draft: DailyStatusPatch, fields: IranImportProfileField[] = iranImportEditableFields): DailyStatusPatch {
+function cleanBaseInfoPatch(draft: DailyStatusPatch, row?: DailyStatusBoardRow): DailyBaseInfoDraft | undefined {
+  if (!draft.baseInfo) return undefined;
+  if (!row) return draft.baseInfo;
+  const current = baseInfoDraftFromRow(row);
+  const patch: DailyBaseInfoDraft = {};
+  if (draft.baseInfo.status && draft.baseInfo.status !== current.status) patch.status = draft.baseInfo.status;
+  for (const key of ["currentStage", "origin", "deliveryPort", "dischargePort", "consigneeName", "orderRegistrationNumber"] as const) {
+    const nextValue = normalizeBaseInfoText(draft.baseInfo[key]);
+    const currentValue = normalizeBaseInfoText(current[key]);
+    if (nextValue !== currentValue) patch[key] = nextValue;
+  }
+  return Object.keys(patch).length ? patch : undefined;
+}
+
+function cleanPatch(draft: DailyStatusPatch, fields: IranImportProfileField[] = iranImportEditableFields, row?: DailyStatusBoardRow): DailyStatusPatch {
   const patch: DailyStatusPatch = {};
   const writablePatch = patch as Record<string, unknown>;
   for (const field of editableProfileFields(fields)) {
@@ -313,13 +343,15 @@ function cleanPatch(draft: DailyStatusPatch, fields: IranImportProfileField[] = 
     if (value === undefined) continue;
     writablePatch[field.patchKey] = value;
   }
+  const baseInfo = cleanBaseInfoPatch(draft, row);
+  if (baseInfo) writablePatch.baseInfo = baseInfo;
   return patch;
 }
 
 function baseStatusText(row: DailyStatusBoardRow) {
   const text = row.baseInfo?.statusText;
   if (text && text !== row.shipment.status) return text;
-  return shipmentStatusLabels[row.shipment.status] || text || row.shipment.status;
+  return shipmentStatusLabel(row.shipment.status) || text || row.shipment.status;
 }
 
 function isLenjShipment(row: DailyStatusBoardRow) {
@@ -644,6 +676,9 @@ function DailyBaseInfoGrid({
   shipments,
   commercialCards,
   malvaniProfiles,
+  mode = "view",
+  draft,
+  onBaseInfoChange,
 }: {
   row: DailyStatusBoardRow;
   surface: "desktop" | "mobile";
@@ -651,8 +686,13 @@ function DailyBaseInfoGrid({
   shipments: Shipment[];
   commercialCards: CommercialCard[];
   malvaniProfiles: MalvaniProfile[];
+  mode?: ActiveMode;
+  draft?: DailyStatusPatch;
+  onBaseInfoChange?: (field: DailyBaseInfoDraftKey, value: string | null) => void;
 }) {
   const base = row.baseInfo;
+  const isEdit = mode === "edit" && Boolean(onBaseInfoChange);
+  const baseDraft = draft?.baseInfo || baseInfoDraftFromRow(row);
   const credential = credentialInfo(row);
   const testId = (name: string) => `daily-status-${surface}-base-${name}-${row.id}`;
   const [dialog, setDialog] = React.useState<"customer" | "credential" | null>(null);
@@ -684,6 +724,33 @@ function DailyBaseInfoGrid({
   const customerIdentifier = customer?.customerCode || customer?.code || row.customer?.customerCode || base?.customerCode || row.customer?.id || customerName || "";
   const customerDisplay = customerIdentifier;
   const canEditCustomer = currentUser?.role === "CEO" && Boolean(row.customer?.id);
+  const renderTextEditor = (
+    field: Exclude<DailyBaseInfoDraftKey, "status">,
+    name: string,
+    { multiline = false, dir = "rtl" as "rtl" | "ltr" } = {}
+  ) => {
+    const value = String(baseDraft[field] ?? "");
+    if (multiline) {
+      return (
+        <textarea
+          value={value}
+          onChange={(event) => onBaseInfoChange?.(field, event.target.value)}
+          className="min-h-16 w-full resize-y rounded-lg border border-input bg-background px-2.5 py-2 text-xs font-bold leading-5 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+          dir={dir}
+          data-testid={`${testId(name)}-input`}
+        />
+      );
+    }
+    return (
+      <Input
+        value={value}
+        onChange={(event) => onBaseInfoChange?.(field, event.target.value)}
+        className="h-9 rounded-lg bg-background text-xs font-bold"
+        dir={dir}
+        data-testid={`${testId(name)}-input`}
+      />
+    );
+  };
 
   React.useEffect(() => {
     if (dialog === "customer" && !isEditingCustomer) {
@@ -749,10 +816,27 @@ function DailyBaseInfoGrid({
           )}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="وضعیت" testId={testId("status")}>
-          {displayValue(baseStatusText(row))}
+          {isEdit ? (
+            <Select value={baseDraft.status || row.shipment.status} onValueChange={(next) => onBaseInfoChange?.("status", next as ShipmentStatus)}>
+              <SelectTrigger data-testid={`${testId("status")}-select`} className="h-9 w-full rounded-lg bg-background text-xs font-bold">
+                <span className="truncate">{shipmentStatusLabel(baseDraft.status || row.shipment.status)}</span>
+              </SelectTrigger>
+              <SelectContent className="bg-card text-foreground" dir="rtl">
+                {SHIPMENT_STATUS_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            displayValue(baseStatusText(row))
+          )}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="شماره ثبت سفارش" testId={testId("order-registration-number")}>
-          <span dir="ltr">{displayValue(base?.orderRegistrationNumber || row.kootaj.orderRegistrationNumber)}</span>
+          {isEdit ? renderTextEditor("orderRegistrationNumber", "order-registration-number", { dir: "ltr" }) : (
+            <span dir="ltr">{displayValue(base?.orderRegistrationNumber || row.kootaj.orderRegistrationNumber)}</span>
+          )}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label={credential.label} testId={testId("business-credential")}>
           {canOpenCredential ? (
@@ -773,19 +857,23 @@ function DailyBaseInfoGrid({
           {toPersianDigits(base?.documentCount ?? row.documents.totalCount)}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="مبدا" testId={testId("origin")}>
-          {displayValue(base?.origin || row.shipment.origin)}
+          {isEdit ? renderTextEditor("origin", "origin") : displayValue(base?.origin || row.shipment.origin)}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="بندر تحویل" testId={testId("delivery-port")}>
-          {displayValue(base?.deliveryPort || row.shipment.destination)}
+          {isEdit ? renderTextEditor("deliveryPort", "delivery-port") : displayValue(base?.deliveryPort || row.shipment.destination)}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="محل تخلیه" testId={testId("discharge-port")}>
-          {displayValue(base?.dischargePort)}
+          {isEdit ? renderTextEditor("dischargePort", "discharge-port") : displayValue(base?.dischargePort)}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="گیرنده کالا" testId={testId("consignee")}>
-          {displayValue(base?.consigneeName)}
+          {isEdit ? renderTextEditor("consigneeName", "consignee") : displayValue(base?.consigneeName)}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="مرحله فعلی" wide testId={testId("current-stage")}>
-          <p className="whitespace-pre-wrap">{displayValue(base?.currentStage || row.workflow?.currentStepLabel)}</p>
+          {isEdit ? (
+            renderTextEditor("currentStage", "current-stage", { multiline: true })
+          ) : (
+            <p className="whitespace-pre-wrap">{displayValue(base?.currentStage || row.workflow?.currentStepLabel)}</p>
+          )}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="آخرین به روز رسانی" wide testId={testId("last-update")}>
           <p>{displayValue(formatDate(base?.updatedAt || row.kootaj.updatedAt || row.shipment.updatedAt))}</p>
@@ -833,7 +921,7 @@ function DailyBaseInfoGrid({
                       {item.trackingNumber}
                     </span>
                     <Badge variant="outline" className="h-5 shrink-0 rounded-md px-1.5 text-[9px] font-black">
-                      {shipmentStatusLabels[item.status] || item.status}
+                      {shipmentStatusLabel(item.status)}
                     </Badge>
                   </div>
                   <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
@@ -1312,6 +1400,7 @@ function RowDetailsPanel({
   isSaving,
   onModeChange,
   onDraftChange,
+  onBaseInfoChange,
   onCustomDraftChange,
   onCancel,
   onSave,
@@ -1328,6 +1417,7 @@ function RowDetailsPanel({
   isSaving: boolean;
   onModeChange: (mode: ActiveMode) => void;
   onDraftChange: (field: keyof DailyStatusPatch, value: string | null) => void;
+  onBaseInfoChange: (field: DailyBaseInfoDraftKey, value: string | null) => void;
   onCustomDraftChange: (fieldKey: string, value: string | null) => void;
   onCancel: () => void;
   onSave: () => void;
@@ -1380,6 +1470,9 @@ function RowDetailsPanel({
                       shipments={shipments}
                       commercialCards={commercialCards}
                       malvaniProfiles={malvaniProfiles}
+                      mode="edit"
+                      draft={draft}
+                      onBaseInfoChange={onBaseInfoChange}
                     />
                   ) : section.id === "goods-v2" ? (
                     <DailyGoodsInfoPanel row={row} surface={surface} />
@@ -1536,6 +1629,7 @@ function MobileCard({
   onOpen,
   onModeChange,
   onDraftChange,
+  onBaseInfoChange,
   onCustomDraftChange,
   onCancel,
   onSave,
@@ -1553,6 +1647,7 @@ function MobileCard({
   onOpen: (mode: ActiveMode) => void;
   onModeChange: (mode: ActiveMode) => void;
   onDraftChange: (field: keyof DailyStatusPatch, value: string | null) => void;
+  onBaseInfoChange: (field: DailyBaseInfoDraftKey, value: string | null) => void;
   onCustomDraftChange: (fieldKey: string, value: string | null) => void;
   onCancel: () => void;
   onSave: () => void;
@@ -1609,6 +1704,7 @@ function MobileCard({
             isSaving={isSaving}
             onModeChange={onModeChange}
             onDraftChange={onDraftChange}
+            onBaseInfoChange={onBaseInfoChange}
             onCustomDraftChange={onCustomDraftChange}
             onCancel={onCancel}
             onSave={onSave}
@@ -1700,6 +1796,16 @@ export default function DailyStatus() {
     setDraft((current) => ({ ...current, [field]: value }));
   };
 
+  const changeBaseInfoDraft = (field: DailyBaseInfoDraftKey, value: string | null) => {
+    setDraft((current) => ({
+      ...current,
+      baseInfo: {
+        ...(current.baseInfo || {}),
+        [field]: field === "status" ? value as ShipmentStatus : value,
+      },
+    }));
+  };
+
   const changeCustomDraft = (fieldKey: string, value: string | null) => {
     setDraft((current) => ({
       ...current,
@@ -1713,7 +1819,7 @@ export default function DailyStatus() {
   const saveRow = async (row: DailyStatusBoardRow) => {
     setSavingId(row.id);
     try {
-      const updated = await dailyStatusApi.update(row.id, cleanPatch(draft, fieldsForRow(row)));
+      const updated = await dailyStatusApi.update(row.id, cleanPatch(draft, fieldsForRow(row), row));
       setRows((current) => current.map((item) => item.id === updated.id ? updated : item));
       setActiveRowId(updated.id);
       setActiveMode("view");
@@ -1742,13 +1848,38 @@ export default function DailyStatus() {
   };
 
   const refreshRows = () => loadRows({ ...filters, q: searchText || undefined });
-  const hasFilters = Boolean(searchText || filters.customsRoute || filters.customsStatus || filters.releaseStatus);
+  const hasFilters = Boolean(searchText || filters.customsRoute || filters.customsStatus || filters.releaseStatus || filters.shipmentStatus);
   const totalOpenTasks = rows.reduce((sum, row) => sum + row.tasks.openCount, 0);
   const withCotage = rows.filter((row) => row.kootaj.cotageNumber).length;
   const blockedRows = rows.filter((row) => row.kootaj.customsStatus === "blocked" || row.kootaj.releaseStatus === "blocked").length;
 
   const filterControls = (
     <>
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5" data-testid="daily-status-shipment-status-filters">
+        <Button
+          type="button"
+          variant={!filters.shipmentStatus ? "default" : "outline"}
+          size="sm"
+          className="h-8 rounded-lg px-2.5 text-[10px] font-black"
+          data-testid="daily-status-shipment-status-filter-ALL"
+          onClick={() => setFilterValue("shipmentStatus", ALL_VALUE)}
+        >
+          همه محموله‌ها
+        </Button>
+        {SHIPMENT_STATUS_OPTIONS.map((option) => (
+          <Button
+            key={option.value}
+            type="button"
+            variant={filters.shipmentStatus === option.value ? "default" : "outline"}
+            size="sm"
+            className="h-8 rounded-lg px-2.5 text-[10px] font-black"
+            data-testid={`daily-status-shipment-status-filter-${option.value}`}
+            onClick={() => setFilterValue("shipmentStatus", option.value)}
+          >
+            {option.label}
+          </Button>
+        ))}
+      </div>
       <FilterSelect value={filters.customsRoute} allLabel="همه مسیرها" options={routeOptions} onChange={(value) => setFilterValue("customsRoute", value)} widthClass="w-full lg:w-36" />
       <FilterSelect value={filters.customsStatus} allLabel="همه وضعیت‌ها" options={customsStatusOptions} onChange={(value) => setFilterValue("customsStatus", value)} widthClass="w-full lg:w-44" />
       <FilterSelect value={filters.releaseStatus} allLabel="همه ترخیص‌ها" options={releaseStatusOptions} onChange={(value) => setFilterValue("releaseStatus", value)} widthClass="w-full lg:w-44" />
@@ -1864,6 +1995,7 @@ export default function DailyStatus() {
                 isSaving={savingId === activeRow.id}
                 onModeChange={setActiveMode}
                 onDraftChange={changeDraft}
+                onBaseInfoChange={changeBaseInfoDraft}
                 onCustomDraftChange={changeCustomDraft}
                 onCancel={closeRow}
                 onSave={() => saveRow(activeRow)}
@@ -1904,6 +2036,7 @@ export default function DailyStatus() {
                   onOpen={(mode) => openRow(row, mode)}
                   onModeChange={setActiveMode}
                   onDraftChange={changeDraft}
+                  onBaseInfoChange={changeBaseInfoDraft}
                   onCustomDraftChange={changeCustomDraft}
                   onCancel={closeRow}
                   onSave={() => saveRow(row)}

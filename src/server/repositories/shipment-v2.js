@@ -9,6 +9,7 @@ import {
 } from "../shipment-codes.js";
 import { assertBusinessEntityBelongsToTenant } from "./business-entities.js";
 import { refreshCompanyBrainEntity } from "../ai/company-brain.js";
+import { normalizeShipmentStatus } from "../../shared/shipment-statuses.js";
 
 export const SHIPMENT_V2_SECTION_KEYS = [
   "base",
@@ -85,7 +86,6 @@ function sectionsForCreate(body) {
       deliveryPort: body.deliveryPort || "",
       consigneeName: body.consigneeName || "",
       lenjType: body.lenjType || null,
-      statusText: "",
       currentStage: "",
       orderRegistrationNumber: "",
       commercialCardId: null,
@@ -112,8 +112,7 @@ function sectionsForExistingShipment(shipment) {
       deliveryPort: legacy.deliveryPort || shipment.destination || "",
       consigneeName: legacy.consigneeName || "",
       lenjType: flowCode === "IMPORT_LANJ" ? legacy.lenjType || null : null,
-      statusText: legacy.statusText || "",
-      currentStage: legacy.currentStage || "",
+      currentStage: legacy.currentStage || legacy.statusText || "",
       orderRegistrationNumber: "",
       commercialCardId: null,
       commercialCardDisplayName: "",
@@ -205,8 +204,8 @@ function normalizeSectionPayload(sectionKey, payload = {}) {
       deliveryPort: cleaned.deliveryPort || "",
       consigneeName: cleaned.consigneeName || "",
       lenjType: cleaned.lenjType || null,
-      statusText: cleaned.statusText || "",
-      currentStage: cleaned.currentStage || "",
+      statusText: "",
+      currentStage: cleaned.currentStage || cleaned.statusText || "",
       orderRegistrationNumber: cleaned.orderRegistrationNumber || "",
       commercialCardId: cleaned.commercialCardId || null,
       commercialCardDisplayName: cleaned.commercialCardDisplayName || "",
@@ -244,7 +243,11 @@ function toShipmentSummary(row, { includeCustomerPrivateDetails = true } = {}) {
     customerId: row.customer_id || "",
     customerCode,
     customerName: customerCode,
-    status: row.status || "PENDING",
+    status: normalizeShipmentStatus(row.status),
+    timerStartedAt: row.timer_started_at || null,
+    timerDeadlineAt: row.timer_deadline_at || null,
+    timerCompletedAt: row.timer_completed_at || null,
+    timerRemovedAt: row.timer_removed_at || null,
     shipmentDirection: row.shipment_direction || "import",
     transportMode: row.transport_mode || "",
     shipmentTypeCode: row.shipment_type_code || "",
@@ -408,7 +411,7 @@ export async function createShipmentV2Record(pool, {
            shipment_direction, transport_mode, shipment_type_code,
            origin, destination, legacy_data, created_by_id, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, $8, $9, 'import', 'sea', $10, $11, $12, $13::jsonb, $14, NOW())
+          VALUES ($1, $2, $3, $4, $5, $6, 'LOADING', $7, $8, $9, 'import', 'sea', $10, $11, $12, $13::jsonb, $14, NOW())
          RETURNING *`,
         [
           shipmentId,
@@ -619,6 +622,7 @@ export async function updateShipmentV2Section(pool, {
       }
       if (Object.prototype.hasOwnProperty.call(payload, "origin")) addShipmentColumn("origin", payload.origin || null);
       if (Object.prototype.hasOwnProperty.call(payload, "deliveryPort")) addShipmentColumn("destination", payload.deliveryPort || null);
+      if (Object.prototype.hasOwnProperty.call(payload, "status")) addShipmentColumn("status", normalizeShipmentStatus(payload.status));
     }
     const shipmentResult = await client.query(
       `UPDATE shipments

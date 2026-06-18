@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { isShipmentTerminalStatus, shipmentStatusLabel } from "@/src/shared/shipment-statuses.js";
 import type {
   BusinessEntityContact,
   CommercialCard,
@@ -37,17 +38,6 @@ import type {
 } from "@/src/types";
 
 const EMPTY_TEXT = "ثبت نشده";
-
-const statusLabels: Record<string, string> = {
-  PENDING: "در انتظار",
-  BOOKED: "رزرو شده",
-  IN_TRANSIT: "در مسیر",
-  ARRIVED: "رسیده",
-  CUSTOMS: "گمرک",
-  CLEARED: "ترخیص شده",
-  DELIVERED: "تحویل شده",
-  CLOSED: "بسته شده",
-};
 
 const flowLabels: Record<ShipmentV2FlowCode, string> = {
   IMPORT_LANJ: "واردات لنج",
@@ -173,7 +163,7 @@ function activeContacts(contacts?: BusinessEntityContact[]) {
 }
 
 function isActiveShipment(shipment: Shipment) {
-  return !shipment.isArchived && !shipment.isExitedArchived && !["DELIVERED", "CLOSED"].includes(shipment.status);
+  return !shipment.isArchived && !shipment.isExitedArchived && !isShipmentTerminalStatus(shipment.status);
 }
 
 function ReadField({
@@ -380,7 +370,7 @@ export function ShipmentV2ReadOnlyProfile({
               </h2>
             </div>
             <Badge variant="outline" className="rounded-lg px-2 py-1 text-[11px] font-black">
-              {statusLabels[shipment.status] || shipment.status}
+              {shipmentStatusLabel(shipment.status)}
             </Badge>
           </div>
         </header>
@@ -404,7 +394,7 @@ export function ShipmentV2ReadOnlyProfile({
               ) : EMPTY_TEXT}
             </ReadField>
             <ReadField label="وضعیت">
-              {base.statusText || statusLabels[shipment.status] || shipment.status}
+              {shipmentStatusLabel(shipment.status)}
             </ReadField>
             <ReadField label="شماره ثبت سفارش">
               <span dir="ltr">{displayValue(base.orderRegistrationNumber)}</span>
@@ -570,7 +560,7 @@ export function ShipmentV2ReadOnlyProfile({
                       {item.trackingNumber}
                     </span>
                     <Badge variant="outline" className="h-5 shrink-0 rounded-md px-1.5 text-[9px] font-black">
-                      {statusLabels[item.status] || item.status}
+                      {shipmentStatusLabel(item.status)}
                     </Badge>
                   </div>
                   <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">

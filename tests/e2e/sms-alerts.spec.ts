@@ -111,7 +111,7 @@ async function insertDemurrageShipment({
          origin, destination, estimated_delivery_at, free_time_ends_at, assigned_manager_id,
          legacy_data, created_by_id
        )
-       VALUES ($1, $2, $3, $4, 'E2E Customer', 'CUSTOMS', 'Tehran', 'Bandar Abbas', $5, $6, $7, '{}'::jsonb, $3)`,
+       VALUES ($1, $2, $3, $4, 'E2E Customer', 'KOOTAJ_DONE', 'Tehran', 'Bandar Abbas', $5, $6, $7, '{}'::jsonb, $3)`,
       [
         shipmentId,
         organizationId,
@@ -398,7 +398,7 @@ test.describe.serial("SMS alert entitlements and worker", () => {
            origin, destination, estimated_delivery_at, free_time_ends_at, assigned_manager_id,
            legacy_data, created_by_id
          )
-         VALUES ($1, $2, $3, $4, 'E2E Customer', 'CUSTOMS', 'Tehran', 'Bandar Abbas', $5, $6, $3, '{}'::jsonb, $3)`,
+         VALUES ($1, $2, $3, $4, 'E2E Customer', 'KOOTAJ_DONE', 'Tehran', 'Bandar Abbas', $5, $6, $3, '{}'::jsonb, $3)`,
         [
           shipmentId,
           tenantInfo.organizationId,

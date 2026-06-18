@@ -2,6 +2,7 @@ import { organizationScopeClause, requireOrganizationScope } from "../tenant-sco
 import { listCheques } from "./cheques.js";
 import { listDocuments } from "./documents.js";
 import { listQuotations } from "./quotations.js";
+import { shipmentTimerOrderBy } from "./shipment-sort.js";
 
 export function canViewCustomerPrivateDetails(user) {
   return String(user?.role || user || "").toUpperCase() === "CEO";
@@ -216,10 +217,10 @@ export async function listCustomerRelated(pool, id, type, { organizationId, incl
   if (!(await getCustomerRecord(pool, id, { organizationId }))) return null;
   if (type === "shipments") {
     const result = await pool.query(
-      `SELECT * FROM shipments
+      `SELECT * FROM shipments s
        WHERE customer_id = $1 AND organization_id = $2
          AND exited_archived_at IS NULL
-       ORDER BY updated_at DESC`,
+       ORDER BY ${shipmentTimerOrderBy("s")}`,
       [id, scopedOrganizationId]
     );
     return result.rows.map(toCustomerRelatedShipment);

@@ -5,6 +5,7 @@ import {
   getShipmentFieldDefinition,
   isShipmentFieldKey,
 } from "./hamyar-shipment-field-registry.js";
+import { normalizeShipmentStatus, shipmentStatusLabel } from "../../shared/shipment-statuses.js";
 
 const CEO_ONLY_MESSAGE = "دسترسی به همیار لاجستیک در حال حاضر فقط برای مدیرعامل فعال است.";
 const PERSIAN_DIGITS = "۰۱۲۳۴۵۶۷۸۹";
@@ -154,7 +155,7 @@ function shipmentSummary(row = {}) {
     customerCode: row.customer_code || "",
     malvaniProfileId: row.malvani_profile_id || "",
     commercialCardId: row.commercial_card_id || "",
-    status: row.status || "PENDING",
+    status: normalizeShipmentStatus(row.status),
     updatedAt: isoTimestamp(row.updated_at),
     actionUrl: `/shipments/${row.id}`,
   };
@@ -453,10 +454,10 @@ export async function getShipmentFullProfile(pool, context, { shipmentId } = {})
     customerId: row.customer_id || "",
     customerCode: row.customer_code || "",
     customerName: customerDisplayName(row),
-    status: row.status || "PENDING",
+    status: normalizeShipmentStatus(row.status),
     priority: row.priority || "normal",
     currentStep: cleanText(base.currentStage) || cleanText(row.current_step_id),
-    currentStatus: cleanText(base.statusText) || cleanText(row.status),
+    currentStatus: cleanText(base.currentStage) || shipmentStatusLabel(row.status),
     route: {
       origin: cleanText(base.origin) || cleanText(row.origin),
       dischargePort: cleanText(base.dischargePort),
@@ -781,7 +782,7 @@ export async function getCustomerShipments(pool, context, { customerId } = {}) {
   return result.rows.map((row) => ({
     id: row.id,
     shipmentCode: row.shipment_code || row.id,
-    status: row.status || "PENDING",
+    status: normalizeShipmentStatus(row.status),
     currentStep: cleanText(row.current_stage) || cleanText(row.current_step_code),
     currentStatus: cleanText(row.status_text) || cleanText(row.workflow_status) || cleanText(row.status),
     updatedAt: isoTimestamp(row.updated_at),

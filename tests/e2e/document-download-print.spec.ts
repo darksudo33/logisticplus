@@ -388,7 +388,7 @@ test.describe.serial("document download, public access, archive, and print/expor
           profitMargin: 10,
           totalPrice: 1320000,
           validUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-          status: "PENDING",
+          status: "LOADING",
         },
       })
     );

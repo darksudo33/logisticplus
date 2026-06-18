@@ -15,6 +15,10 @@ import {
   shipmentTypeByCode,
 } from "../shared/shipment-form-fields.js";
 import {
+  isShipmentTerminalStatus,
+  normalizeShipmentStatus,
+} from "../shared/shipment-statuses.js";
+import {
   getDocumentDetail as getDocumentDetailFromRepository,
   getDocumentForDownload as getDocumentForDownloadFromRepository,
   listDocuments as listDocumentsFromRepository,
@@ -63,6 +67,7 @@ import {
 import { DEFAULT_SMS_TEMPLATE_MAP, renderSmsTemplateBody } from "./sms-templates.js";
 import { organizationIdFromTenantContext, organizationScopeClause, requireOrganizationScope } from "./tenant-scope.js";
 import { withTransaction } from "./transaction.js";
+import { shipmentTimerOrderBy } from "./repositories/shipment-sort.js";
 
 const { Pool } = pg;
 
@@ -70,6 +75,9 @@ const connectionString =
   process.env.DATABASE_URL || "postgres://postgres@localhost:5432/logisticplus";
 
 export const pool = new Pool({ connectionString });
+pool.on("error", (error) => {
+  console.warn("PostgreSQL idle client error:", error?.message || String(error));
+});
 
 async function refreshCompanyBrainEntityBestEffort(organizationId, entityType, entityId) {
   if (!organizationId || !entityType || !entityId) return;
@@ -1624,7 +1632,7 @@ export async function createShipmentRecord({ ownerUserId, actorUserId, organizat
         codeParts.shipmentCode,
         shipment.customerId || null,
         shipment.customerName || customer?.company_name || customer?.contact_name || null,
-        shipment.status || "PENDING",
+        normalizeShipmentStatus(shipment.status),
         codeParts.shamsiYear,
         codeParts.shamsiDate,
         codeParts.shamsiSequence,
@@ -1703,6 +1711,9 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
       assignedManagerId: updates.assignedManagerId || null,
     });
     const legacyPatch = cleanShipmentLegacyPatch(updates);
+    const hasStatusUpdate = updates.status !== undefined;
+    const nextStatus = hasStatusUpdate ? normalizeShipmentStatus(updates.status) : normalizeShipmentStatus(before.status);
+    const hasTimerDeadlineUpdate = updates.timerDeadlineAt !== undefined;
     const hasShipmentTypeUpdate =
       updates.shipmentTypeCode !== undefined ||
       updates.shipment_type_code !== undefined ||
@@ -1763,7 +1774,7 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
     if (updates.customerName !== undefined || customer) {
       addColumn("customer_name", updates.customerName || customer?.company_name || customer?.contact_name || null);
     }
-    if (updates.status !== undefined) addColumn("status", updates.status);
+    if (hasStatusUpdate) addColumn("status", nextStatus);
     if (hasShipmentTypeUpdate) {
       addColumn("shipment_direction", typeColumns.shipmentDirection || null);
       addColumn("transport_mode", typeColumns.transportMode || null);
@@ -1773,6 +1784,25 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
     if (updates.destination !== undefined) addColumn("destination", updates.destination || null);
     if (updates.estimatedDelivery !== undefined) addColumn("estimated_delivery_at", updates.estimatedDelivery || null);
     if (updates.assignedManagerId !== undefined) addColumn("assigned_manager_id", updates.assignedManagerId || null);
+    if (hasTimerDeadlineUpdate) {
+      const nextDeadline = updates.timerDeadlineAt ? new Date(updates.timerDeadlineAt).toISOString() : null;
+      addColumn("timer_deadline_at", nextDeadline);
+      if (nextDeadline) {
+        if (!before.timer_deadline_at) addColumn("timer_started_at", new Date().toISOString());
+        addColumn("timer_removed_at", null);
+      } else {
+        addColumn("timer_removed_at", new Date().toISOString());
+      }
+    }
+    if (hasStatusUpdate) {
+      const wasTerminal = isShipmentTerminalStatus(before.status);
+      const isTerminal = isShipmentTerminalStatus(nextStatus);
+      if (isTerminal && !wasTerminal && before.timer_started_at && !before.timer_completed_at) {
+        addColumn("timer_completed_at", new Date().toISOString());
+      } else if (!isTerminal && wasTerminal) {
+        addColumn("timer_completed_at", null);
+      }
+    }
     addColumn("legacy_data", JSON.stringify(nextLegacy));
 
     const result = await client.query(
@@ -4162,8 +4192,8 @@ export async function getDashboardData(user, permissions = []) {
   ] = await Promise.all([
     pool.query(
       `SELECT
-         COUNT(*) FILTER (WHERE archived_at IS NULL AND exited_archived_at IS NULL AND status NOT IN ('DELIVERED', 'CLOSED'))::int AS active_shipments,
-         COUNT(*) FILTER (WHERE archived_at IS NULL AND exited_archived_at IS NULL AND status = 'CUSTOMS')::int AS customs_shipments
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND exited_archived_at IS NULL AND status <> 'EXITED')::int AS active_shipments,
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND exited_archived_at IS NULL AND status = 'KOOTAJ_DONE')::int AS customs_shipments
        FROM shipments
        WHERE ($1::text IS NULL OR organization_id = $1)`,
       [orgParam]
@@ -4177,7 +4207,7 @@ export async function getDashboardData(user, permissions = []) {
        WHERE s.archived_at IS NULL
          AND s.exited_archived_at IS NULL
          AND ($1::text IS NULL OR s.organization_id = $1)
-       ORDER BY s.updated_at DESC, s.created_at DESC
+       ORDER BY ${shipmentTimerOrderBy("s")}
        LIMIT 8`,
       [orgParam]
     ),
@@ -4189,9 +4219,9 @@ export async function getDashboardData(user, permissions = []) {
         AND c.organization_id = s.organization_id
        WHERE s.archived_at IS NULL
          AND s.exited_archived_at IS NULL
-         AND s.status IN ('ARRIVED', 'CUSTOMS', 'IN_TRANSIT')
+          AND s.status IN ('ARRIVED', 'KOOTAJ_DONE', 'IN_TRANSIT')
          AND ($1::text IS NULL OR s.organization_id = $1)
-       ORDER BY s.updated_at DESC, s.created_at DESC
+       ORDER BY ${shipmentTimerOrderBy("s")}
        LIMIT 6`,
       [orgParam]
     ),
@@ -5093,7 +5123,7 @@ export async function queueScheduledSmsAlerts({ now = new Date() } = {}) {
      FROM shipments
      WHERE archived_at IS NULL
        AND organization_id IS NOT NULL
-       AND status IN ('ARRIVED', 'CUSTOMS', 'CLEARED')`
+        AND status IN ('ARRIVED', 'KOOTAJ_DONE')`
   );
   for (const shipment of shipments.rows) {
     const estimatedDelivery = parseOperationalDate(shipment.estimated_delivery_at);
@@ -7536,7 +7566,7 @@ export async function convertQuotationToShipment(id, actorUserId, { organization
          id, organization_id, owner_user_id, shipment_code, customer_id, customer_name, status,
          origin, destination, estimated_delivery_at, legacy_data, created_by_id, updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, $8, $9, $10::jsonb, $11, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, 'LOADING', $7, $8, $9, $10::jsonb, $11, NOW())
        RETURNING *`,
       [
         shipmentId,
@@ -9745,7 +9775,7 @@ function bridgeShipmentSnapshot(rowOrShipment = {}) {
     customerName: rowOrShipment.customer_name || legacy.customerName || "",
     origin: rowOrShipment.origin || legacy.origin || "",
     destination: rowOrShipment.destination || legacy.destination || "",
-    status: rowOrShipment.status || legacy.status || "PENDING",
+    status: normalizeShipmentStatus(rowOrShipment.status || legacy.status),
     estimatedDelivery: rowOrShipment.estimated_delivery_at || legacy.estimatedDelivery || "",
     freeTimeDays: legacy.freeTimeDays || "",
     isArchived: Boolean(rowOrShipment.archived_at || legacy.isArchived),
@@ -9844,7 +9874,7 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
           shipment.trackingNumber || shipment.id,
           shipment.customerId || null,
           shipment.customerName || null,
-          shipment.status || "PENDING",
+          normalizeShipmentStatus(shipment.status),
           shipment.origin || null,
           shipment.destination || null,
           shipment.estimatedDelivery || null,

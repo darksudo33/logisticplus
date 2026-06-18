@@ -1,4 +1,5 @@
 import { requireOrganizationScope } from "../tenant-scope.js";
+import { normalizeShipmentStatus } from "../../shared/shipment-statuses.js";
 
 const DEFAULT_SEARCH_LIMIT = 12;
 
@@ -21,7 +22,7 @@ function toSearchResult(row, { includeCustomerPrivateDetails = true } = {}) {
     customerId: row.customer_id || "",
     customerCode,
     customerName: customerCode,
-    status: row.status || "PENDING",
+    status: normalizeShipmentStatus(row.status),
     shipmentDirection: row.shipment_direction || "import",
     transportMode: row.transport_mode || "",
     shipmentTypeCode: row.shipment_type_code || "",

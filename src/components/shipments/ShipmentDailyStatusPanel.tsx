@@ -47,6 +47,7 @@ import {
 import { toPersianDigits } from "@/src/components/ShamsiDateTimeField";
 import { dailyStatusApi } from "@/src/lib/dailyStatusApi";
 import { shipmentFormTemplatesApi } from "@/src/lib/shipmentFormTemplatesApi";
+import { normalizeShipmentStatus, shipmentStatusLabel } from "@/src/shared/shipment-statuses.js";
 import { cn } from "@/lib/utils";
 import { useMockStore } from "@/src/store/useMockStore";
 import type { CommercialCard, DailyStatusBoardRow, DailyStatusKootajProfile, DailyStatusPatch } from "@/src/types";
@@ -54,17 +55,6 @@ import type { CommercialCard, DailyStatusBoardRow, DailyStatusKootajProfile, Dai
 const NONE_VALUE = "__none__";
 const EMPTY_TEXT = "هنوز ثبت نشده";
 const PROFILE_TITLE = "اطلاعات واردات، کوتاژ و ترخیص";
-
-const shipmentStatusLabels: Record<string, string> = {
-  PENDING: "در انتظار",
-  BOOKED: "رزرو شده",
-  IN_TRANSIT: "در مسیر",
-  ARRIVED: "رسیده",
-  CUSTOMS: "گمرک",
-  CLEARED: "ترخیص شده",
-  DELIVERED: "تحویل شده",
-  CLOSED: "بسته شده",
-};
 
 type ShipmentDailyStatusPanelProps = {
   shipmentId: string;
@@ -243,7 +233,7 @@ function createEmptyDailyStatusRow({
     shipment: {
       id: shipmentId,
       code: shipmentCode || shipmentId,
-      status: shipmentStatus || "PENDING",
+      status: normalizeShipmentStatus(shipmentStatus),
       origin: origin || "",
       destination: destination || "",
       assignedManagerId: null,
@@ -255,7 +245,7 @@ function createEmptyDailyStatusRow({
     baseInfo: {
       code: shipmentCode || shipmentId,
       customerName: customerName || "",
-      statusText: shipmentStatusLabels[shipmentStatus || "PENDING"] || shipmentStatus || "PENDING",
+      statusText: shipmentStatusLabel(shipmentStatus),
       orderRegistrationNumber: "",
       origin: origin || "",
       dischargePort: "",
@@ -353,7 +343,7 @@ function readonlyValue(row: DailyStatusBoardRow, key: string) {
     case "customerName":
       return row.customer?.name;
     case "shipmentStatus":
-      return shipmentStatusLabels[row.shipment.status] || row.shipment.status;
+      return shipmentStatusLabel(row.shipment.status);
     case "workflowStep":
       return row.workflow?.currentStepLabel;
     case "workflowRoute":
@@ -693,6 +683,15 @@ export function ShipmentDailyStatusPanel({
     focusField(field);
   };
 
+  const keepEditingFieldSection = (field: IranImportProfileField) => {
+    setIsEditing(true);
+    setOpenSectionIds((current) => {
+      const next = new Set(current);
+      next.add(field.sectionId);
+      return next;
+    });
+  };
+
   const saveDailyStatus = async () => {
     if (!isDirty) return;
     setIsSaving(true);
@@ -724,6 +723,7 @@ export function ShipmentDailyStatusPanel({
         const updated = await dailyStatusApi.updateFromShipmentDetail(activeRow.id, { customFields: { [fieldKey]: patchValue ?? null } });
         setRow(updated);
         setDraft(draftFromRow(updated, profileFields));
+        keepEditingFieldSection(quickField);
         setQuickFieldKey(null);
         toast.success("فیلد انتخاب شده ذخیره شد.");
       } catch (error) {
@@ -746,6 +746,7 @@ export function ShipmentDailyStatusPanel({
       const updated = await dailyStatusApi.updateFromShipmentDetail(activeRow.id, { [patchKey]: patchValue ?? null } as DailyStatusPatch);
       setRow(updated);
       setDraft(draftFromRow(updated, profileFields));
+      keepEditingFieldSection(quickField);
       setQuickFieldKey(null);
       toast.success("فیلد انتخاب‌شده ذخیره شد.");
     } catch (error) {

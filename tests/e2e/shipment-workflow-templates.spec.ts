@@ -103,7 +103,7 @@ async function createShipmentForType(owner: Awaited<ReturnType<typeof loginApi>>
         customerName: `Workflow Template ${typeCode}`,
         origin: template!.shipmentDirection === "export" ? "Tehran" : "Dubai",
         destination: template!.shipmentDirection === "export" ? "Dubai" : "Tehran",
-        status: "PENDING",
+        status: "LOADING",
         shipmentTypeCode: typeCode,
         shipmentDirection: template!.shipmentDirection,
         transportMode: template!.transportMode,

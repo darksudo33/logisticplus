@@ -105,7 +105,7 @@ async function createFixture(owner: APIRequestContext, prefix: string, suffix: s
         customerName: `Exited Customer ${suffix}`,
         origin: "Bandar Abbas",
         destination: "Tehran",
-        status: "CLEARED",
+        status: "EXITED",
         shipmentDirection: "import",
         transportMode: "sea",
         shipmentTypeCode: "IMPORT_SEA_CONTAINER",

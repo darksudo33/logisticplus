@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { SHIPMENT_STATUS_VALUES, shipmentStatusLabel } from "@/src/shared/shipment-statuses.js";
 
 type DashboardMetric = {
   key: "activeShipments" | "documents" | "activeEmployees" | "tasks";
@@ -130,13 +131,6 @@ const metricTones: Record<DashboardMetric["key"], string> = {
 };
 
 const statusLabels: Record<string, string> = {
-  PENDING: "در انتظار",
-  IN_TRANSIT: "در مسیر",
-  ARRIVED: "رسیده",
-  CUSTOMS: "گمرک",
-  CLEARED: "ترخیص شده",
-  DELIVERED: "تحویل شده",
-  CLOSED: "بسته شده",
   TODO: "باز",
   IN_PROGRESS: "در حال انجام",
   BLOCKED: "متوقف",
@@ -174,7 +168,9 @@ function hasPersianText(value: string) {
 }
 
 function statusText(status: string) {
-  return statusLabels[String(status || "").toUpperCase()] || status || "ثبت نشده";
+  const normalized = String(status || "").toUpperCase();
+  if (SHIPMENT_STATUS_VALUES.includes(normalized)) return shipmentStatusLabel(normalized);
+  return statusLabels[normalized] || status || "ثبت نشده";
 }
 
 function priorityText(priority: string) {

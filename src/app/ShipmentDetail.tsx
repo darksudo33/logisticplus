@@ -66,6 +66,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { downloadBinaryFile } from "@/src/lib/downloads";
 import { shipmentApi, type PostExitStatus } from "@/src/lib/shipmentApi";
+import { isShipmentTerminalStatus, shipmentStatusLabel } from "@/src/shared/shipment-statuses.js";
 import {
   DocumentType,
   Shipment,
@@ -486,26 +487,13 @@ const DocumentView = ({ shipmentId }: { shipmentId: string }) => {
 
 const StatusBadge = ({ status }: { status: string }) => {
   const styles: Record<string, string> = {
+    LOADING: "bg-slate-500/10 text-slate-500 border-slate-500/20",
     IN_TRANSIT: "bg-blue-500/10 text-blue-400 border-blue-500/20",
     ARRIVED: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-    CUSTOMS: "bg-orange-500/10 text-orange-400 border-orange-500/20",
-    CLEARED: "bg-purple-500/10 text-purple-400 border-purple-500/20",
-    DELIVERED: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-    PENDING: "bg-slate-500/10 text-slate-500 border-slate-500/20",
-    BOOKED: "bg-indigo-500/10 text-indigo-400 border-indigo-500/20",
-    CLOSED: "bg-rose-500/10 text-rose-400 border-rose-500/20",
+    KOOTAJ_DONE: "bg-purple-500/10 text-purple-400 border-purple-500/20",
+    EXITED: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
   };
-  const labels: Record<string, string> = {
-    IN_TRANSIT: "درحال حمل",
-    ARRIVED: "رسیده به بندر",
-    CUSTOMS: "در انتظار گمرک",
-    CLEARED: "ترخیص شده",
-    DELIVERED: "تحویل نهایی",
-    PENDING: "در انتظار ثبت",
-    BOOKED: "رزرو شده",
-    CLOSED: "بسته شده",
-  };
-  return <Badge variant="outline" className={cn(styles[status] || "", "py-0.5 px-2 text-[10px] font-bold")}>{labels[status] || status}</Badge>;
+  return <Badge variant="outline" className={cn(styles[status] || "", "py-0.5 px-2 text-[10px] font-bold")}>{shipmentStatusLabel(status)}</Badge>;
 };
 
 type CustomerAccessState = {
@@ -1318,7 +1306,7 @@ export default function ShipmentDetail() {
   const progressPercent = progress.percent;
   const canArchiveShipments = Boolean(currentUser?.permissions?.includes("shipments.archive"));
   const canUpdateShipments = Boolean(currentUser?.permissions?.includes("shipments.update"));
-  const canMoveToExitedArchive = canArchiveShipments && !shipment.isExitedArchived && ["CLEARED", "DELIVERED", "CLOSED"].includes(shipment.status);
+  const canMoveToExitedArchive = canArchiveShipments && !shipment.isExitedArchived && shipment.status === "EXITED";
 
   const handleMoveToExitedArchive = async () => {
     setIsExitedArchiveSaving(true);
@@ -1688,13 +1676,13 @@ export default function ShipmentDetail() {
                 <div className="bg-card/50 p-4 rounded-2xl border border-border/30">
                   <p className="text-[10px] text-muted-foreground uppercase tracking-widest mb-1">در جریان</p>
                   <p className="text-2xl font-black text-amber-400">
-                    {customerShipments.filter(s => s.status !== 'DELIVERED' && s.status !== 'CLOSED').length}
+                    {customerShipments.filter(s => !isShipmentTerminalStatus(s.status)).length}
                   </p>
                 </div>
                 <div className="bg-card/50 p-4 rounded-2xl border border-border/30">
                   <p className="text-[10px] text-muted-foreground uppercase tracking-widest mb-1">تکمیل شده</p>
                   <p className="text-2xl font-black text-emerald-400">
-                    {customerShipments.filter(s => s.status === 'DELIVERED').length}
+                    {customerShipments.filter(s => s.status === 'EXITED').length}
                   </p>
                 </div>
               </div>

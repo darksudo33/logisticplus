@@ -24,8 +24,6 @@ import {
   DropdownMenuTrigger,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
 import {
   Dialog,
@@ -40,30 +38,23 @@ import { Shipment, ShipmentStep, ShipmentStatus, Task } from "../types";
 import { apiGet } from "@/src/lib/api";
 import { useApiResource } from "@/src/lib/resourceState";
 import { shipmentApi } from "@/src/lib/shipmentApi";
+import { getShipmentProgress } from "@/src/lib/shipmentWorkflow";
+import {
+  isShipmentTerminalStatus,
+  SHIPMENT_STATUS_OPTIONS,
+  shipmentStatusLabel,
+} from "@/src/shared/shipment-statuses.js";
 import { useAppDataStore } from "@/src/store/useMockStore";
 
 const StatusBadge = ({ status }: { status: string }) => {
   const styles: Record<string, string> = {
+    LOADING: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
     IN_TRANSIT: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
     ARRIVED: "bg-green-500/10 text-green-600 dark:text-green-400",
-    CUSTOMS: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
-    CLEARED: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
-    DELIVERED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-    PENDING: "bg-slate-500/10 text-slate-600 dark:text-slate-500",
-    BOOKED: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400",
-    CLOSED: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+    KOOTAJ_DONE: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
+    EXITED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
   };
-  const labels: Record<string, string> = {
-    IN_TRANSIT: "درحال حمل",
-    ARRIVED: "رسیده به بندر",
-    CUSTOMS: "در انتظار گمرک",
-    CLEARED: "ترخیص شده",
-    DELIVERED: "تحویل نهایی",
-    PENDING: "در انتظار ثبت",
-    BOOKED: "رزرو شده",
-    CLOSED: "بسته شده",
-  };
-  return <Badge className={`${styles[status] || ""} border-none py-0.5 px-2 text-[10px] font-bold`}>{labels[status] || status}</Badge>;
+  return <Badge className={`${styles[status] || ""} border-none py-0.5 px-2 text-[10px] font-bold`}>{shipmentStatusLabel(status)}</Badge>;
 };
 
 const shipmentCustomerDisplay = (shipment: Shipment) =>
@@ -75,7 +66,12 @@ const shipmentDestinationDisplay = (shipment: Shipment) =>
   shipment.deliveryPort || shipment.destination || "";
 
 const shipmentDisplayStatusText = (shipment: Shipment) =>
-  String(shipment.displayStatusText || "").trim();
+  String(shipment.currentStage || "").trim();
+
+const statusOptions = [
+  { value: "ALL", label: "همه وضعیت‌ها" },
+  ...SHIPMENT_STATUS_OPTIONS,
+];
 
 export default function Shipments() {
   const navigate = useNavigate();
@@ -202,9 +198,9 @@ export default function Shipments() {
   };
 
   const shipmentStats = React.useMemo(() => {
-    const active = shipments.filter(s => !s.isArchived && !s.isExitedArchived && !["DELIVERED", "CLOSED"].includes(s.status)).length;
-    const customs = shipments.filter(s => !s.isArchived && !s.isExitedArchived && s.status === "CUSTOMS").length;
-    const delivered = shipments.filter(s => !s.isArchived && !s.isExitedArchived && s.status === "DELIVERED").length;
+    const active = shipments.filter(s => !s.isArchived && !s.isExitedArchived && !isShipmentTerminalStatus(s.status)).length;
+    const customs = shipments.filter(s => !s.isArchived && !s.isExitedArchived && s.status === "KOOTAJ_DONE").length;
+    const delivered = shipments.filter(s => !s.isArchived && !s.isExitedArchived && s.status === "EXITED").length;
     const pendingTasks = tasks.filter(t => t.status !== "DONE").length;
     return [
       { label: "محموله فعال", value: active, icon: Ship, tone: "blue" },
@@ -233,18 +229,7 @@ export default function Shipments() {
 
   const canMoveToExitedArchive = Boolean(currentUser?.permissions?.includes("shipments.archive"));
   const isExitArchiveEligible = (shipment: { status: ShipmentStatus }) =>
-    canMoveToExitedArchive && ["CLEARED", "DELIVERED", "CLOSED"].includes(shipment.status);
-
-  const statusOptions = [
-    { value: "ALL", label: "همه وضعیت‌ها" },
-    { value: "PENDING", label: "در انتظار ثبت" },
-    { value: "BOOKED", label: "رزرو شده" },
-    { value: "IN_TRANSIT", label: "در حال حمل" },
-    { value: "ARRIVED", label: "رسیده به بندر" },
-    { value: "CUSTOMS", label: "در انتظار گمرک" },
-    { value: "CLEARED", label: "ترخیص شده" },
-    { value: "DELIVERED", label: "تحویل نهایی" },
-  ];
+    canMoveToExitedArchive && shipment.status === "EXITED";
 
   return (
     <div className="app-page space-y-5 font-sans">
@@ -302,48 +287,32 @@ export default function Shipments() {
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={(triggerProps) => (
-              <Button {...triggerProps} variant="outline" className="border-border bg-muted gap-2 h-10 text-xs text-muted-foreground hover:bg-accent rounded-xl">
-                <Filter className="w-3.5 h-3.5" />
-                {statusOptions.find(o => o.value === statusFilter)?.label || "فیلتر"}
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5" data-testid="shipment-status-filter-buttons">
+          {statusOptions.map((option) => {
+            const active = statusFilter === option.value;
+            return (
+              <Button
+                key={option.value}
+                type="button"
+                variant={active ? "default" : "outline"}
+                size="sm"
+                data-testid={`shipment-status-filter-${option.value}`}
+                className="h-8 rounded-lg px-2.5 text-[10px] font-black sm:text-[11px]"
+                onClick={() => setStatusFilter(option.value)}
+              >
+                {option.value === "ALL" ? <Filter className="ml-1 h-3 w-3" /> : null}
+                {option.label}
               </Button>
-            )}
-          />
-          <DropdownMenuContent className="bg-card border-border text-foreground w-48">
-            <DropdownMenuGroup>
-              <DropdownMenuLabel className="text-[10px] text-muted-foreground">فیلتر بر اساس وضعیت</DropdownMenuLabel>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator className="bg-border" />
-            <DropdownMenuGroup>
-              <DropdownMenuRadioGroup value={statusFilter} onValueChange={setStatusFilter}>
-                {statusOptions.map(option => (
-                  <DropdownMenuRadioItem 
-                    key={option.value} 
-                    value={option.value}
-                    className="text-xs cursor-pointer focus:bg-muted"
-                  >
-                    {option.label}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+            );
+          })}
+        </div>
       </div>
 
       <div className="md:hidden space-y-4">
         {processedShipments.length > 0 ? (
           processedShipments.map((shipment) => {
             const stepsForShipment = shipmentSteps.filter(s => s.shipmentId === shipment.id);
-            const totalSteps = stepsForShipment.length;
-            const completedSteps = stepsForShipment.filter(s => s.status === 'COMPLETED').length;
-            let progressValue = totalSteps > 0 ? (completedSteps / totalSteps) * 100 : 0;
-            
-            if (shipment.status === 'DELIVERED') progressValue = 100;
-            else if (shipment.status === 'CLEARED' && progressValue < 80) progressValue = 85;
-            else if (shipment.status === 'ARRIVED' && progressValue < 50) progressValue = 60;
+            const progressValue = getShipmentProgress(shipment, stepsForShipment).percent;
             const customerDisplay = shipmentCustomerDisplay(shipment);
             const originDisplay = shipmentOriginDisplay(shipment);
             const destinationDisplay = shipmentDestinationDisplay(shipment);
@@ -381,7 +350,7 @@ export default function Shipments() {
                            <Edit className="w-3.5 h-3.5" />
                            ویرایش محموله
                          </DropdownMenuItem>
-                          {(shipment.status === "DELIVERED" || shipment.status === "CLOSED") && (
+                          {isShipmentTerminalStatus(shipment.status) && (
                             <DropdownMenuItem 
                               className="text-xs cursor-pointer hover:bg-amber-500/10 text-amber-500 font-bold flex items-center gap-2 rounded-lg"
                               onClick={() => void handleArchiveShipment(shipment.id)}
@@ -443,8 +412,7 @@ export default function Shipments() {
                   </div>
                </div>
 
-               {!displayStatusText ? (
-                <div className="mb-4 space-y-1.5 px-1">
+               <div className="mb-4 space-y-1.5 px-1">
                   <div className="flex justify-between items-center text-[9px] font-bold">
                     <span className="text-muted-foreground">پیشرفت فرآیند</span>
                     <span className="text-primary">
@@ -456,7 +424,6 @@ export default function Shipments() {
                     className="h-1 bg-muted" 
                   />
                 </div>
-               ) : null}
 
                <div className="flex items-center justify-between border-t border-border/30 pt-4">
                   <div className="flex items-center gap-2">
@@ -471,18 +438,10 @@ export default function Shipments() {
                      </div>
                   </div>
                   <div data-testid={`shipment-mobile-status-${shipment.id}`} className="flex max-w-[45%] flex-col items-end gap-1">
+                    <StatusBadge status={shipment.status} />
                     {displayStatusText ? (
-                      <>
-                        <Badge className="border-none bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
-                          {displayStatusText}
-                        </Badge>
-                        {shipment.currentStage ? (
-                          <span className="max-w-full truncate text-[9px] font-bold text-muted-foreground">{shipment.currentStage}</span>
-                        ) : null}
-                      </>
-                    ) : (
-                      <StatusBadge status={shipment.status} />
-                    )}
+                      <span className="max-w-full truncate text-[9px] font-bold text-muted-foreground">{displayStatusText}</span>
+                    ) : null}
                   </div>
                </div>
             </Card>
@@ -501,17 +460,17 @@ export default function Shipments() {
 
       <Card className="bg-card border-border rounded-xl overflow-hidden hidden md:block shadow-sm">
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-right text-[12px] min-w-[800px]">
+          <div className="overflow-hidden">
+            <table className="w-full table-fixed text-right text-[11px]">
               <thead>
                 <tr className="border-b border-border bg-muted/50">
-                  <th className="px-5 py-4 font-medium text-muted-foreground">شماره رهگیری</th>
-                  <th className="px-5 py-4 font-medium text-muted-foreground">کانتینر</th>
-                  <th className="px-5 py-4 font-medium text-muted-foreground">مبدأ</th>
-                  <th className="px-5 py-4 font-medium text-muted-foreground">مقصد</th>
-                  <th className="px-5 py-4 font-medium text-muted-foreground">مشتری</th>
+                  <th className="px-3 py-3 font-medium text-muted-foreground">شماره رهگیری</th>
+                  <th className="hidden px-3 py-3 font-medium text-muted-foreground lg:table-cell">کانتینر</th>
+                  <th className="px-3 py-3 font-medium text-muted-foreground">مبدأ</th>
+                  <th className="px-3 py-3 font-medium text-muted-foreground">مقصد</th>
+                  <th className="px-3 py-3 font-medium text-muted-foreground">مشتری</th>
                   <th 
-                    className="px-5 py-4 font-medium text-muted-foreground cursor-pointer hover:text-foreground transition-colors"
+                    className="px-3 py-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground transition-colors"
                     onClick={() => requestSort('status')}
                   >
                     <div className="flex items-center gap-2">
@@ -520,7 +479,7 @@ export default function Shipments() {
                     </div>
                   </th>
                   <th 
-                    className="px-5 py-4 font-medium text-muted-foreground cursor-pointer hover:text-foreground transition-colors"
+                    className="px-3 py-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground transition-colors"
                     onClick={() => requestSort('estimatedDelivery')}
                   >
                     <div className="flex items-center gap-2">
@@ -528,20 +487,14 @@ export default function Shipments() {
                       {getSortIcon('estimatedDelivery')}
                     </div>
                   </th>
-                  <th className="px-5 py-4 font-medium text-muted-foreground">عملیات</th>
+                  <th className="px-3 py-3 font-medium text-muted-foreground">عملیات</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {processedShipments.length > 0 ? (
                   processedShipments.map((shipment) => {
                     const stepsForShipment = shipmentSteps.filter(s => s.shipmentId === shipment.id);
-                    const totalSteps = stepsForShipment.length;
-                    const completedSteps = stepsForShipment.filter(s => s.status === 'COMPLETED').length;
-                    let progressValue = totalSteps > 0 ? (completedSteps / totalSteps) * 100 : 0;
-                    
-                    if (shipment.status === 'DELIVERED') progressValue = 100;
-                    else if (shipment.status === 'CLEARED' && progressValue < 80) progressValue = 85;
-                    else if (shipment.status === 'ARRIVED' && progressValue < 50) progressValue = 60;
+                    const progressValue = getShipmentProgress(shipment, stepsForShipment).percent;
                     const customerDisplay = shipmentCustomerDisplay(shipment);
                     const originDisplay = shipmentOriginDisplay(shipment);
                     const destinationDisplay = shipmentDestinationDisplay(shipment);
@@ -549,40 +502,32 @@ export default function Shipments() {
 
                     return (
                       <tr key={shipment.id} data-testid={`shipment-row-${shipment.id}`} className="hover:bg-muted/30 transition-colors group">
-                        <td className="px-5 py-4">
-                          <span className="font-mono text-sm font-bold text-primary">{shipment.trackingNumber}</span>
+                        <td className="px-3 py-3">
+                          <span className="block truncate font-mono text-xs font-bold text-primary">{shipment.trackingNumber}</span>
                         </td>
-                        <td className="px-5 py-4 font-mono text-[11px] text-muted-foreground">{shipment.containerNumber}</td>
-                        <td data-testid={`shipment-row-origin-${shipment.id}`} className="px-5 py-4 text-muted-foreground">{originDisplay}</td>
-                        <td data-testid={`shipment-row-destination-${shipment.id}`} className="px-5 py-4 text-muted-foreground">{destinationDisplay}</td>
-                        <td data-testid={`shipment-row-customer-${shipment.id}`} className="px-5 py-4 font-medium text-foreground">{customerDisplay}</td>
-                        <td data-testid={`shipment-row-status-${shipment.id}`} className="px-5 py-4">
-                          {displayStatusText ? (
-                            <div className="flex min-w-[120px] flex-col items-start gap-1">
-                              <Badge className="border-none bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
-                                {displayStatusText}
-                              </Badge>
-                              {shipment.currentStage ? (
-                                <span className="max-w-[160px] truncate text-[10px] font-bold text-muted-foreground">{shipment.currentStage}</span>
-                              ) : null}
+                        <td className="hidden px-3 py-3 font-mono text-[10px] text-muted-foreground lg:table-cell">{shipment.containerNumber}</td>
+                        <td data-testid={`shipment-row-origin-${shipment.id}`} className="px-3 py-3 text-muted-foreground"><span className="block truncate">{originDisplay}</span></td>
+                        <td data-testid={`shipment-row-destination-${shipment.id}`} className="px-3 py-3 text-muted-foreground"><span className="block truncate">{destinationDisplay}</span></td>
+                        <td data-testid={`shipment-row-customer-${shipment.id}`} className="px-3 py-3 font-medium text-foreground"><span className="block truncate">{customerDisplay}</span></td>
+                        <td data-testid={`shipment-row-status-${shipment.id}`} className="px-3 py-3">
+                          <div className="flex min-w-0 flex-col gap-1.5">
+                            <div className="flex items-center justify-between gap-1 text-[10px]">
+                              <StatusBadge status={shipment.status} />
+                              <span className="shrink-0 font-bold text-primary">
+                                {Math.round(progressValue)}%
+                              </span>
                             </div>
-                          ) : (
-                            <div className="flex flex-col gap-1.5 min-w-[120px]">
-                              <div className="flex justify-between items-center text-[10px]">
-                                <StatusBadge status={shipment.status} />
-                                <span className="font-bold text-primary">
-                                  {Math.round(progressValue)}%
-                                </span>
-                              </div>
-                              <Progress
-                                value={progressValue}
-                                className="h-1.5 bg-muted"
-                              />
-                            </div>
-                          )}
+                            <Progress
+                              value={progressValue}
+                              className="h-1.5 bg-muted"
+                            />
+                            {displayStatusText ? (
+                              <span className="truncate text-[10px] font-bold text-muted-foreground">{displayStatusText}</span>
+                            ) : null}
+                          </div>
                         </td>
-                        <td className="px-5 py-4 text-muted-foreground font-mono">{shipment.estimatedDelivery}</td>
-                        <td className="px-5 py-4">
+                        <td className="px-3 py-3 text-muted-foreground font-mono"><span className="block truncate">{shipment.estimatedDelivery}</span></td>
+                        <td className="px-3 py-3">
                           <div className="flex items-center gap-2 opacity-100 transition-opacity">
                             <Button 
                               variant="ghost" 
@@ -608,7 +553,7 @@ export default function Shipments() {
                                    <Edit className="w-3.5 h-3.5" />
                                    ویرایش محموله
                                  </DropdownMenuItem>
-                                 {(shipment.status === "DELIVERED" || shipment.status === "CLOSED") && (
+                                 {isShipmentTerminalStatus(shipment.status) && (
                                    <DropdownMenuItem 
                                      className="text-xs cursor-pointer hover:bg-amber-500/10 text-amber-500 font-bold flex items-center gap-2 rounded-lg"
                                      onClick={() => void handleArchiveShipment(shipment.id)}

@@ -13,6 +13,7 @@ import {
   SEEDED_SHIPMENT_WORKFLOW_TEMPLATES,
 } from "../src/shared/shipment-workflow-template-presets.js";
 import { SYSTEM_CUSTOMS_STEP_CATALOG } from "../src/shared/shipment-workflow-step-catalog.js";
+import { normalizeShipmentStatus } from "../src/shared/shipment-statuses.js";
 import { DEFAULT_SMS_TEMPLATES } from "../src/server/sms-templates.js";
 
 const { Client } = pg;
@@ -741,7 +742,7 @@ async function bridgeShipments(client: Client, shipments: any[]) {
         shipment.trackingNumber || shipment.id,
         shipment.customerId || null,
         shipment.customerName || null,
-        shipment.status || "PENDING",
+        normalizeShipmentStatus(shipment.status),
         shipment.origin || null,
         shipment.destination || null,
         shipment.estimatedDelivery || null,

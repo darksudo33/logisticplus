@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { User, Customer, Shipment, Task, Message, ActivityLog, Demurrage, ShipmentStep, ShipmentStatus, TaskStatus, ShipmentDocument, Channel, Notification, Appointment, AppointmentStatus, Cheque, Quote, CommercialCard, OrganizationMemberOption, ShipmentWorkflowProgress, TaskEvent } from "../types";
 import { QUOTATIONS_UI_ENABLED } from "../config/features";
 import { buildShipmentWorkflowSteps, ensureShipmentWorkflowSteps } from "../lib/shipmentWorkflow";
+import { normalizeShipmentStatus as normalizeSharedShipmentStatus } from "../shared/shipment-statuses.js";
 
 const CURRENT_USER_STORAGE_KEY = "logisticplus.currentUser";
 
@@ -69,10 +70,7 @@ const normalizeUser = (user: LoginUser | null): User | null => {
 };
 
 const normalizeShipmentStatus = (status: unknown): ShipmentStatus => {
-  const value = String(status || "PENDING").toUpperCase();
-  return (["PENDING", "BOOKED", "IN_TRANSIT", "ARRIVED", "CUSTOMS", "CLEARED", "DELIVERED", "CLOSED"].includes(value)
-    ? value
-    : "PENDING") as ShipmentStatus;
+  return normalizeSharedShipmentStatus(status) as ShipmentStatus;
 };
 
 const normalizeShipmentRecord = (record: any): Shipment => {
@@ -110,6 +108,10 @@ const normalizeShipmentRecord = (record: any): Shipment => {
     estimatedDelivery: record.estimatedDelivery || record.estimated_delivery_at || legacy.estimatedDelivery || "",
     actualDelivery: record.actualDelivery || record.actual_delivery_at || legacy.actualDelivery || undefined,
     freeTimeDays: Number.isFinite(freeTimeDays) ? freeTimeDays : 0,
+    timerStartedAt: record.timerStartedAt || record.timer_started_at || null,
+    timerDeadlineAt: record.timerDeadlineAt || record.timer_deadline_at || null,
+    timerCompletedAt: record.timerCompletedAt || record.timer_completed_at || null,
+    timerRemovedAt: record.timerRemovedAt || record.timer_removed_at || null,
     isArchived: Boolean(record.isArchived ?? record.archived_at ?? legacy.isArchived),
     isExitedArchived: Boolean(record.isExitedArchived ?? record.exited_archived_at ?? record.exitedArchivedAt),
     exitedArchivedAt: record.exitedArchivedAt || record.exited_archived_at || null,

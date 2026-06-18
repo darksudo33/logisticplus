@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { shipmentStatusLabel } from "../shared/shipment-statuses.js";
 import { getPublicWorkflowSummary } from "./repositories/shipment-progress.js";
 
 const PUBLIC_DOCUMENT_ACCESS_TTL_MS = 30 * 60 * 1000;
@@ -66,19 +67,8 @@ function publicDocumentSignatureIsValid(row, { shipmentCode, expires, signature 
 }
 
 export function toPublicTrackingStatusEventDto(row) {
-  const labels = {
-    PENDING: "Shipment is being prepared",
-    BOOKED: "Shipment is booked",
-    IN_TRANSIT: "Shipment is in transit",
-    ARRIVED: "Shipment has arrived",
-    CUSTOMS: "Shipment is in customs review",
-    CLEARED: "Shipment is cleared",
-    DELIVERED: "Shipment is delivered",
-    CLOSED: "Shipment is closed",
-  };
-
   return {
-    label: row.public_label || labels[row.status] || "Shipment status updated",
+    label: row.public_label || shipmentStatusLabel(row.status) || "Shipment status updated",
     description:
       row.public_description ||
       "Your shipment is being handled by our operations team.",

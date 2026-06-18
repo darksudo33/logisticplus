@@ -12,7 +12,9 @@ import {
   getIranImportPhase,
   getIranImportStep,
 } from "../../shared/iran-import-customs-workflow.js";
+import { isShipmentTerminalStatus, normalizeShipmentStatus, shipmentStatusLabel } from "../../shared/shipment-statuses.js";
 import { normalizeWorkflowDefinition } from "./shipment-workflow-templates.js";
+import { shipmentTimerOrderBy } from "./shipment-sort.js";
 import {
   getActiveShipmentFormTemplateForShipment,
   validateCustomFieldPatchForTemplate,
@@ -101,6 +103,36 @@ const KOOTAJ_COLUMN_BY_FIELD = {
   internalNote: "internal_note",
 };
 
+const BASE_INFO_PATCH_FIELDS = [
+  "status",
+  "currentStage",
+  "origin",
+  "deliveryPort",
+  "dischargePort",
+  "consigneeName",
+  "orderRegistrationNumber",
+];
+
+const BASE_SECTION_DEFAULTS = {
+  trackingNumber: "",
+  origin: "",
+  dischargePort: "",
+  deliveryPort: "",
+  consigneeName: "",
+  lenjType: null,
+  statusText: "",
+  currentStage: "",
+  orderRegistrationNumber: "",
+  commercialCardId: null,
+  commercialCardDisplayName: "",
+  malvaniProfileId: null,
+  malvaniDisplayName: "",
+};
+
+function hasOwn(value, key) {
+  return Object.prototype.hasOwnProperty.call(value || {}, key);
+}
+
 function numberValue(value) {
   const parsed = Number(value || 0);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -116,6 +148,13 @@ function jsonObject(value, fallback = {}) {
   return value;
 }
 
+function trimNullableText(value) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const trimmed = String(value).trim();
+  return trimmed || null;
+}
+
 function v2BaseSection(row) {
   return jsonObject(row.v2_sections_json?.base);
 }
@@ -126,6 +165,35 @@ function v2GoodsSection(row) {
 
 function v2ProfileSections(row) {
   return jsonObject(row.v2_sections_json);
+}
+
+function defaultV2SectionsForShipment(shipment = {}) {
+  const flowCode = String(shipment.shipment_type_code || "").toUpperCase().includes("LENJ") ? "IMPORT_LANJ" : "IMPORT_SHIP";
+  return {
+    base: {
+      ...BASE_SECTION_DEFAULTS,
+      trackingNumber: normalizeText(shipment.shipment_code),
+      origin: normalizeText(shipment.origin),
+      deliveryPort: normalizeText(shipment.destination),
+      lenjType: flowCode === "IMPORT_LANJ" ? "MALVANI" : null,
+    },
+    orderRegistration: {},
+    goods: { goodsRows: [] },
+    declarationKootaj: {},
+    permits: { permitRows: [] },
+    payments: {},
+    banking: {},
+    notes: { internalNote: "" },
+  };
+}
+
+function baseSectionPatchFromUpdates(baseInfo = {}) {
+  const patch = {};
+  for (const key of ["currentStage", "origin", "deliveryPort", "dischargePort", "consigneeName", "orderRegistrationNumber"]) {
+    if (!hasOwn(baseInfo, key)) continue;
+    patch[key] = trimNullableText(baseInfo[key]) || "";
+  }
+  return patch;
 }
 
 function nullableNumber(value) {
@@ -191,7 +259,7 @@ function composeBaseInfo(row, { commercialCard, workflow, includeCustomerPrivate
     code: normalizeText(row.shipment_code || row.shipment_id),
     customerCode,
     customerName,
-    statusText: normalizeText(base.statusText || row.shipment_status),
+    statusText: shipmentStatusLabel(row.shipment_status),
     orderRegistrationNumber: normalizeText(base.orderRegistrationNumber || row.order_registration_number),
     origin: normalizeText(base.origin || row.origin),
     dischargePort: normalizeText(base.dischargePort),
@@ -297,7 +365,7 @@ export function composeDailyStatusRow(row, { includeCustomerPrivateDetails = tru
     shipment: {
       id: row.shipment_id,
       code: row.shipment_code || row.shipment_id,
-      status: row.shipment_status || "PENDING",
+      status: normalizeShipmentStatus(row.shipment_status),
       origin: normalizeText(row.origin),
       destination: normalizeText(row.destination),
       shipmentTypeCode: row.shipment_type_code || "IMPORT_SEA_CONTAINER",
@@ -445,6 +513,7 @@ function dailyStatusQuery(filters = {}, organizationId, { includeCustomerPrivate
   if (filters.customsRoute) appendFilter(values, conditions, "k.customs_route = ?", filters.customsRoute);
   if (filters.customsStatus) appendFilter(values, conditions, "k.customs_status = ?", filters.customsStatus);
   if (filters.releaseStatus) appendFilter(values, conditions, "k.release_status = ?", filters.releaseStatus);
+  if (filters.shipmentStatus) appendFilter(values, conditions, "s.status = ?", normalizeShipmentStatus(filters.shipmentStatus));
   if (filters.q) {
     const searchParam = `%${filters.q}%`;
     values.push(searchParam);
@@ -703,7 +772,7 @@ function dailyStatusQuery(filters = {}, organizationId, { includeCustomerPrivate
         ON assigned_manager.id = s.assigned_manager_id
        AND assigned_manager.organization_id = s.organization_id
       WHERE ${conditions.join(" AND ")}
-      ORDER BY COALESCE(sv2.updated_at, k.updated_at, s.updated_at) DESC, s.created_at DESC
+      ORDER BY ${shipmentTimerOrderBy("s")}
       LIMIT ${limitParam}
     `,
   };
@@ -762,6 +831,11 @@ export async function assertRelatedEntityBelongsToTenant(queryable, { organizati
 }
 
 function valueForAudit(row, field) {
+  if (String(field).startsWith("baseInfo.")) {
+    const key = String(field).slice("baseInfo.".length);
+    if (key === "status") return row?.shipment?.status ?? null;
+    return row?.baseInfo?.[key] ?? null;
+  }
   if (String(field).startsWith("customFields.")) {
     const key = String(field).slice("customFields.".length);
     return row?.kootaj?.customFields?.[key] ?? null;
@@ -784,6 +858,11 @@ function changedFields(before, after, updates) {
     const auditKey = `customFields.${key}`;
     if (valueForAudit(before, auditKey) !== valueForAudit(after, auditKey)) changed.push(auditKey);
   }
+  for (const field of BASE_INFO_PATCH_FIELDS) {
+    if (updates.baseInfo?.[field] === undefined) continue;
+    const auditKey = `baseInfo.${field}`;
+    if (valueForAudit(before, auditKey) !== valueForAudit(after, auditKey)) changed.push(auditKey);
+  }
   return changed;
 }
 
@@ -803,8 +882,15 @@ export async function updateDailyStatusRow(pool, {
 } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "updateDailyStatusRow");
   return withTransaction(pool, async (client) => {
+    const baseInfoUpdates = jsonObject(updates.baseInfo);
+    const hasBaseInfoUpdates = Object.keys(baseInfoUpdates).some((key) => baseInfoUpdates[key] !== undefined);
+    const kootajUpdates = { ...updates };
+    if (hasBaseInfoUpdates && hasOwn(baseInfoUpdates, "orderRegistrationNumber") && kootajUpdates.orderRegistrationNumber === undefined) {
+      kootajUpdates.orderRegistrationNumber = baseInfoUpdates.orderRegistrationNumber;
+    }
+
     const shipment = await client.query(
-      `SELECT id
+      `SELECT id, shipment_code, status, shipment_type_code, origin, destination, timer_started_at, timer_completed_at
        FROM shipments
        WHERE id = $1
          AND organization_id = $2
@@ -813,17 +899,18 @@ export async function updateDailyStatusRow(pool, {
       [shipmentId, scopedOrganizationId]
     );
     if (!shipment.rows[0]) return null;
+    const shipmentRow = shipment.rows[0];
 
-    if (updates.commercialCardId !== undefined && updates.commercialCardId !== null) {
+    if (kootajUpdates.commercialCardId !== undefined && kootajUpdates.commercialCardId !== null) {
       await assertRelatedEntityBelongsToTenant(client, {
         organizationId: scopedOrganizationId,
         entityType: "commercialCard",
-        entityId: updates.commercialCardId,
+        entityId: kootajUpdates.commercialCardId,
       });
     }
 
     let customFieldPatch = {};
-    if (updates.customFields !== undefined) {
+    if (kootajUpdates.customFields !== undefined) {
       const activeTemplate = await getActiveShipmentFormTemplateForShipment(client, {
         organizationId: scopedOrganizationId,
         shipmentId,
@@ -834,7 +921,7 @@ export async function updateDailyStatusRow(pool, {
         error.code = "SHIPMENT_FORM_TEMPLATE_NOT_FOUND";
         throw error;
       }
-      customFieldPatch = validateCustomFieldPatchForTemplate(activeTemplate.template, updates.customFields);
+      customFieldPatch = validateCustomFieldPatchForTemplate(activeTemplate.template, kootajUpdates.customFields);
     }
 
     const before = await getDailyStatusBoardRow(client, {
@@ -856,9 +943,9 @@ export async function updateDailyStatusRow(pool, {
     const values = [scopedOrganizationId, shipmentId];
     const writtenColumns = new Set();
     for (const [field, column] of Object.entries(KOOTAJ_COLUMN_BY_FIELD)) {
-      if (updates[field] === undefined) continue;
+      if (kootajUpdates[field] === undefined) continue;
       if (writtenColumns.has(column)) continue;
-      values.push(updates[field]);
+      values.push(kootajUpdates[field]);
       columns.push(`${column} = $${values.length}`);
       writtenColumns.add(column);
     }
@@ -878,6 +965,94 @@ export async function updateDailyStatusRow(pool, {
       values
     );
 
+    if (hasBaseInfoUpdates) {
+      const shipmentColumns = [];
+      const shipmentValues = [shipmentId, scopedOrganizationId];
+      const addShipmentColumn = (column, value) => {
+        shipmentValues.push(value);
+        shipmentColumns.push(`${column} = $${shipmentValues.length}`);
+      };
+
+      if (hasOwn(baseInfoUpdates, "status")) {
+        const nextStatus = normalizeShipmentStatus(baseInfoUpdates.status);
+        addShipmentColumn("status", nextStatus);
+        const wasTerminal = isShipmentTerminalStatus(shipmentRow.status);
+        const isTerminal = isShipmentTerminalStatus(nextStatus);
+        if (isTerminal && !wasTerminal && shipmentRow.timer_started_at && !shipmentRow.timer_completed_at) {
+          addShipmentColumn("timer_completed_at", new Date().toISOString());
+        } else if (!isTerminal && wasTerminal) {
+          addShipmentColumn("timer_completed_at", null);
+        }
+      }
+      if (hasOwn(baseInfoUpdates, "origin")) addShipmentColumn("origin", trimNullableText(baseInfoUpdates.origin));
+      if (hasOwn(baseInfoUpdates, "deliveryPort")) addShipmentColumn("destination", trimNullableText(baseInfoUpdates.deliveryPort));
+
+      if (shipmentColumns.length) {
+        await client.query(
+          `UPDATE shipments
+           SET ${shipmentColumns.join(", ")},
+               updated_at = NOW()
+           WHERE id = $1
+             AND organization_id = $2`,
+          shipmentValues
+        );
+      }
+
+      const baseSectionPatch = baseSectionPatchFromUpdates(baseInfoUpdates);
+      if (Object.keys(baseSectionPatch).length) {
+        const profile = await client.query(
+          `SELECT id, flow_code, sections_json
+           FROM shipment_v2_profiles
+           WHERE shipment_id = $1
+             AND organization_id = $2
+           LIMIT 1
+           FOR UPDATE`,
+          [shipmentId, scopedOrganizationId]
+        );
+
+        const existingProfile = profile.rows[0] || null;
+        const nextSections = existingProfile
+          ? jsonObject(existingProfile.sections_json)
+          : defaultV2SectionsForShipment({
+              ...shipmentRow,
+              origin: hasOwn(baseInfoUpdates, "origin") ? trimNullableText(baseInfoUpdates.origin) : shipmentRow.origin,
+              destination: hasOwn(baseInfoUpdates, "deliveryPort") ? trimNullableText(baseInfoUpdates.deliveryPort) : shipmentRow.destination,
+            });
+        nextSections.base = {
+          ...BASE_SECTION_DEFAULTS,
+          ...jsonObject(nextSections.base),
+          ...baseSectionPatch,
+        };
+
+        if (existingProfile) {
+          await client.query(
+            `UPDATE shipment_v2_profiles
+             SET sections_json = $3::jsonb,
+                 updated_by_id = $4,
+                 updated_at = NOW()
+             WHERE shipment_id = $1
+               AND organization_id = $2`,
+            [shipmentId, scopedOrganizationId, JSON.stringify(nextSections), actorUserId || null]
+          );
+        } else {
+          await client.query(
+            `INSERT INTO shipment_v2_profiles (
+               id, organization_id, shipment_id, flow_code, sections_json, created_by_id, updated_by_id, updated_at
+             )
+             VALUES ($1, $2, $3, $4, $5::jsonb, $6, $6, NOW())`,
+            [
+              crypto.randomUUID(),
+              scopedOrganizationId,
+              shipmentId,
+              String(shipmentRow.shipment_type_code || "").toUpperCase().includes("LENJ") ? "IMPORT_LANJ" : "IMPORT_SHIP",
+              JSON.stringify(nextSections),
+              actorUserId || null,
+            ]
+          );
+        }
+      }
+    }
+
     const after = await getDailyStatusBoardRow(client, {
       organizationId: scopedOrganizationId,
       shipmentId,
@@ -886,7 +1061,7 @@ export async function updateDailyStatusRow(pool, {
     return {
       before,
       after,
-      changedFields: changedFields(before, after, updates),
+      changedFields: changedFields(before, after, { ...kootajUpdates, baseInfo: baseInfoUpdates }),
     };
   });
 }

@@ -26,23 +26,13 @@ import { downloadBinaryFile } from "@/src/lib/downloads";
 import { shipmentV2Api } from "@/src/lib/shipmentV2Api";
 import { useAppDataStore } from "@/src/store/useMockStore";
 import { getDocumentTypeFilterValue, getDocumentTypeLabel } from "@/src/shared/document-types";
+import { shipmentStatusLabel } from "@/src/shared/shipment-statuses.js";
 import type { MalvaniProfile, ShipmentDocument, ShipmentV2ProfileResponse } from "@/src/types";
 import { toast } from "sonner";
 
 const EMPTY_SEARCH_TEXT = "برای شروع، شماره محموله یا شماره رهگیری را جستجو کنید";
 const NO_RESULTS_TEXT = "محموله‌ای پیدا نشد";
 const NO_DOCUMENTS_TEXT = "سندی برای این محموله ثبت نشده است";
-
-const statusLabels: Record<string, string> = {
-  PENDING: "در انتظار",
-  BOOKED: "رزرو شده",
-  IN_TRANSIT: "در مسیر",
-  ARRIVED: "رسیده",
-  CUSTOMS: "گمرک",
-  CLEARED: "ترخیص شده",
-  DELIVERED: "تحویل شده",
-  CLOSED: "بسته شده",
-};
 
 function formatDateTime(value?: string | null) {
   if (!value) return "";
@@ -95,7 +85,7 @@ function SearchResultButton({
           {result.trackingNumber}
         </span>
         <Badge variant="outline" className="shrink-0 rounded-md text-[10px] font-black">
-          {statusLabels[result.status] || result.status}
+          {shipmentStatusLabel(result.status)}
         </Badge>
       </div>
       <p className="mt-1 truncate text-[11px] font-bold text-muted-foreground">

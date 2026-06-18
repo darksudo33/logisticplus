@@ -184,7 +184,7 @@ async function seedSearchRows(client) {
   );
   await client.query(
     `INSERT INTO shipments (id, organization_id, shipment_code, customer_id, customer_name, status, priority)
-     VALUES ($1, $2, 'QA-OTHER-TENANT-SECRET', $3, 'Hidden Tenant', 'PENDING', 'normal')`,
+     VALUES ($1, $2, 'QA-OTHER-TENANT-SECRET', $3, 'Hidden Tenant', 'LOADING', 'normal')`,
     [IDS.otherShipment, IDS.otherOrg, IDS.otherCustomer]
   );
 

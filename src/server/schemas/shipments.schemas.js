@@ -5,6 +5,7 @@ import {
   SHIPMENT_TYPE_CODES,
   TRANSPORT_MODE_VALUES,
 } from "../../shared/shipment-form-fields.js";
+import { SHIPMENT_STATUS_VALUES } from "../../shared/shipment-statuses.js";
 import { z } from "../validation.js";
 
 const blankToUndefined = (value) =>
@@ -74,6 +75,11 @@ const isRealShipmentV2Date = (value) => {
   const stringValue = String(value);
   return stringValue.includes("/") ? isPlausibleShamsiDate(stringValue) : isRealIsoDate(stringValue);
 };
+const isRealDateTime = (value) => {
+  if (!value) return true;
+  const date = new Date(String(value));
+  return Number.isFinite(date.getTime());
+};
 
 const optionalId = z.preprocess(
   blankToUndefined,
@@ -132,7 +138,7 @@ export const SHIPMENT_V2_SECTION_KEYS = [
   "notes",
 ];
 
-const shipmentStatus = z.enum(["PENDING", "BOOKED", "IN_TRANSIT", "ARRIVED", "CUSTOMS", "CLEARED", "DELIVERED", "CLOSED"]);
+const shipmentStatus = z.enum(SHIPMENT_STATUS_VALUES);
 const shipmentDirection = z.enum(SHIPMENT_DIRECTION_VALUES);
 const shipmentTransportMode = z.enum(TRANSPORT_MODE_VALUES);
 const shipmentTypeCode = z.enum(SHIPMENT_TYPE_CODES);
@@ -180,6 +186,7 @@ const shipmentV2BaseSectionPayloadSchema = z.object({
   deliveryPort: shipmentV2Text(180),
   consigneeName: shipmentV2Text(180),
   lenjType: lenjType.optional().nullable(),
+  status: shipmentStatus.optional(),
   statusText: shipmentV2Text(240),
   currentStage: shipmentV2Text(2000),
   orderRegistrationNumber: shipmentV2NumericText(120),
@@ -310,6 +317,10 @@ const shipmentOperationalFieldsBaseSchema = z.object({
   estimatedDelivery: optionalTrimmedText(80),
   actualDelivery: optionalTrimmedText(80),
   freeTimeDays: optionalNonNegativeNumber,
+  timerDeadlineAt: z.preprocess(
+    blankToNull,
+    z.string().trim().refine(isRealDateTime, "Timer deadline must be a valid date/time.").nullable().optional()
+  ),
   notes: optionalTrimmedText(4000),
   customsDeclarationNumber: optionalTrimmedText(120),
   customsStatus: optionalTrimmedText(120),

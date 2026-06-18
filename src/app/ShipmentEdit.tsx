@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { shipmentApi } from "@/src/lib/shipmentApi";
 import { shipmentFormTemplatesApi, type ShipmentTypeOption } from "@/src/lib/shipmentFormTemplatesApi";
+import { SHIPMENT_STATUS_OPTIONS } from "@/src/shared/shipment-statuses.js";
 import { Shipment, ShipmentStatus } from "@/src/types";
 import { toast } from "sonner";
 
@@ -135,16 +136,7 @@ export function ShipmentEdit() {
     void saveShipment();
   };
 
-  const statusOptions: { value: ShipmentStatus; label: string }[] = [
-    { value: "PENDING", label: "در انتظار" },
-    { value: "BOOKED", label: "رزرو شده" },
-    { value: "IN_TRANSIT", label: "در حال حمل" },
-    { value: "ARRIVED", label: "رسیده به مقصد" },
-    { value: "CUSTOMS", label: "در انتظار گمرک" },
-    { value: "CLEARED", label: "ترخیص شده" },
-    { value: "DELIVERED", label: "تحویل داده شده" },
-    { value: "CLOSED", label: "بسته شده" },
-  ];
+  const statusOptions = SHIPMENT_STATUS_OPTIONS as { value: ShipmentStatus; label: string }[];
   const selectedType = shipmentTypes.find((type) => type.code === formData.shipmentTypeCode) || null;
 
   return (
