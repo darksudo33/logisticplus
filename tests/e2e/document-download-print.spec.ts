@@ -415,7 +415,7 @@ test.describe.serial("document download, public access, archive, and print/expor
     await documentsDownload.click();
     expect((await documentsDownloadEvent).suggestedFilename()).toBe("LS-9801 - ui-download.txt");
 
-    await page.goto("/shipments/s1/legacy");
+    await page.goto("/shipments/s1");
     const shipmentDownload = page.getByLabel(`Download ${title}`).first();
     await expect(shipmentDownload).toBeVisible();
     const shipmentDownloadEvent = page.waitForEvent("download");

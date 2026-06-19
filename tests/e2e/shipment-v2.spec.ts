@@ -137,7 +137,7 @@ test.describe.serial("shipment module v2", () => {
     await expect(page.getByTestId("shipment-v2-create-goods-total-pcs")).toContainText(persianNumber(3.5));
     await page.getByTestId("shipment-v2-submit").click();
 
-    await page.waitForURL(/\/shipments\/[^/]+\/v2$/);
+    await page.waitForURL(/\/shipments\/(?!new-v2$)[^/]+$/);
     const shipmentId = new URL(page.url()).pathname.split("/")[2];
     expect(shipmentId).toBeTruthy();
     await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
@@ -351,7 +351,8 @@ test.describe.serial("shipment module v2", () => {
     await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
 
     await page.goto(`/shipments/${shipmentId}/legacy`);
-    await expect(page.getByTestId("shipment-v2-detail-page")).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`/shipments/${shipmentId}$`));
+    await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
     await expect(page.locator("body")).toContainText(generatedShipmentCode);
     await expectNoHorizontalPageOverflow(page);
   });

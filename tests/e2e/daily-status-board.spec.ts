@@ -604,75 +604,23 @@ test.describe.serial("daily status board", () => {
       await expect(page.getByTestId("daily-status-desktop-base-current-stage-s1")).toContainText(editedDailyCurrentStage);
 
       await page.goto("/shipments/s1/legacy");
-      await expect(page.getByTestId("shipment-daily-status-panel")).toBeVisible();
-      await expect(page.getByTestId("shipment-daily-status-title")).toContainText("اطلاعات واردات، کوتاژ و ترخیص");
-      await expect(page.locator("body")).not.toContainText("فرآیند حمل و ترخیص");
-      await expect(page.getByTestId("shipment-daily-status-panel")).toContainText(editedCotageNumber);
-      await expect(page.getByTestId("shipment-daily-status-panel")).toContainText("Owner daily status UI card");
-      for (const sectionId of [
-        "base",
-        "order-registration",
-        "fx-bank",
-        "sea",
-        "containers",
-        "origin-docs",
-        "declaration",
-        "payments-release",
-        "commercial-card",
-        "internal-note",
-      ]) {
-        await expect(page.getByTestId(`shipment-daily-status-section-${sectionId}`)).toBeVisible();
-      }
-      await expectDetailsOpen(page.getByTestId("shipment-daily-status-section-base"), true);
-      await expectDetailsOpen(page.getByTestId("shipment-daily-status-section-order-registration"), false);
-      await expectDetailsOpen(page.getByTestId("shipment-daily-status-section-declaration"), false);
-      await expectDetailsOpen(page.getByTestId("shipment-daily-status-section-payments-release"), false);
-      await expect(page.getByTestId("shipment-daily-status-panel")).toContainText("هنوز ثبت نشده");
-
-      await expect(page.getByTestId("shipment-daily-status-form")).toBeVisible();
-      await expect(page.getByTestId("shipment-daily-status-progress")).toBeVisible();
-      await page.getByTestId("shipment-daily-status-field-search").fill("کوتاژ");
-      await expect(page.getByTestId("shipment-daily-status-search-result-cotageNumber")).toContainText("شماره کوتاژ");
+      await expect(page).toHaveURL(/\/shipments\/s1$/);
+      await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
+      await expect(page.getByTestId("shipment-daily-status-panel")).toHaveCount(0);
       const detailStartedAt = new Date(Date.now() - 1000).toISOString();
-      await page.getByTestId("shipment-daily-status-search-result-cotageNumber").click();
-      await expect(page.getByTestId("shipment-daily-status-quick-edit")).toBeVisible();
-      await page.getByTestId("shipment-daily-status-quick-cotageNumber-input").fill(detailCotageNumber);
-      const quickSaveResponse = page.waitForResponse((response) => (
-        response.url().includes("/api/shipments/s1/daily-status") && response.request().method() === "PATCH"
-      ));
-      await page.getByTestId("shipment-daily-status-quick-save").click();
-      expect((await quickSaveResponse).status()).toBeLessThan(400);
-      await expect(page.getByTestId("shipment-daily-status-cotageNumber-input")).toHaveValue(detailCotageNumber);
-
-      await page.getByTestId("shipment-daily-status-section-order-registration").locator("summary").click();
-      await page.getByTestId("shipment-daily-status-section-fx-bank").locator("summary").click();
-      await page.getByTestId("shipment-daily-status-section-payments-release").locator("summary").click();
-      await page.getByTestId("shipment-daily-status-section-commercial-card").locator("summary").click();
-      await page.getByTestId("shipment-daily-status-orderRegistrationNumber-input").fill(detailOrderRegistrationNumber);
-      await page.getByTestId("shipment-daily-status-bankTrackingNumber-input").fill(detailBankTrackingNumber);
-      await page.getByTestId("shipment-daily-status-truckPlate-input").fill(detailTruckPlate);
-      await page.getByTestId("shipment-daily-status-driverName-input").fill(detailDriverName);
-      await page.getByTestId("shipment-daily-status-exitDate-input").fill("2026-06-02");
-      await expect(page.getByTestId("shipment-daily-status-exitDate-input-jalali")).toContainText("نمایش شمسی");
-      await page.getByTestId("shipment-daily-status-customsPaymentStatus-select").click();
-      await page.locator('[data-slot="select-item"]').filter({ hasText: "تکمیل شده" }).click();
-      await page.getByTestId("shipment-daily-status-commercialCardId-select").click();
-      await page.locator('[data-slot="select-item"]').filter({ hasText: "Owner daily status detail card" }).first().click();
-
-      const detailSaveResponse = page.waitForResponse((response) => (
-        response.url().includes("/api/shipments/s1/daily-status") && response.request().method() === "PATCH"
-      ));
-      await page.getByTestId("shipment-daily-status-save").click();
-      expect((await detailSaveResponse).status()).toBeLessThan(400);
-      await expect(page.getByTestId("shipment-daily-status-cotageNumber-value")).toContainText(detailCotageNumber);
-      await expect(page.getByTestId("shipment-daily-status-commercialCardId-value")).toContainText("Owner daily status detail card");
-      await expect(page.getByTestId("shipment-daily-status-orderRegistrationNumber-value")).toContainText(detailOrderRegistrationNumber);
-      await expect(page.getByTestId("shipment-daily-status-bankTrackingNumber-value")).toContainText(detailBankTrackingNumber);
-      await expect(page.getByTestId("shipment-daily-status-customsPaymentStatus-value")).toContainText("تکمیل شده");
-      await expect(page.getByTestId("shipment-daily-status-truckPlate-value")).toContainText(detailTruckPlate);
-      await expect(page.getByTestId("shipment-daily-status-driverName-value")).toContainText(detailDriverName);
-      await expect(page.getByTestId("shipment-daily-status-panel")).toContainText("2026-06-02");
-
+      const detailSaveResponse = await owner.patch("/api/shipments/s1/daily-status", {
+        data: {
+          cotageNumber: detailCotageNumber,
+          orderRegistrationNumber: detailOrderRegistrationNumber,
+          bankTrackingNumber: detailBankTrackingNumber,
+          customsPaymentStatus: "completed",
+          commercialCardId: detailCardId,
+          truckPlate: detailTruckPlate,
+          driverName: detailDriverName,
+          exitDate: "2026-06-02",
+        },
+      });
+      expect(detailSaveResponse.status(), await detailSaveResponse.text()).toBeLessThan(400);
       const syncedRows = await readOk<any[]>(await owner.get("/api/daily-status?shipmentId=s1"));
       expect(syncedRows[0].kootaj.cotageNumber).toBe(detailCotageNumber);
       expect(syncedRows[0].kootaj.orderRegistrationNumber).toBe(detailOrderRegistrationNumber);

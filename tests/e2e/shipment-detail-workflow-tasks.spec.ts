@@ -76,14 +76,6 @@ async function createTenantOwner(owner: Awaited<ReturnType<typeof loginApi>>) {
   return { id: result.rows[0].id, email };
 }
 
-async function clearWorkflowStorage(page: any) {
-  await page.evaluate(() => {
-    Object.keys(window.localStorage)
-      .filter((key) => key.startsWith("logisticplus.workflow."))
-      .forEach((key) => window.localStorage.removeItem(key));
-  });
-}
-
 async function saveLegacyBootstrapRecords(owner: Awaited<ReturnType<typeof loginApi>>) {
   const bootstrapResponse = await owner.get("/api/users/u1/bootstrap");
   expect(bootstrapResponse.status(), await bootstrapResponse.text()).toBeLessThan(400);
@@ -318,38 +310,20 @@ test.describe.serial("shipment detail workflow and task controls", () => {
     }
   });
 
-  test("workflow sections collapse, expand, and persist per shipment", async ({ page }) => {
+  test("legacy shipment detail route redirects to canonical detail without legacy workflow controls", async ({ page }) => {
     await loginViaUi(page);
-    await clearWorkflowStorage(page);
-    await page.goto(`/shipments/${shipmentId}/legacy`);
-    await page.getByTestId("workflow-start").click();
-
-    await expect(page.getByTestId("workflow-phase-body-order_registration")).toBeVisible();
-    await expect(page.getByTestId("workflow-phase-body-fx_bank")).toHaveCount(0);
-
-    await page.getByTestId("workflow-phase-toggle-order_registration").click();
-    await expect(page.getByTestId("workflow-phase-body-order_registration")).toHaveCount(0);
-
-    await page.reload();
-    await expect(page.getByTestId("workflow-phase-body-order_registration")).toHaveCount(0);
-
-    await page.getByTestId("workflow-active-phase").click();
-    await expect(page.getByTestId("workflow-phase-body-order_registration")).toBeVisible();
-
-    await page.getByTestId("workflow-expand-all").click();
-    await expect(page.getByTestId("workflow-phase-body-fx_bank")).toBeVisible();
-
-    await page.getByTestId("workflow-collapse-all").click();
-    await expect(page.getByTestId("workflow-phase-body-order_registration")).toHaveCount(0);
-    await expect(page.getByTestId("workflow-phase-body-fx_bank")).toHaveCount(0);
+    await page.goto(`/shipments/${shipmentId}`);
+    await expect(page).toHaveURL(new RegExp(`/shipments/${shipmentId}$`));
+    await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
+    await expect(page.getByTestId("workflow-start")).toHaveCount(0);
+    await expect(page.getByTestId("workflow-expand-all")).toHaveCount(0);
+    await expect(page.getByTestId("shipment-daily-status-panel")).toHaveCount(0);
   });
 
-  test("workflow task assignment works from step and blocker dialogs", async ({ page }) => {
+  test("workflow task assignment records step and blocker relationships through APIs", async () => {
     const owner = await loginApi();
-    let assignee: { id: string; email: string };
-    let blocker: any;
     try {
-      assignee = await createOperationsUser(owner);
+      const assignee = await createOperationsUser(owner);
       const started = await readOk<any>(await owner.post(`/api/shipments/${shipmentId}/progress/start`));
       const blockerData = await readOk<any>(
         await owner.post(`/api/shipments/${shipmentId}/progress/blockers`, {
@@ -360,60 +334,47 @@ test.describe.serial("shipment detail workflow and task controls", () => {
           },
         })
       );
-      expect(started.workflow.id).toBeTruthy();
-      blocker = blockerData.blocker;
+
+      const stepTask = await readOk<any>(
+        await owner.post("/api/tasks", {
+          data: {
+            title: `E2E shipment detail workflow step task ${Date.now()}`,
+            status: "assigned",
+            priority: "HIGH",
+            shipmentId,
+            workflowInstanceId: started.workflow.id,
+            workflowStepCode: "001",
+            assignedToUserId: assignee.id,
+          },
+        })
+      );
+      expect(stepTask.workflowStepCode || stepTask.workflow_step_code).toBe("001");
+      expect(stepTask.assignedToUserId || stepTask.assigned_to_id).toBe(assignee.id);
+
+      const blockerTask = await readOk<any>(
+        await owner.post("/api/tasks", {
+          data: {
+            title: `E2E shipment detail workflow blocker task ${Date.now()}`,
+            status: "assigned",
+            priority: "HIGH",
+            shipmentId,
+            workflowInstanceId: started.workflow.id,
+            workflowBlockerId: blockerData.blocker.id,
+            blockerCode: "B01",
+            assignedToUserId: assignee.id,
+          },
+        })
+      );
+      expect(blockerTask.workflowBlockerId || blockerTask.workflow_blocker_id).toBe(blockerData.blocker.id);
+      expect(blockerTask.assignedToUserId || blockerTask.assigned_to_id).toBe(assignee.id);
+
+      const tasks = await readOk<any[]>(await owner.get(`/api/tasks?shipmentId=${encodeURIComponent(shipmentId)}`));
+      expect(tasks.some((task) => task.id === stepTask.id && task.workflowStepCode === "001")).toBe(true);
+      expect(tasks.some((task) => task.id === blockerTask.id && task.workflowBlockerId === blockerData.blocker.id)).toBe(true);
     } finally {
       await disposeContexts(owner);
     }
-
-    await loginViaUi(page);
-    await clearWorkflowStorage(page);
-    await page.goto(`/shipments/${shipmentId}/legacy`);
-    await expect(page.getByTestId("workflow-phase-body-order_registration")).toBeVisible();
-
-    await page.getByTestId("workflow-step-assign-001").click();
-    await expect(page.getByTestId("task-assign-assignee")).toBeEnabled();
-    await page.getByTestId("task-assign-assignee").selectOption(assignee!.id);
-    const assignmentDialog = page.getByRole("dialog");
-    await assignmentDialog.getByTestId("shamsi-date-time-trigger").click();
-    await expect(page.getByTestId("shamsi-date-time-panel")).toBeVisible();
-    await page.getByTestId("shamsi-date-day").first().click();
-    await page.getByTestId("shamsi-time-hour-select").selectOption("14");
-    await page.getByTestId("shamsi-time-minute-select").selectOption("30");
-    await expect(page.getByTestId("task-assign-due-date")).toHaveValue(/14:30/);
-    await page.getByTestId("task-assign-note").fill("E2E step task assignment.");
-    await page.getByTestId("task-assign-submit").click();
-
-    await expect.poll(async () => {
-      return page.evaluate(async (id) => {
-        const response = await fetch(`/api/tasks?shipmentId=${encodeURIComponent(id)}`);
-        const payload = await response.json();
-        return (payload.data || []).find((task: any) => task.workflowStepCode === "001" && task.assignedToUserId && String(task.dueDate || "").includes("14:30"));
-      }, shipmentId);
-    }).toBeTruthy();
-
-    await page.getByTestId(`workflow-blocker-assign-${blocker.id}`).click();
-    await expect(page.getByTestId("task-assign-assignee")).toBeEnabled();
-    await page.getByTestId("task-assign-assignee").selectOption(assignee!.id);
-    await page.getByTestId("task-assign-note").fill("E2E blocker task assignment.");
-    await page.getByTestId("task-assign-submit").click();
-
-    await expect.poll(async () => {
-      return page.evaluate(async ({ id, blockerId }) => {
-        const response = await fetch(`/api/tasks?shipmentId=${encodeURIComponent(id)}`);
-        const payload = await response.json();
-        return (payload.data || []).some((task: any) => task.workflowBlockerId === blockerId && task.status === "ASSIGNED");
-      }, { id: shipmentId, blockerId: blocker.id });
-    }).toBe(true);
-
-    const taskId = await page.evaluate(async (id) => {
-      const response = await fetch(`/api/tasks?shipmentId=${encodeURIComponent(id)}`);
-      const payload = await response.json();
-      return (payload.data || []).find((task: any) => task.workflowStepCode === "001")?.id || null;
-    }, shipmentId);
-    await expect(page.getByTestId(`related-shipment-task-${taskId}`)).toBeVisible();
   });
-
   test("workflow task permissions allow company assignment but block other-organization assignees", async () => {
     const owner = await loginApi();
     const contexts = [owner];
@@ -472,7 +433,24 @@ test.describe.serial("shipment detail workflow and task controls", () => {
     }
   });
 
-  test("shipment detail workflow buttons call progress APIs without server errors", async ({ page }) => {
+  test("canonical shipment detail loads after workflow progress API changes", async ({ page }) => {
+    const owner = await loginApi();
+    try {
+      await readOk<any>(await owner.post(`/api/shipments/${shipmentId}/progress/start`));
+      const completed = await readOk<any>(
+        await owner.patch(`/api/shipments/${shipmentId}/progress/current`, {
+          data: {
+            stepCode: "001",
+            status: "completed",
+            internalNote: "E2E verifies canonical detail survives workflow progress changes.",
+          },
+        })
+      );
+      expect(completed.workflow.currentStepCode).toBe("002");
+    } finally {
+      await disposeContexts(owner);
+    }
+
     const serverErrors: string[] = [];
     page.on("response", (response) => {
       const url = response.url();
@@ -482,40 +460,15 @@ test.describe.serial("shipment detail workflow and task controls", () => {
     });
 
     await loginViaUi(page);
-    await page.goto(`/shipments/${shipmentId}/legacy`);
-    await page.getByRole("button", { name: /شروع گردش کار/ }).click();
-    await expect.poll(async () => {
-      return page.evaluate(async (id) => {
-        const response = await fetch(`/api/shipments/${id}/progress`);
-        const payload = await response.json();
-        return payload.data?.workflow?.currentStepCode || null;
-      }, shipmentId);
-    }).toBe("001");
-
-    await page.getByRole("button", { name: /^تکمیل$/ }).first().click();
-    await expect(page.getByRole("dialog")).toContainText("تکمیل مرحله");
-    await page.getByRole("button", { name: "ذخیره" }).click();
-
-    await expect.poll(async () => {
-      return page.evaluate(async (id) => {
-        const response = await fetch(`/api/shipments/${id}/progress`);
-        const payload = await response.json();
-        const step001 = payload.data?.steps?.find((step: any) => step.code === "001");
-        const step002 = payload.data?.steps?.find((step: any) => step.code === "002");
-        return {
-          current: payload.data?.workflow?.currentStepCode,
-          first: step001?.status,
-          second: step002?.status,
-        };
-      }, shipmentId);
-    }).toEqual({ current: "002", first: "completed", second: "active" });
-
+    await page.goto(`/shipments/${shipmentId}`);
+    await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
+    await expect(page.getByTestId("workflow-start")).toHaveCount(0);
     expect(serverErrors).toEqual([]);
   });
-
   test("shipment detail opens the canonical shipment chat and links to full chat", async ({ page }) => {
     const owner = await loginApi();
     const ownerAuth = await readOk<any>(await owner.get("/api/auth/me"));
+    await readOk<any>(await owner.post(`/api/shipments/${shipmentId}/v2-profile/init`));
     const thread = await readOk<{ id: string }>(await owner.get(`/api/shipments/${shipmentId}/chat-thread`));
     await insertShipmentChatHistory({
       organizationId: ownerAuth.user.organizationId,
@@ -536,7 +489,7 @@ test.describe.serial("shipment detail workflow and task controls", () => {
     });
 
     await loginViaUi(page);
-    await page.goto(`/shipments/${shipmentId}/legacy`);
+    await page.goto(`/shipments/${shipmentId}`);
 
     await expect(page.getByTestId("shipment-chat-panel")).toBeVisible();
     await expect(page.getByTestId("shipment-documents-panel")).toBeVisible();
@@ -548,7 +501,7 @@ test.describe.serial("shipment detail workflow and task controls", () => {
         documentsTop: documents.getBoundingClientRect().top,
       };
     });
-    expect(panelOrder.chatTop).toBeLessThan(panelOrder.documentsTop);
+    expect(panelOrder.documentsTop).toBeLessThan(panelOrder.chatTop);
     await expect(page.getByTestId("shipment-chat-message-bubble")).toHaveCount(20);
     await expect(page.getByTestId("shipment-chat-message-bubble").filter({ hasText: "shipment compact message 44" })).toBeVisible();
     await expect(page.getByTestId("shipment-chat-message-bubble").filter({ hasText: "shipment compact message 0" })).toHaveCount(0);
@@ -606,15 +559,14 @@ test.describe.serial("shipment detail workflow and task controls", () => {
     await expect(page).toHaveURL(new RegExp(`/chat\\?threadId=${threadId}$`));
   });
 
-  test("shipment detail task status and customer access buttons work from the UI", async ({ page }) => {
+  test("task status and customer access APIs remain available after legacy detail removal", async () => {
     const owner = await loginApi();
-    let task: any = null;
     try {
-      task = await readOk<any>(
+      const task = await readOk<any>(
         await owner.post("/api/tasks", {
           data: {
             title: `E2E shipment detail workflow related task ${Date.now()}`,
-            description: "Created for shipment detail related-task button coverage.",
+            description: "Created for shipment detail related-task API coverage.",
             status: "assigned",
             priority: "HIGH",
             shipmentId,
@@ -622,84 +574,47 @@ test.describe.serial("shipment detail workflow and task controls", () => {
           },
         })
       );
+
+      const inProgress = await readOk<any>(
+        await owner.patch(`/api/tasks/${task.id}/status`, {
+          data: { status: "in_progress", note: "E2E start through canonical API." },
+        })
+      );
+      expect(inProgress.status).toBe("IN_PROGRESS");
+
+      const done = await readOk<any>(
+        await owner.patch(`/api/tasks/${task.id}/status`, {
+          data: { status: "done", note: "E2E complete through canonical API." },
+        })
+      );
+      expect(done.status).toBe("DONE");
+      expect(done.completedByUserId || done.completed_by_user_id).toBe("u1");
+
+      const generated = await readOk<any>(await owner.post(`/api/shipments/${shipmentId}/customer-access/generate`));
+      expect(generated.url).toContain("/track/");
+      expect(generated.enabled).toBe(true);
+      expect(generated.hasToken).toBe(true);
+
+      const publicLabel = `E2E shipment detail public ${Date.now()}`;
+      const publicStatus = await readOk<any>(
+        await owner.patch(`/api/shipments/${shipmentId}/public-status`, {
+          data: {
+            publicLabel,
+            publicDescription: "Customer-safe status update from shipment detail QA.",
+            isCustomerVisible: true,
+          },
+        })
+      );
+      expect(publicStatus.public_label || publicStatus.publicLabel || publicStatus.label).toBe(publicLabel);
+
+      const reset = await readOk<any>(await owner.post(`/api/shipments/${shipmentId}/customer-access/reset`));
+      expect(reset.url).toContain("/track/");
+      expect(reset.token).not.toBe(generated.token);
+
+      const disabled = await readOk<any>(await owner.post(`/api/shipments/${shipmentId}/customer-access/disable`));
+      expect(disabled.enabled).toBe(false);
     } finally {
       await disposeContexts(owner);
     }
-
-    const serverErrors: string[] = [];
-    page.on("response", (response) => {
-      const url = response.url();
-      if ((url.includes("/api/shipments/") || url.includes("/api/tasks")) && response.status() >= 500) {
-        serverErrors.push(`${response.status()} ${url}`);
-      }
-    });
-
-    await loginViaUi(page);
-    await page.goto(`/shipments/${shipmentId}/legacy`);
-
-    await expect(page.getByTestId(`related-shipment-task-${task.id}`)).toBeVisible();
-    await page.getByTestId(`related-task-start-${task.id}`).click();
-    await expect.poll(async () => {
-      return page.evaluate(async (taskId) => {
-        const response = await fetch(`/api/tasks/${taskId}`);
-        const payload = await response.json();
-        return payload.data?.status || null;
-      }, task.id);
-    }).toBe("IN_PROGRESS");
-
-    await page.getByTestId(`related-task-done-${task.id}`).click();
-    await expect.poll(async () => {
-      return page.evaluate(async (taskId) => {
-        const response = await fetch(`/api/tasks/${taskId}`);
-        const payload = await response.json();
-        return {
-          status: payload.data?.status || null,
-          completedBy: payload.data?.completedByUserId || payload.data?.completed_by_user_id || null,
-        };
-      }, task.id);
-    }).toEqual({ status: "DONE", completedBy: "u1" });
-
-    await expect(page.getByTestId("customer-access-generate")).toBeEnabled();
-    await page.getByTestId("customer-access-generate").click();
-    await expect.poll(async () => {
-      return page.evaluate(async (id) => {
-        const response = await fetch(`/api/shipments/${id}/customer-access`);
-        const payload = await response.json();
-        return {
-          enabled: Boolean(payload.data?.enabled),
-          hasToken: Boolean(payload.data?.hasToken),
-        };
-      }, shipmentId);
-    }).toEqual({ enabled: true, hasToken: true });
-    const generatedLink = await page.getByTestId("customer-access-link").inputValue();
-    expect(generatedLink).toContain("/track/");
-
-    const publicLabel = `E2E shipment detail public ${Date.now()}`;
-    await page.getByTestId("public-status-label").fill(publicLabel);
-    await page.getByTestId("public-status-description").fill("Customer-safe status update from shipment detail QA.");
-    await page.getByTestId("public-status-save").click();
-    await expect.poll(async () => {
-      return page.evaluate(async (id) => {
-        const response = await fetch(`/api/shipments/${id}/customer-access`);
-        const payload = await response.json();
-        return payload.data?.publicStatus?.label || null;
-      }, shipmentId);
-    }).toBe(publicLabel);
-
-    await expect(page.getByTestId("customer-access-reset")).toBeEnabled();
-    await page.getByTestId("customer-access-reset").click();
-    await expect.poll(async () => page.getByTestId("customer-access-link").inputValue()).not.toBe(generatedLink);
-
-    await expect(page.getByTestId("customer-access-disable")).toBeEnabled();
-    await page.getByTestId("customer-access-disable").click();
-    await expect.poll(async () => {
-      return page.evaluate(async (id) => {
-        const response = await fetch(`/api/shipments/${id}/customer-access`);
-        const payload = await response.json();
-        return Boolean(payload.data?.enabled);
-      }, shipmentId);
-    }).toBe(false);
-
-    expect(serverErrors).toEqual([]);
   });
 });
