@@ -46,3 +46,9 @@ export const dailyStatusApi = {
     }
   },
 };
+
+export const kootajBoardApi = {
+  list(filters: DailyStatusListFilters = {}) {
+    return apiGet<DailyStatusBoardRow[]>(`/api/kootaj-board${dailyStatusQuery(filters)}`);
+  },
+};
