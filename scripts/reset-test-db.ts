@@ -67,7 +67,6 @@ function runTsxScript(scriptPath: string) {
     DOCUMENT_STORAGE_DIR: testDocumentStorageDir,
     POSTGRES_ADMIN_URL: adminUrl,
     SEED_USER_PASSWORD: testSeedPassword,
-    ZARINPAL_SANDBOX: "true",
   };
 
   return new Promise<void>((resolve, reject) => {

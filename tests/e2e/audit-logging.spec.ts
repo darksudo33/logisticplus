@@ -117,7 +117,6 @@ test.describe.serial("append-only audit logging", () => {
       "cookie",
       "authorization",
       "otp",
-      "smsCode",
       "secret",
       "apiKey",
       "providerResponse",
@@ -161,7 +160,6 @@ test.describe.serial("append-only audit logging", () => {
     const startedAt = new Date(Date.now() - 1000).toISOString();
     const owner = await apiContext();
     const publicContext = await apiContext();
-    const smsContext = await apiContext();
     let expiredContext: Awaited<ReturnType<typeof contextWithSessionToken>> | null = null;
 
     try {
@@ -223,21 +221,12 @@ test.describe.serial("append-only audit logging", () => {
       await expectUnavailable(await publicContext.get(publicDocument.downloadUrl));
 
       const tenantInfo = await createTenantOwner(owner);
-      const smsPhone = `0936${String(Date.now()).slice(-7)}`;
       await readOk(await owner.patch(
         `/api/admin/organizations/${encodeURIComponent(tenantInfo.organizationId)}/users/${encodeURIComponent(tenantInfo.ownerUserId)}`,
-        { data: { phone: smsPhone } }
+        { data: { phone: `0936${String(Date.now()).slice(-7)}` } }
       ));
       await readOk(await owner.post(`/api/admin/users/${encodeURIComponent(tenantInfo.ownerUserId)}/platform-admin/grant`));
       await readOk(await owner.post(`/api/admin/users/${encodeURIComponent(tenantInfo.ownerUserId)}/platform-admin/revoke`));
-
-      const unavailableSmsCode = "000000";
-      await expectUnavailable(await smsContext.post("/api/auth/phone/request-code", {
-        data: { phone: smsPhone },
-      }));
-      await expectUnavailable(await smsContext.post("/api/auth/phone/verify", {
-        data: { phone: smsPhone, code: unavailableSmsCode },
-      }));
 
       await readOk(await owner.post("/api/auth/logout"));
 
@@ -268,7 +257,6 @@ test.describe.serial("append-only audit logging", () => {
       const serialized = JSON.stringify(rows);
       for (const forbidden of [
         OWNER_PASSWORD,
-        unavailableSmsCode,
         sessionToken,
         sessionTokenHash,
         resetAccess.token,
@@ -284,7 +272,7 @@ test.describe.serial("append-only audit logging", () => {
 
       await expect(dbQuery("UPDATE audit_logs SET event_type = 'tampered' WHERE id = $1", [rows[0].id])).rejects.toThrow();
     } finally {
-      await disposeContexts(...([owner, publicContext, smsContext, expiredContext].filter(Boolean) as any));
+      await disposeContexts(...([owner, publicContext, expiredContext].filter(Boolean) as any));
     }
   });
 

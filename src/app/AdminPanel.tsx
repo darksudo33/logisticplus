@@ -46,7 +46,6 @@ const moduleLabels: Record<string, string> = {
   compliance: "جلسات اداری",
   quotations: "استعلام قیمت",
   archive: "آرشیو",
-  smsNotifications: "SMS هشدارها",
 };
 
 const limitLabels: Record<string, string> = {

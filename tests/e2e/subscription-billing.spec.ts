@@ -1,24 +1,24 @@
 import { expect, test } from "@playwright/test";
 import { USER_PASSWORD, apiContext, disposeContexts, expectUnavailable, loginApi, readOk, uniqueEmail } from "./helpers";
-import { pricingPlans } from "../../src/lib/pricing";
+import { subscriptionPlans } from "../../src/lib/subscriptionPlans";
 
-const expectedPlans = Object.fromEntries(pricingPlans.map((plan) => [plan.id, plan])) as Record<string, (typeof pricingPlans)[number]>;
+const expectedPlans = Object.fromEntries(subscriptionPlans.map((plan) => [plan.id, plan])) as Record<string, (typeof subscriptionPlans)[number]>;
 
-test("retired pricing and public signup pages render login instead of self-serve checkout", async ({ page }) => {
-  for (const route of ["/pricing", "/signup", "/signup?plan=business", "/signup/pending"]) {
+test("retired public signup pages render login instead of self-serve checkout", async ({ page }) => {
+  for (const route of ["/signup", "/signup?plan=business", "/signup/pending"]) {
     await page.goto(route);
     await expect(page).toHaveURL(/\/login$/);
     await expect(page.locator('input[type="email"]')).toBeVisible();
     await expect(page.locator('a[href*="/signup?plan="]')).toHaveCount(0);
 
     const body = await page.locator("body").innerText();
-    for (const plan of pricingPlans) {
+    for (const plan of subscriptionPlans) {
       expect(body).not.toContain(plan.name);
     }
   }
 });
 
-test("/api/plans returns current plan prices, limits, and feature flags for admin signup", async () => {
+test("/api/plans returns current subscription plans for admin signup", async () => {
   const context = await apiContext();
   const plans = await readOk<any[]>(await context.get("/api/plans"));
 
@@ -31,13 +31,12 @@ test("/api/plans returns current plan prices, limits, and feature flags for admi
     expect(plan.limits.users).toBe(expected.limits.users);
     expect(plan.limits.monthlyShipments).toBe(expected.limits.monthlyShipments);
     expect(plan.limits.storageMb).toBe(expected.limits.storageMb);
-    expect(plan.features.smsNotifications).toBe(expected.backendFeatures.smsNotifications);
   }
 
   await disposeContexts(context);
 });
 
-test("public signup and public payment handoff APIs stay unavailable", async () => {
+test("public signup API stays unavailable", async () => {
   const context = await apiContext();
 
   await expectUnavailable(await context.post("/api/signup", {
@@ -51,9 +50,6 @@ test("public signup and public payment handoff APIs stay unavailable", async () 
       contactPhone: "09120000000",
     },
   }));
-  await expectUnavailable(await context.post("/api/billing/payments/disabled-payment/start"));
-  await expectUnavailable(await context.get("/api/billing/zarinpal/callback?Authority=disabled-public-release&Status=OK"));
-
   await disposeContexts(context);
 });
 

@@ -20,7 +20,6 @@ const counts = {
   chequesPerTenant: intEnv("QA_SEED_CHEQUES_PER_TENANT", 160),
   meetingsPerTenant: intEnv("QA_SEED_MEETINGS_PER_TENANT", 120),
   quotesPerTenant: intEnv("QA_SEED_QUOTES_PER_TENANT", 120),
-  smsPerTenant: intEnv("QA_SEED_SMS_PER_TENANT", 260),
   archiveRecordsPerTenant: intEnv("QA_SEED_ARCHIVE_RECORDS_PER_TENANT", 80),
   sessionsPerTenant: intEnv("QA_SEED_SESSIONS_PER_TENANT", 12),
 };
@@ -87,9 +86,7 @@ async function cleanupPrefix(client) {
   for (const sql of [
     "DELETE FROM user_records WHERE item_id LIKE $1 OR data::text LIKE $2",
     "DELETE FROM app_sessions WHERE id LIKE $1 OR user_id LIKE $1",
-    "DELETE FROM login_sms_challenges WHERE id LIKE $1",
     "DELETE FROM rate_limit_buckets WHERE key LIKE $1 OR key LIKE $2",
-    "DELETE FROM sms_deliveries WHERE event_key LIKE $1 OR message LIKE $2",
     "DELETE FROM notifications WHERE id LIKE $1 OR title LIKE $2 OR body LIKE $2",
     "DELETE FROM change_logs WHERE entity_id LIKE $1 OR summary LIKE $2 OR before_json::text LIKE $2 OR after_json::text LIKE $2",
     "DELETE FROM document_versions WHERE document_id LIKE $1 OR storage_key LIKE $2",
@@ -236,12 +233,10 @@ async function main() {
     const requiredDocs = [];
     const quotes = [];
     const notifications = [];
-    const sms = [];
     const documentVersions = [];
     const statusEvents = [];
     const archiveRecords = [];
     const sessions = [];
-    const loginChallenges = [];
     const rateLimitBuckets = [];
     const changeLogs = [];
 
@@ -438,25 +433,6 @@ async function main() {
         });
       }
 
-      for (let i = 0; i < counts.smsPerTenant; i += 1) {
-        sms.push({
-          id: id("sms", tenantIndex, i),
-          organization_id: tenant.organizationId,
-          user_id: tenant.userId,
-          recipient_type: "user",
-          recipient_name: tenant.name,
-          recipient_phone: `0912${String(i).padStart(7, "0")}`,
-          message: `${prefix} SMS delivery ${tenantIndex}-${i}`,
-          status: ["queued", "sent", "skipped", "failed"][i % 4],
-          provider: "smsir",
-          source_type: "qa_load",
-          source_id: id("sms-source", tenantIndex, i),
-          event_key: id("sms-event", tenantIndex, i),
-          provider_response: JSON.stringify({ qaPrefix: prefix }),
-          next_attempt_at: new Date(),
-        });
-      }
-
       for (let i = 0; i < counts.archiveRecordsPerTenant; i += 1) {
         const kinds = [
           { entity_type: "customer", entity_id: id("customer", tenantIndex, i % Math.max(1, counts.customersPerTenant)) },
@@ -489,17 +465,6 @@ async function main() {
           user_id: tenant.userId,
           token_hash: crypto.createHash("sha256").update(id("session-token", tenantIndex, i)).digest("hex"),
           expires_at: new Date(Date.now() + (i + 1) * 60 * 60 * 1000),
-        });
-        loginChallenges.push({
-          id: id("smschallenge", tenantIndex, i),
-          user_id: tenant.userId,
-          phone: `0913${String(tenantIndex).padStart(2, "0")}${String(i).padStart(5, "0")}`.slice(0, 11),
-          code_hash: crypto.createHash("sha256").update(id("sms-code", tenantIndex, i)).digest("hex"),
-          code_salt: id("salt", tenantIndex, i),
-          attempt_count: i % 5,
-          expires_at: new Date(Date.now() + 5 * 60 * 1000),
-          ip_address: "127.0.0.1",
-          user_agent: `${prefix} seed`,
         });
         rateLimitBuckets.push({
           key: `qa:${prefix}:${tenantIndex}:${i}`,
@@ -537,9 +502,7 @@ async function main() {
     await insertRows(client, "quotations", Object.keys(quotes[0] || {}), quotes);
     await insertRows(client, "archive_records", Object.keys(archiveRecords[0] || {}), archiveRecords);
     await insertRows(client, "notifications", Object.keys(notifications[0] || {}), notifications);
-    await insertRows(client, "sms_deliveries", Object.keys(sms[0] || {}), sms);
     await insertRows(client, "app_sessions", Object.keys(sessions[0] || {}), sessions);
-    await insertRows(client, "login_sms_challenges", Object.keys(loginChallenges[0] || {}), loginChallenges);
     await insertRows(client, "rate_limit_buckets", Object.keys(rateLimitBuckets[0] || {}), rateLimitBuckets, "(key) DO UPDATE SET count = EXCLUDED.count, reset_at = EXCLUDED.reset_at, updated_at = NOW()");
     await insertRows(client, "change_logs", Object.keys(changeLogs[0] || {}), changeLogs);
 
@@ -648,9 +611,7 @@ async function main() {
       quotations: quotes.length,
       archiveRecords: archiveRecords.length,
       notifications: notifications.length,
-      smsDeliveries: sms.length,
       sessions: sessions.length,
-      loginSmsChallenges: loginChallenges.length,
       rateLimitBuckets: rateLimitBuckets.length,
       changeLogs: changeLogs.length,
       userRecords: customers.length + shipments.length + tasks.length + documents.length + cheques.length + meetings.length + quotes.length,

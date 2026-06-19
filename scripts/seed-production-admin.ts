@@ -548,7 +548,6 @@ export async function runProductionAdminBootstrap({
         plans: coreCatalog.plans,
         roles: coreCatalog.roles,
         permissions: coreCatalog.permissions.length,
-        smsTemplates: coreCatalog.smsTemplates.length,
       },
       user: {
         id: userResult.user.id,

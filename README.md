@@ -9,7 +9,7 @@ The current repository uses:
 - Express through [server.js](/C:/Users/Ahmadreza/Documents/logisticplus/server.js), which is a compatibility bridge into [server/src/server.js](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/server.js) for API startup and production static serving.
 - PostgreSQL through the raw `pg` pool plus module repositories under [server/src/modules](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/modules). [src/server/db.js](/C:/Users/Ahmadreza/Documents/logisticplus/src/server/db.js) remains as the legacy aggregate data-access layer for APIs and scripts that still need it.
 - SQL schema setup through [db/schema.sql](/C:/Users/Ahmadreza/Documents/logisticplus/db/schema.sql).
-- Password login with platform-admin controlled company/user provisioning. Public signup, Zarinpal payment handoff, contact, pricing, landing, and SMS login/worker surfaces are not active in the public-release app.
+- Password login with platform-admin controlled company/user provisioning. Public self-serve checkout, contact intake, marketing plan pages, and phone-code worker surfaces are not active in the public-release app.
 
 Do not assume this project is Next.js or Prisma-based unless the stack is deliberately changed later.
 
@@ -35,7 +35,7 @@ The backend is module-first under [server/src](/C:/Users/Ahmadreza/Documents/log
 
 The backend intentionally stays on runtime-safe `.js` files for now. `npm start` runs `node server.js`, and Liara can keep using the standard Node.js startup path without a separate server compile step.
 
-Some legacy support code still lives under [src/server](/C:/Users/Ahmadreza/Documents/logisticplus/src/server), including AI, SMS, document storage, public tracking, request schemas, shipment workflow/template helpers, cheque/compliance helpers, and the aggregate [src/server/db.js](/C:/Users/Ahmadreza/Documents/logisticplus/src/server/db.js). Do not reintroduce route or repository compatibility wrappers there for modules that already live under [server/src/modules](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/modules).
+Some legacy support code still lives under [src/server](/C:/Users/Ahmadreza/Documents/logisticplus/src/server), including AI, document storage, public tracking, request schemas, shipment workflow/template helpers, cheque/compliance helpers, and the aggregate [src/server/db.js](/C:/Users/Ahmadreza/Documents/logisticplus/src/server/db.js). Do not reintroduce route or repository compatibility wrappers there for modules that already live under [server/src/modules](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/modules).
 
 ## Prerequisites
 
@@ -296,7 +296,7 @@ The setup script refuses to reset a database unless the `TEST_DATABASE_URL` data
 
 If Playwright cannot download its bundled browser in your region, install Chrome or Edge locally. The config auto-detects common Windows Chrome/Edge paths, or you can set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`.
 
-As of 2026-06-12, the public-release cleanup requires a focused Playwright refresh for old public funnel, SMS, and Zarinpal assertions. Do not treat the previous public signup/pricing/SMS/Zarinpal coverage statement as current after this cleanup.
+As of 2026-06-19, the public-release cleanup removed stale Playwright assertions for retired public funnel and checkout surfaces. Do not treat older public self-serve coverage notes as current after this cleanup.
 
 The current verification commands are:
 

@@ -1010,20 +1010,11 @@ async function startServer() {
   [
     "/api/contact-requests",
     "/api/signup",
-    "/api/billing/payments/:id/start",
-    "/api/billing/zarinpal/callback",
-    "/api/auth/phone/request-code",
-    "/api/auth/phone/verify",
     "/api/admin/signup-requests",
     "/api/admin/signup-requests/:id/review",
     "/api/admin/signup-requests/:id",
     "/api/admin/contact-requests",
     "/api/admin/contact-requests/:id/resolve",
-    "/api/admin/sms-deliveries",
-    "/api/admin/sms-analytics",
-    "/api/admin/sms-templates",
-    "/api/admin/sms-templates/:key",
-    "/api/admin/sms-deliveries/run-worker",
   ].forEach((route) => app.all(route, unavailablePublicReleaseEndpoint));
 
   app.get("/api/plans", async (_req, res) => {

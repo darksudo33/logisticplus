@@ -94,10 +94,8 @@ function AppRoutes() {
         <Route path="/" element={<PublicLoginEntry />} />
         <Route path="/login" element={<PublicLoginEntry />} />
         <Route path="/contact" element={<Navigate to="/login" replace />} />
-        <Route path="/pricing" element={<Navigate to="/login" replace />} />
         <Route path="/signup" element={<Navigate to="/login" replace />} />
         <Route path="/signup/pending" element={<Navigate to="/login" replace />} />
-        <Route path="/billing/callback/zarinpal" element={<Navigate to="/login" replace />} />
         <Route path="/track/search" element={<Navigate to="/login" replace />} />
         <Route path="/track/:token" element={<PublicTrack />} />
 

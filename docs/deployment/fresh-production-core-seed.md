@@ -69,13 +69,11 @@ Permissions:
 Other catalog rows:
 
 - `role_permissions` for tenant roles.
-- Default `sms_templates`.
 - First organization subscription when the initial organization can be found.
 
 ## Safety Rules
 
 - No role receives `platform.admin`; it must stay a direct `user_permissions` grant.
-- Existing SMS template bodies and enabled flags are not overwritten.
 - Existing user passwords are not touched.
 - No customers, shipments, documents, invoices, payment authorities, archive records, legacy imports, or demo company data are created.
 - The script does not write object-storage files.
@@ -87,7 +85,7 @@ Other catalog rows:
 - Fresh migrations plus core seed succeed on a blank database.
 - `--dry-run` rolls back.
 - Repeated core seed runs are idempotent.
-- Required plans, roles, permissions, role-permissions, and SMS templates exist.
+- Required plans, roles, permissions, and role-permissions exist.
 - `platform.admin` is not granted through tenant roles.
 - Admin bootstrap can run after core seed.
 - The first admin can create a customer and shipment.

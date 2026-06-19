@@ -313,7 +313,6 @@ Scope:
   - platform-admin exceptions
   - session revocation
   - permission checks
-  - SMS login behavior
 
 Expected result:
 

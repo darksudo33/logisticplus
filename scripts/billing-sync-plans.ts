@@ -1,7 +1,7 @@
 // @ts-nocheck
 import "dotenv/config";
 import pg from "pg";
-import { pricingPlans } from "../src/lib/pricing.ts";
+import { subscriptionPlans } from "../src/lib/subscriptionPlans.ts";
 
 const { Client } = pg;
 
@@ -51,14 +51,14 @@ async function readCurrentPlans(client) {
      FROM subscription_plans
      WHERE id = ANY($1::text[])
      ORDER BY sort_order ASC, id ASC`,
-    [pricingPlans.map((plan) => plan.id)]
+    [subscriptionPlans.map((plan) => plan.id)]
   );
   return result.rows;
 }
 
 async function main() {
   assertGuards();
-  const rows = pricingPlans.map(planRow);
+  const rows = subscriptionPlans.map(planRow);
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
 

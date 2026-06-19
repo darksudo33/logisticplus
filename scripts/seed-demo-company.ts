@@ -1289,7 +1289,6 @@ async function cleanupDemoTenant(client: any) {
   const userEmails = demoUsers.map((user) => user.email.toLowerCase());
 
   await client.query("DELETE FROM app_sessions WHERE user_id = ANY($1::text[])", [userIds]);
-  await client.query("DELETE FROM login_sms_challenges WHERE user_id = ANY($1::text[])", [userIds]);
   await client.query(
     "DELETE FROM rate_limit_buckets WHERE lower(key) LIKE '%parsrah%' OR lower(key) = ANY($1::text[])",
     [userEmails]
@@ -1303,10 +1302,6 @@ async function cleanupDemoTenant(client: any) {
   await client.query("DELETE FROM billing_invoices WHERE organization_id = $1", [DEMO_ORGANIZATION.id]);
   await client.query("DELETE FROM billing_payments WHERE organization_id = $1", [DEMO_ORGANIZATION.id]);
   await client.query("DELETE FROM subscription_events WHERE organization_id = $1", [DEMO_ORGANIZATION.id]);
-  await client.query(
-    "DELETE FROM sms_deliveries WHERE organization_id = $1 OR user_id = ANY($2::text[])",
-    [DEMO_ORGANIZATION.id, userIds]
-  );
   await client.query(
     "DELETE FROM notifications WHERE organization_id = $1 OR user_id = ANY($2::text[])",
     [DEMO_ORGANIZATION.id, userIds]
@@ -1392,7 +1387,7 @@ async function ensureRolesAndPlans(client: any) {
        99000000,
        990000000,
        '{"users":30,"monthlyShipments":0,"storageMb":51200}'::jsonb,
-       '{"chat":true,"cheques":true,"compliance":true,"quotations":true,"archive":true,"smsNotifications":true}'::jsonb,
+       '{"chat":true,"cheques":true,"compliance":true,"quotations":true,"archive":true}'::jsonb,
        3,
        NOW()
      )

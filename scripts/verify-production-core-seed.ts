@@ -10,8 +10,7 @@ import {
 } from "./seed-production-core.ts";
 import { runProductionAdminBootstrap } from "./seed-production-admin.ts";
 import { runFreshProductionVerification } from "./verify-fresh-production.ts";
-import { pricingPlans } from "../src/lib/pricing.ts";
-import { DEFAULT_SMS_TEMPLATES } from "../src/server/sms-templates.js";
+import { subscriptionPlans } from "../src/lib/subscriptionPlans.ts";
 import { SYSTEM_CUSTOMS_STEP_CATALOG } from "../src/shared/shipment-workflow-step-catalog.js";
 
 const { Client } = pg;
@@ -144,7 +143,6 @@ async function tableCounts(client: any) {
        (SELECT COUNT(*)::int FROM permissions) AS permissions,
        (SELECT COUNT(*)::int FROM roles) AS roles,
        (SELECT COUNT(*)::int FROM role_permissions) AS role_permissions,
-       (SELECT COUNT(*)::int FROM sms_templates) AS sms_templates,
        (SELECT COUNT(*)::int FROM shipment_workflow_step_catalog WHERE organization_id IS NULL AND is_system = TRUE AND category = 'customs_import') AS workflow_catalog_steps,
        (SELECT COUNT(*)::int FROM shipment_workflow_templates WHERE organization_id IS NULL AND is_system = TRUE AND archived_at IS NULL) AS workflow_templates,
        (SELECT COUNT(*)::int FROM shipment_workflow_template_steps WHERE template_id = 'swt-ir-import-customs-v1' AND catalog_step_id IS NOT NULL AND archived_at IS NULL) AS import_customs_template_steps,
@@ -164,7 +162,6 @@ async function loadState() {
     const planResult = await client.query("SELECT id FROM subscription_plans ORDER BY id ASC");
     const roleResult = await client.query("SELECT name FROM roles ORDER BY name ASC");
     const permissionResult = await client.query("SELECT key FROM permissions ORDER BY key ASC");
-    const templateResult = await client.query("SELECT key FROM sms_templates ORDER BY key ASC");
     const platformRoleGrant = await client.query(
       `SELECT COUNT(*)::int AS count
        FROM role_permissions rp
@@ -208,7 +205,6 @@ async function loadState() {
       plans: planResult.rows.map((row) => row.id),
       roles: roleResult.rows.map((row) => row.name),
       permissions: permissionResult.rows.map((row) => row.key),
-      templates: templateResult.rows.map((row) => row.key),
       platformRoleGrants: platformRoleGrant.rows[0].count,
       admin: adminState.rows[0] || null,
       demo: demoState.rows[0],
@@ -341,12 +337,11 @@ async function main() {
 
     allOutput.push(...(await runCapturedCore([])));
     let state = await loadState();
-    for (const plan of pricingPlans) expect(state.plans.includes(plan.id), `Missing plan: ${plan.id}`);
+    for (const plan of subscriptionPlans) expect(state.plans.includes(plan.id), `Missing plan: ${plan.id}`);
     for (const role of Object.keys(rolePermissions)) expect(state.roles.includes(role), `Missing role: ${role}`);
     for (const permission of [...Object.keys(tenantPermissionDescriptions), "platform.admin"]) {
       expect(state.permissions.includes(permission), `Missing permission: ${permission}`);
     }
-    for (const template of DEFAULT_SMS_TEMPLATES) expect(state.templates.includes(template.key), `Missing SMS template: ${template.key}`);
     expect(state.platformRoleGrants === 0, "No role should grant platform.admin.");
     await expectRolePermission("CEO", "customers.create");
     await expectRolePermission("CEO", "shipments.create");
@@ -362,7 +357,6 @@ async function main() {
     expect(state.counts.permissions === countsAfterFirstCore.permissions, "Second core run should not duplicate permissions.");
     expect(state.counts.roles === countsAfterFirstCore.roles, "Second core run should not duplicate roles.");
     expect(state.counts.role_permissions === countsAfterFirstCore.role_permissions, "Second core run should not duplicate role permissions.");
-    expect(state.counts.sms_templates === countsAfterFirstCore.sms_templates, "Second core run should not duplicate SMS templates.");
     expect(state.counts.workflow_catalog_steps === countsAfterFirstCore.workflow_catalog_steps, "Second core run should not duplicate workflow catalog steps.");
     expect(state.counts.workflow_catalog_steps === SYSTEM_CUSTOMS_STEP_CATALOG.length, "Core seed should ensure all system customs catalog steps.");
     expect(state.counts.import_customs_template_steps === SYSTEM_CUSTOMS_STEP_CATALOG.length, "Core seed should ensure the import customs workflow has catalog steps.");

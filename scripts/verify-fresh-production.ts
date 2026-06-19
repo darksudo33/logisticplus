@@ -3,7 +3,7 @@ import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { pricingPlans } from "../src/lib/pricing.ts";
+import { subscriptionPlans } from "../src/lib/subscriptionPlans.ts";
 import {
   rolePermissions,
   tenantPermissionDescriptions,
@@ -86,7 +86,7 @@ async function verifySchema(client: any) {
 }
 
 async function verifyCatalog(client: any) {
-  for (const plan of pricingPlans) {
+  for (const plan of subscriptionPlans) {
     await requireCount(
       client,
       "SELECT COUNT(*)::int AS count FROM subscription_plans WHERE id = $1 AND is_public = TRUE",
@@ -224,7 +224,7 @@ async function verifyCatalog(client: any) {
   if (platformRoleGrants > 0) fail("platform.admin must not be granted through tenant roles.");
 
   return {
-    plans: pricingPlans.length,
+    plans: subscriptionPlans.length,
     permissions: Object.keys(tenantPermissionDescriptions).length + 1,
     roles: Object.keys(rolePermissions).length,
     workflowTemplates: PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS.length,

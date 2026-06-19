@@ -8,7 +8,7 @@ Logistic Plus is a Persian/RTL B2B logistics SaaS with a React/Vite frontend, Ex
 
 Main backend entry points:
 
-- `server.js` is the composition root. It creates the Express app, runs startup checks, registers inline and extracted API route groups, serves Vite/static assets, handles WebSocket chat, and explicitly disables removed public self-serve signup/contact/Zarinpal/phone-login endpoints.
+- `server.js` is the composition root. It creates the Express app, runs startup checks, registers inline and extracted API route groups, serves Vite/static assets, handles WebSocket chat, and explicitly disables removed public self-serve signup/contact endpoints.
 - `src/server/startup-checks.js` validates production configuration, document storage, and production rate-limit store requirements.
 - `src/server/rate-limit.js` provides memory/postgres rate limiting; production must resolve to `postgres`.
 
@@ -47,7 +47,7 @@ Document upload/download routes:
 
 Billing and admin signup routes:
 
-- Public self-serve signup, contact requests, Zarinpal handoff/callback, and SMS phone-login routes are removed from the public-release app and return 404 through explicit disabled-route guards.
+- Public self-serve signup and contact request routes are removed from the public-release app and return 404 through explicit disabled-route guards.
 - The only supported company creation path is `POST /api/admin/organizations/manual-signup` for platform admins.
 - Current billing routes cover `/api/billing/my-subscription`, `/api/billing/my-invoices`, `/api/billing/my-payments`, and platform-admin invoice/payment management.
 
@@ -71,7 +71,7 @@ Billing and admin signup routes:
 - Extracted route modules: `src/server/routes/customer-routes.js`, `notification-routes.js`, `public-tracking-routes.js`, `shipment-progress-routes.js`, `user-routes.js`.
 - Extracted repositories: `customers.js`, `documents.js`, `notifications.js`, `shipment-progress.js`, `shipments.js`, `users.js`.
 - Database and scripts: `db/schema.sql`, `db/migrations/*`, `scripts/migrate.ts`, `scripts/bridge-canonical-db.ts`, `scripts/seed-db.ts`, `scripts/seed-demo-company.ts`, `scripts/qa-cleanup-prod.ts`, `scripts/qa-seed-heavy.ts`, `scripts/smoke-production-config.ts`.
-- Existing docs and tests: `docs/app-architecture.md`, `docs/search.md`, `docs/zarinpal-production-setup.md`, `tests/e2e/security.spec.ts`, `tests/e2e/public-tracking-leak.spec.ts`, `tests/e2e/document-security-lifecycle.spec.ts`, `tests/e2e/company-wide-visibility.spec.ts`, `tests/e2e/pricing-billing.spec.ts`.
+- Existing docs and tests: `docs/app-architecture.md`, `docs/search.md`, `tests/e2e/security.spec.ts`, `tests/e2e/public-tracking-leak.spec.ts`, `tests/e2e/document-security-lifecycle.spec.ts`, `tests/e2e/company-wide-visibility.spec.ts`, `tests/e2e/subscription-billing.spec.ts`.
 
 ## Test Commands Discovered
 
@@ -93,9 +93,8 @@ Relevant focused Playwright specs:
 - `tests/e2e/public-tracking-leak.spec.ts`
 - `tests/e2e/document-security-lifecycle.spec.ts`
 - `tests/e2e/company-wide-visibility.spec.ts`
-- `tests/e2e/pricing-billing.spec.ts`
+- `tests/e2e/subscription-billing.spec.ts`
 - `tests/e2e/search.spec.ts`
-- `tests/e2e/sms-alerts.spec.ts`
 
 ## Known Risky Areas
 
@@ -106,7 +105,7 @@ Relevant focused Playwright specs:
 - Cleanup/seed scripts include DELETE statements for test/demo/production cleanup workflows. They are operational tools, not refactor helpers.
 - Archive permanent delete intentionally deletes archived rows and can remove document files. Do not expand this behavior without tests and explicit product approval.
 - Platform admin routes can intentionally target tenant ids from params/query/body after admin auth. Do not confuse this exception with normal tenant-owned app access.
-- Public Zarinpal payment validation is intentionally out of scope while public self-serve signup/payment remains removed.
+- Public self-serve checkout validation is intentionally out of scope while self-serve signup remains removed.
 
 ## Recommended Order For Phase 1
 
