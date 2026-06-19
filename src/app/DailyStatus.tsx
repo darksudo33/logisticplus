@@ -42,10 +42,9 @@ import {
 } from "@/src/app/dailyStatusColumns";
 import {
   iranImportDateFieldKeys,
-  iranImportEditableFields,
   iranImportNumberFieldKeys,
-  iranImportProfileSections,
   flattenProfileSections,
+  type IranImportProfileFieldType,
   type IranImportProfileField,
   type IranImportProfileSection,
 } from "@/src/components/shipments/iranImportProfileFields";
@@ -66,7 +65,7 @@ const NONE_VALUE = "__none__";
 const EMPTY_TEXT = "ثبت نشده";
 
 type ActiveMode = "view" | "edit";
-type DailyBaseInfoDraft = NonNullable<DailyStatusPatch["baseInfo"]>;
+type DailyBaseInfoDraft = Pick<NonNullable<DailyStatusPatch["baseInfo"]>, "status" | "orderRegistrationNumber" | "currentStage">;
 type DailyBaseInfoDraftKey = keyof DailyBaseInfoDraft;
 type CustomerEditDraft = {
   name: string;
@@ -260,16 +259,12 @@ function normalizeBaseInfoText(value: unknown) {
 function baseInfoDraftFromRow(row: DailyStatusBoardRow): DailyBaseInfoDraft {
   return {
     status: row.shipment.status as ShipmentStatus,
-    currentStage: row.baseInfo?.currentStage || row.workflow?.currentStepLabel || "",
-    origin: row.baseInfo?.origin || row.shipment.origin || "",
-    deliveryPort: row.baseInfo?.deliveryPort || row.shipment.destination || "",
-    dischargePort: row.baseInfo?.dischargePort || "",
-    consigneeName: row.baseInfo?.consigneeName || "",
     orderRegistrationNumber: row.baseInfo?.orderRegistrationNumber || row.kootaj.orderRegistrationNumber || "",
+    currentStage: row.baseInfo?.currentStage || row.workflow?.currentStepLabel || "",
   };
 }
 
-function draftFromRow(row: DailyStatusBoardRow, fields: IranImportProfileField[] = iranImportEditableFields): DailyStatusPatch {
+function draftFromRow(row: DailyStatusBoardRow, fields: IranImportProfileField[]): DailyStatusPatch {
   const draft: DailyStatusPatch = {};
   const writableDraft = draft as Record<string, unknown>;
   writableDraft.baseInfo = baseInfoDraftFromRow(row);
@@ -311,13 +306,12 @@ function normalizePatchValue(field: keyof DailyStatusPatch, value: unknown) {
   return iranImportDateFieldKeys.has(field) ? normalizeIsoDateForInput(trimmed) || trimmed : trimmed;
 }
 
-function cleanBaseInfoPatch(draft: DailyStatusPatch, row?: DailyStatusBoardRow): DailyBaseInfoDraft | undefined {
+function cleanBaseInfoPatch(draft: DailyStatusPatch, row: DailyStatusBoardRow): DailyBaseInfoDraft | undefined {
   if (!draft.baseInfo) return undefined;
-  if (!row) return draft.baseInfo;
   const current = baseInfoDraftFromRow(row);
   const patch: DailyBaseInfoDraft = {};
   if (draft.baseInfo.status && draft.baseInfo.status !== current.status) patch.status = draft.baseInfo.status;
-  for (const key of ["currentStage", "origin", "deliveryPort", "dischargePort", "consigneeName", "orderRegistrationNumber"] as const) {
+  for (const key of ["orderRegistrationNumber", "currentStage"] as const) {
     const nextValue = normalizeBaseInfoText(draft.baseInfo[key]);
     const currentValue = normalizeBaseInfoText(current[key]);
     if (nextValue !== currentValue) patch[key] = nextValue;
@@ -325,7 +319,7 @@ function cleanBaseInfoPatch(draft: DailyStatusPatch, row?: DailyStatusBoardRow):
   return Object.keys(patch).length ? patch : undefined;
 }
 
-function cleanPatch(draft: DailyStatusPatch, fields: IranImportProfileField[] = iranImportEditableFields, row?: DailyStatusBoardRow): DailyStatusPatch {
+function cleanPatch(draft: DailyStatusPatch, fields: IranImportProfileField[], row: DailyStatusBoardRow): DailyStatusPatch {
   const patch: DailyStatusPatch = {};
   const writablePatch = patch as Record<string, unknown>;
   for (const field of editableProfileFields(fields)) {
@@ -371,15 +365,86 @@ const dailyGoodsSection: IranImportProfileSection = {
   fields: [],
 };
 
-function dailyStatusSectionsForRow(row: DailyStatusBoardRow | null): IranImportProfileSection[] {
-  const sections = iranImportProfileSections.filter((section) => section.id !== "commercial-card" || !row || !isLenjShipment(row));
-  const baseIndex = sections.findIndex((section) => section.id === "base");
-  if (baseIndex < 0) return [dailyGoodsSection, ...sections];
-  return [
-    ...sections.slice(0, baseIndex + 1),
-    dailyGoodsSection,
-    ...sections.slice(baseIndex + 1),
-  ];
+type DailyKootajEditFieldDefinition = Omit<IranImportProfileField, "sectionId">;
+
+const dailyKootajEditField = (
+  patchKey: keyof DailyStatusPatch,
+  label: string,
+  type: IranImportProfileFieldType = "text",
+  config: Partial<Omit<DailyKootajEditFieldDefinition, "key" | "patchKey" | "label" | "type" | "source" | "editable">> = {}
+): DailyKootajEditFieldDefinition => ({
+  key: patchKey,
+  patchKey,
+  label,
+  type,
+  source: "kootaj",
+  editable: true,
+  ...config,
+});
+
+const dailyStatusEditSectionDefinitions: Array<Omit<IranImportProfileSection, "fields"> & { fields: DailyKootajEditFieldDefinition[] }> = [
+  {
+    id: "base",
+    title: "اطلاعات پایه",
+    defaultOpen: true,
+    fields: [],
+  },
+  {
+    ...dailyGoodsSection,
+    title: "مشخصات کالا",
+  },
+  {
+    id: "declarationKootaj",
+    title: "اظهار و کوتاژ",
+    defaultOpen: true,
+    fields: [
+      dailyKootajEditField("cotageNumber", "شماره کوتاژ", "text", { dir: "ltr" }),
+      dailyKootajEditField("customsRoute", "مسیر گمرکی", "select", { options: routeOptions }),
+      dailyKootajEditField("cotageDate", "تاریخ ثبت کوتاژ", "date"),
+    ],
+  },
+  {
+    id: "permits",
+    title: "مجوزها",
+    defaultOpen: true,
+    fields: [],
+  },
+  {
+    id: "payments",
+    title: "پرداخت‌ها",
+    defaultOpen: true,
+    fields: [
+      dailyKootajEditField("customsPaymentStatus", "پرداخت گمرکی", "select", { options: commonStatusOptions }),
+      dailyKootajEditField("dutiesAmount", "مبلغ گمرکی", "number", { dir: "ltr", step: "0.01" }),
+      dailyKootajEditField("taxPaymentStatus", "وضعیت مالیات", "select", { options: taxPaymentStatusOptions }),
+      dailyKootajEditField("taxAmount", "مبلغ مالیات", "number", { dir: "ltr", step: "0.01" }),
+    ],
+  },
+  {
+    id: "banking",
+    title: "بانکی",
+    defaultOpen: true,
+    fields: [
+      dailyKootajEditField("bankName", "بانک", "text"),
+    ],
+  },
+  {
+    id: "notes",
+    title: "یادداشت‌ها",
+    defaultOpen: true,
+    fields: [
+      dailyKootajEditField("internalNote", "یادداشت‌ها", "textarea", { wide: true }),
+    ],
+  },
+];
+
+const dailyStatusEditSections: IranImportProfileSection[] = dailyStatusEditSectionDefinitions.map((section) => ({
+  ...section,
+  fields: section.fields.map((field) => ({ ...field, sectionId: section.id })),
+}));
+
+function dailyStatusSectionsForRow(_row: DailyStatusBoardRow | null): IranImportProfileSection[] {
+  return dailyStatusEditSections;
 }
 
 function credentialInfo(row: DailyStatusBoardRow) {
@@ -815,7 +880,7 @@ function DailyBaseInfoGrid({
             displayValue(customerDisplay)
           )}
         </DailyBaseInfoBox>
-        <DailyBaseInfoBox label="وضعیت" testId={testId("status")}>
+        <DailyBaseInfoBox label="وضعیت محموله" testId={testId("status")}>
           {isEdit ? (
             <Select value={baseDraft.status || row.shipment.status} onValueChange={(next) => onBaseInfoChange?.("status", next as ShipmentStatus)}>
               <SelectTrigger data-testid={`${testId("status")}-select`} className="h-9 w-full rounded-lg bg-background text-xs font-bold">
@@ -831,6 +896,13 @@ function DailyBaseInfoGrid({
             </Select>
           ) : (
             displayValue(baseStatusText(row))
+          )}
+        </DailyBaseInfoBox>
+        <DailyBaseInfoBox label="مرحله فعلی" testId={testId("current-stage")}>
+          {isEdit ? (
+            renderTextEditor("currentStage", "current-stage", { multiline: true })
+          ) : (
+            <p className="whitespace-pre-wrap">{displayValue(base?.currentStage || row.workflow?.currentStepLabel)}</p>
           )}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="شماره ثبت سفارش" testId={testId("order-registration-number")}>
@@ -857,23 +929,13 @@ function DailyBaseInfoGrid({
           {toPersianDigits(base?.documentCount ?? row.documents.totalCount)}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="مبدا" testId={testId("origin")}>
-          {isEdit ? renderTextEditor("origin", "origin") : displayValue(base?.origin || row.shipment.origin)}
+          {displayValue(base?.origin || row.shipment.origin)}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="بندر تحویل" testId={testId("delivery-port")}>
-          {isEdit ? renderTextEditor("deliveryPort", "delivery-port") : displayValue(base?.deliveryPort || row.shipment.destination)}
+          {displayValue(base?.deliveryPort || row.shipment.destination)}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="محل تخلیه" testId={testId("discharge-port")}>
-          {isEdit ? renderTextEditor("dischargePort", "discharge-port") : displayValue(base?.dischargePort)}
-        </DailyBaseInfoBox>
-        <DailyBaseInfoBox label="گیرنده کالا" testId={testId("consignee")}>
-          {isEdit ? renderTextEditor("consigneeName", "consignee") : displayValue(base?.consigneeName)}
-        </DailyBaseInfoBox>
-        <DailyBaseInfoBox label="مرحله فعلی" wide testId={testId("current-stage")}>
-          {isEdit ? (
-            renderTextEditor("currentStage", "current-stage", { multiline: true })
-          ) : (
-            <p className="whitespace-pre-wrap">{displayValue(base?.currentStage || row.workflow?.currentStepLabel)}</p>
-          )}
+          {displayValue(base?.dischargePort)}
         </DailyBaseInfoBox>
         <DailyBaseInfoBox label="آخرین به روز رسانی" wide testId={testId("last-update")}>
           <p>{displayValue(formatDate(base?.updatedAt || row.kootaj.updatedAt || row.shipment.updatedAt))}</p>
@@ -1476,7 +1538,9 @@ function RowDetailsPanel({
                     />
                   ) : section.id === "goods-v2" ? (
                     <DailyGoodsInfoPanel row={row} surface={surface} />
-                  ) : (
+                  ) : section.id === "permits" ? (
+                    <DailyPermitsPanel row={row} />
+                  ) : section.fields.length > 0 ? (
                     <div className="grid gap-2 md:grid-cols-2">
                       {section.fields.map((field) => (
                         <React.Fragment key={field.key}>
@@ -1501,6 +1565,10 @@ function RowDetailsPanel({
                           )}
                         </React.Fragment>
                       ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-border bg-muted/20 p-2.5 text-[11px] font-bold text-muted-foreground">
+                      ثبت نشده
                     </div>
                   )}
                 </div>
@@ -1848,7 +1916,7 @@ export default function DailyStatus() {
   };
 
   const refreshRows = () => loadRows({ ...filters, q: searchText || undefined });
-  const hasFilters = Boolean(searchText || filters.customsRoute || filters.customsStatus || filters.releaseStatus || filters.shipmentStatus);
+  const hasFilters = Boolean(searchText || filters.customsRoute || filters.shipmentStatus);
   const totalOpenTasks = rows.reduce((sum, row) => sum + row.tasks.openCount, 0);
   const withCotage = rows.filter((row) => row.kootaj.cotageNumber).length;
   const blockedRows = rows.filter((row) => row.kootaj.customsStatus === "blocked" || row.kootaj.releaseStatus === "blocked").length;
@@ -1881,8 +1949,6 @@ export default function DailyStatus() {
         ))}
       </div>
       <FilterSelect value={filters.customsRoute} allLabel="همه مسیرها" options={routeOptions} onChange={(value) => setFilterValue("customsRoute", value)} widthClass="w-full lg:w-36" />
-      <FilterSelect value={filters.customsStatus} allLabel="همه وضعیت‌ها" options={customsStatusOptions} onChange={(value) => setFilterValue("customsStatus", value)} widthClass="w-full lg:w-44" />
-      <FilterSelect value={filters.releaseStatus} allLabel="همه ترخیص‌ها" options={releaseStatusOptions} onChange={(value) => setFilterValue("releaseStatus", value)} widthClass="w-full lg:w-44" />
     </>
   );
 
@@ -1992,13 +2058,13 @@ export default function DailyStatus() {
                 customers={customers}
                 shipments={shipments}
                 malvaniProfiles={malvaniProfiles}
-                isSaving={savingId === activeRow.id}
-                onModeChange={setActiveMode}
-                onDraftChange={changeDraft}
-                onBaseInfoChange={changeBaseInfoDraft}
-                onCustomDraftChange={changeCustomDraft}
-                onCancel={closeRow}
-                onSave={() => saveRow(activeRow)}
+            isSaving={savingId === activeRow.id}
+            onModeChange={setActiveMode}
+            onDraftChange={changeDraft}
+            onBaseInfoChange={changeBaseInfoDraft}
+            onCustomDraftChange={changeCustomDraft}
+            onCancel={closeRow}
+            onSave={() => saveRow(activeRow)}
               />
             ) : (
               <div className="rounded-xl border border-dashed border-border bg-card p-6 text-center text-xs font-bold text-muted-foreground">

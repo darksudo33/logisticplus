@@ -6,8 +6,6 @@ export type DailyStatusListFilters = Partial<{
   shipmentId: string;
   commercialCardId: string;
   customsRoute: string;
-  customsStatus: string;
-  releaseStatus: string;
   shipmentStatus: string;
   limit: number;
 }>;
