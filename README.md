@@ -6,9 +6,9 @@ The current repository uses:
 
 - Vite + React + TypeScript for the frontend.
 - React Router for app/public routes.
-- Express through [server.js](/C:/Users/Ahmadreza/Documents/logisticplus/server.js), which is a compatibility bridge into [server/src/server.js](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/server.js) for API startup and production static serving.
-- PostgreSQL through the raw `pg` pool plus module repositories under [server/src/modules](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/modules). [src/server/db.js](/C:/Users/Ahmadreza/Documents/logisticplus/src/server/db.js) remains as the legacy aggregate data-access layer for APIs and scripts that still need it.
-- SQL schema setup through [db/schema.sql](/C:/Users/Ahmadreza/Documents/logisticplus/db/schema.sql).
+- Express through [server.js](server.js), which is a compatibility bridge into [server/src/server.js](server/src/server.js) for API startup and production static serving.
+- PostgreSQL through the raw `pg` pool plus module repositories under [server/src/modules](server/src/modules). [src/server/db.js](src/server/db.js) remains as the legacy aggregate data-access layer for APIs and scripts that still need it.
+- SQL schema setup through [db/schema.sql](db/schema.sql).
 - Password login with platform-admin controlled company/user provisioning. Public self-serve checkout, contact intake, marketing plan pages, and phone-code worker surfaces are not active in the public-release app.
 
 Do not assume this project is Next.js or Prisma-based unless the stack is deliberately changed later.
@@ -20,22 +20,22 @@ Last checked: 2026-06-19.
 - Local app is running on `http://localhost:3000`; `/api/health` and `/api/db/health` return ok.
 - Browser smoke should check `/`, `/login`, `/dashboard`, `/admin`, and token-based public tracking routes. `/` shows the login entry; removed public marketing/self-serve/search routes redirect to login.
 - The protected app currently opens for the seeded owner session. Admin includes manual organization/user provisioning, historical signup/contact review, subscription limits, billing records, and operational errors.
-- The regression suite is green: `npm.cmd run test:e2e:setup` reset `logisticplus_test`, then `npm.cmd run test:e2e` passed 43/43 tests.
+- Latest verified local full Playwright E2E result: 146 passed, 3 skipped after `npm.cmd run test:e2e:setup` reset `logisticplus_test`.
 - `npm.cmd run lint`, `node --check server.js`, `node --check src/server/db.js`, `npm.cmd run build`, migration verification, and production-config smoke checks should pass before deploy. The build still emits Vite's existing large chunk warning.
 - In the Codex desktop sandbox, Vite/esbuild may fail to read parent directories while loading `vite.config.ts`; rerunning the same build outside the sandbox passed.
 
 ## Backend Layout
 
-The backend is module-first under [server/src](/C:/Users/Ahmadreza/Documents/logisticplus/server/src):
+The backend is module-first under [server/src](server/src):
 
-- [server/src/app.js](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/app.js) creates the Express app and shared middleware.
-- [server/src/server.js](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/server.js) owns startup, route registration, workers, and WebSocket attachment.
-- [server/src/config](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/config), [server/src/db](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/db), and [server/src/shared](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/shared) hold cross-cutting infrastructure.
-- Business routes and repositories live in [server/src/modules](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/modules), grouped by capability.
+- [server/src/app.js](server/src/app.js) creates the Express app and shared middleware.
+- [server/src/server.js](server/src/server.js) owns startup, route registration, workers, and WebSocket attachment.
+- [server/src/config](server/src/config), [server/src/db](server/src/db), and [server/src/shared](server/src/shared) hold cross-cutting infrastructure.
+- Business routes and repositories live in [server/src/modules](server/src/modules), grouped by capability.
 
 The backend intentionally stays on runtime-safe `.js` files for now. `npm start` runs `node server.js`, and Liara can keep using the standard Node.js startup path without a separate server compile step.
 
-Some legacy support code still lives under [src/server](/C:/Users/Ahmadreza/Documents/logisticplus/src/server), including AI, document storage, public tracking, request schemas, shipment workflow/template helpers, cheque/compliance helpers, and the aggregate [src/server/db.js](/C:/Users/Ahmadreza/Documents/logisticplus/src/server/db.js). Do not reintroduce route or repository compatibility wrappers there for modules that already live under [server/src/modules](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/modules).
+Some legacy support code still lives under [src/server](src/server), including AI, document storage, public tracking, request schemas, shipment workflow/template helpers, cheque/compliance helpers, and the aggregate [src/server/db.js](src/server/db.js). Do not reintroduce route or repository compatibility wrappers there for modules that already live under [server/src/modules](server/src/modules).
 
 ## Prerequisites
 
@@ -103,11 +103,11 @@ Default local owner login if `SEED_USER_PASSWORD` is not changed:
 
 Set `SEED_USER_PASSWORD` before running `npm run db:seed` for any real environment. The default password is only a local development convenience.
 
-`npm run seed:production-admin` is the fresh-production path for a new Liara database. It reads `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD`, `INITIAL_ADMIN_NAME`, `INITIAL_ORG_NAME`, and optional `INITIAL_ADMIN_PHONE`, then creates or reuses the first real admin user and organization without importing demo or legacy records. See [docs/deployment/fresh-production-admin-bootstrap.md](/C:/Users/Ahmadreza/Documents/logisticplus/docs/deployment/fresh-production-admin-bootstrap.md).
+`npm run seed:production-admin` is the fresh-production path for a new Liara database. It reads `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD`, `INITIAL_ADMIN_NAME`, `INITIAL_ORG_NAME`, and optional `INITIAL_ADMIN_PHONE`, then creates or reuses the first real admin user and organization without importing demo or legacy records. See [docs/deployment/fresh-production-admin-bootstrap.md](docs/deployment/fresh-production-admin-bootstrap.md).
 
 ## Environment Variables
 
-See [.env.example](/C:/Users/Ahmadreza/Documents/logisticplus/.env.example) for the authoritative local template.
+See [.env.example](.env.example) for the authoritative local template.
 
 Important variables:
 
@@ -191,14 +191,14 @@ Command notes:
 
 Production start:
 
-`npm run start` runs `node server.js`, which imports [server/src/server.js](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/server.js). Set `NODE_ENV=production` through your host environment before using it for production static serving. In PowerShell, use:
+`npm run start` runs `node server.js`, which imports [server/src/server.js](server/src/server.js). Set `NODE_ENV=production` through your host environment before using it for production static serving. In PowerShell, use:
 
 ```powershell
 $env:NODE_ENV = "production"
 npm run start
 ```
 
-- `npm run clean` currently uses `rm -rf dist`, which may not work in every Windows PowerShell environment.
+- `npm run clean` removes `dist` with Node's cross-platform filesystem API.
 
 ## Routes
 
@@ -214,7 +214,7 @@ Login supports password auth for users created by platform/admin flows. Chat is 
 
 ## Deployment Notes
 
-[liara.json](/C:/Users/Ahmadreza/Documents/logisticplus/liara.json) is a generic Liara NodeJS config on port `3000`; it intentionally does not commit an app name, disk mount, database URL, object-storage bucket, or secret. Pass the fresh app name at deploy time with `liara deploy --app <LIARA_APP_NAME>` or select the app in the Liara CLI before running `liara deploy`. [liara.staging.json](/C:/Users/Ahmadreza/Documents/logisticplus/liara.staging.json) still targets the separate staging app named `logisticplus-staging`.
+[liara.json](liara.json) is a generic Liara NodeJS config on port `3000`; it intentionally does not commit an app name, disk mount, database URL, object-storage bucket, or secret. Pass the fresh app name at deploy time with `liara deploy --app <LIARA_APP_NAME>` or select the app in the Liara CLI before running `liara deploy`. [liara.staging.json](liara.staging.json) still targets the separate staging app named `logisticplus-staging`.
 
 For production, configure at minimum:
 
@@ -251,7 +251,7 @@ Fresh Liara production should use private Liara Object Storage for new documents
 2. Create a Liara PostgreSQL database and set `DATABASE_URL` in app environment variables.
 3. Create a private Liara Object Storage bucket for documents.
 4. Set production env vars: `NODE_ENV=production`, `APP_PUBLIC_URL=https://<your-domain>`, `SESSION_SECRET`, `DOCUMENT_STORAGE_MODE=object`, `OBJECT_STORAGE_ENABLED=true`, Liara S3-compatible object-storage vars, `RATE_LIMIT_STORE=postgres`, `TRUST_PROXY=true`, and all required `INITIAL_ADMIN_*` vars.
-5. Run local preflight from [docs/deployment/liara-fresh-deploy-runbook.md](/C:/Users/Ahmadreza/Documents/logisticplus/docs/deployment/liara-fresh-deploy-runbook.md).
+5. Run local preflight from [docs/deployment/liara-fresh-deploy-runbook.md](docs/deployment/liara-fresh-deploy-runbook.md).
 6. Deploy with `liara deploy --app <LIARA_APP_NAME>` or the Liara Console flow.
 7. Run migrations in Liara shell: `liara shell --app <LIARA_APP_NAME> --command "npm run db:migrate"`.
 8. Dry-run the first admin bootstrap: `liara shell --app <LIARA_APP_NAME> --command "npm run seed:production-admin -- --dry-run"`.
@@ -271,7 +271,7 @@ Run a Liara database backup before `--apply`. The utility preserves the owner us
 
 ### Liara Staging Validation
 
-Use the staging runbook in [docs/liara-staging-validation.md](/C:/Users/Ahmadreza/Documents/logisticplus/docs/liara-staging-validation.md) before production cutover. The staging path uses a separate Liara app, PostgreSQL database, and disk, then validates health, password login, document storage, public tracking, and removed self-serve APIs.
+Use the staging runbook in [docs/liara-staging-validation.md](docs/liara-staging-validation.md) before production cutover. The staging path uses a separate Liara app, PostgreSQL database, and disk, then validates health, password login, document storage, public tracking, and removed self-serve APIs.
 
 Useful Liara references:
 
