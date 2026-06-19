@@ -40,6 +40,8 @@
     "safety:check": "node scripts/safety-check.mjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "audit:dead": "knip --production",
+    "audit:deps": "depcheck",
     "deploy": "liara deploy",
     "deploy:staging": "liara deploy --liara-json liara.staging.json --app logisticplus-staging --port 3000 --disks logisticplus-documents-staging:storage/documents"
   },
@@ -86,6 +88,8 @@
     "@types/node": "^22.14.0",
     "@types/qrcode": "^1.5.6",
     "autoprefixer": "^10.4.21",
+    "depcheck": "^1.4.7",
+    "knip": "^6.17.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
