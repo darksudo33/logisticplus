@@ -9,6 +9,11 @@ import {
 } from "../../../../src/server/shipment-codes.js";
 import { assertBusinessEntityBelongsToTenant } from "../business-entities/business-entity.repository.js";
 import { normalizeShipmentStatus } from "../../../../src/shared/shipment-statuses.js";
+import {
+  applyKootajOperationUpdates,
+  hasKootajOperationUpdates,
+  kootajOperationUpdatesFromShipmentV2Declaration,
+} from "./kootaj/index.js";
 
 export const SHIPMENT_V2_SECTION_KEYS = [
   "base",
@@ -585,6 +590,20 @@ export async function updateShipmentV2Section(pool, {
        RETURNING *`,
       [shipmentId, scopedOrganizationId, JSON.stringify(nextSections), actorUserId]
     );
+
+    if (sectionKey === "declarationKootaj") {
+      const kootajOperationUpdates = kootajOperationUpdatesFromShipmentV2Declaration(normalizedPayload);
+      if (hasKootajOperationUpdates(kootajOperationUpdates)) {
+        await applyKootajOperationUpdates(client, {
+          organizationId: scopedOrganizationId,
+          shipmentId,
+          actorUserId,
+          shipmentRow: shipment,
+          updates: kootajOperationUpdates,
+          syncShipmentV2Profile: false,
+        });
+      }
+    }
 
     let nextShipment = shipment;
     const shipmentColumns = ["updated_at = NOW()"];

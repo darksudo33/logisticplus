@@ -19,6 +19,7 @@ export const RBAC_TENANT_POLICY: RoutePolicy[] = [
   { family: "shipments", method: "PATCH", path: "/api/shipments/:id/post-exit", auth: "required", permission: "shipments.update", tenantScope: "own-organization" },
   { family: "daily-status", method: "GET", path: "/api/daily-status", auth: "required", permission: "shipments.view_all", tenantScope: "own-organization" },
   { family: "kootaj-board", method: "GET", path: "/api/kootaj-board", auth: "required", permission: "shipments.view_all", tenantScope: "own-organization" },
+  { family: "kootaj-board", method: "PATCH", path: "/api/kootaj-board/:shipmentId", auth: "required", permission: "shipments.update", tenantScope: "own-organization" },
   { family: "daily-status", method: "PATCH", path: "/api/daily-status/:shipmentId", auth: "required", permission: "shipments.update", tenantScope: "own-organization" },
   { family: "daily-status", method: "GET", path: "/api/shipments/:shipmentId/daily-status", auth: "required", permission: "shipments.view_all", tenantScope: "own-organization" },
   { family: "daily-status", method: "PATCH", path: "/api/shipments/:shipmentId/daily-status", auth: "required", permission: "shipments.update", tenantScope: "own-organization" },
