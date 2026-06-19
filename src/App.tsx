@@ -7,7 +7,7 @@ import React, { Suspense, lazy, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useParams } from "react-router-dom";
 import { ClientErrorBoundary } from "./components/ClientErrorBoundary";
 import { ProtectedShellSkeleton, PublicRouteSkeleton } from "./components/SkeletonStates";
-import { QUOTATIONS_UI_ENABLED, SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED } from "./config/features";
+import { KOOTAJ_BOARD_UI_ENABLED, QUOTATIONS_UI_ENABLED, SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED } from "./config/features";
 import { installClientErrorReporting } from "./lib/errorReporting";
 import { installClientPerformanceMonitoring } from "./lib/clientPerformance";
 import { useAppStore } from "./store/useAppStore";
@@ -24,6 +24,7 @@ const Dashboard = lazy(() => import("./app/Dashboard"));
 const Shipments = lazy(() => import("./app/Shipments"));
 const ExitedShipments = lazy(() => import("./app/ExitedShipments"));
 const DailyStatus = lazy(() => import("./app/DailyStatus"));
+const KootajBoard = KOOTAJ_BOARD_UI_ENABLED ? lazy(() => import("./app/KootajBoard")) : null;
 const Customers = lazy(() => import("./app/Customers"));
 const Tasks = lazy(() => import("./app/Tasks"));
 const Chat = lazy(() => import("./app/Chat"));
@@ -52,7 +53,7 @@ const RatesAndTariffs = lazy(() => import("./app/RatesAndTariffs"));
 const protectedRoutePrefixes = [
   "/dashboard",
   "/daily-status",
-  // Reserved for the upcoming kootaj-board feature; currently redirects below.
+  // Kootaj Board Phase 1 is a protected read-only operational board.
   "/kootaj-board",
   "/shipments",
   "/changelog",
@@ -106,7 +107,16 @@ function AppRoutes() {
 
         <Route path="/dashboard" element={<ProtectedAppLayout><Dashboard /></ProtectedAppLayout>} />
         <Route path="/daily-status" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><DailyStatus /></ProtectedAppLayout>} />
-        <Route path="/kootaj-board" element={<Navigate to="/daily-status" replace />} />
+        <Route
+          path="/kootaj-board"
+          element={
+            KOOTAJ_BOARD_UI_ENABLED && KootajBoard ? (
+              <ProtectedAppLayout anyOf={["shipments.view_all"]}><KootajBoard /></ProtectedAppLayout>
+            ) : (
+              <Navigate to="/daily-status" replace />
+            )
+          }
+        />
         <Route path="/shipments" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><Shipments /></ProtectedAppLayout>} />
         <Route path="/shipments/new-v2" element={<ProtectedAppLayout anyOf={["shipments.create"]}><ShipmentCreateV2 /></ProtectedAppLayout>} />
         <Route path="/shipments/exited" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ExitedShipments /></ProtectedAppLayout>} />
