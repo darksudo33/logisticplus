@@ -13,7 +13,7 @@ import { useApiResource } from "@/src/lib/resourceState";
 import { apiGet } from "@/src/lib/api";
 import { shipmentFormTemplatesApi, type ShipmentTypeOption } from "@/src/lib/shipmentFormTemplatesApi";
 import { shipmentApi, type ExitedShipment, type ExitedShipmentsFilters, type PostExitStatus } from "@/src/lib/shipmentApi";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 import type { Customer } from "@/src/types";
 
 const POST_EXIT_STATUS_LABELS: Record<PostExitStatus, string> = {
@@ -56,8 +56,8 @@ function shipmentCustomerCode(shipment: ExitedShipment) {
 
 export default function ExitedShipments() {
   const navigate = useNavigate();
-  const currentUser = useMockStore((state) => state.currentUser);
-  const users = useMockStore((state) => state.users);
+  const currentUser = useAppStore((state) => state.currentUser);
+  const users = useAppStore((state) => state.users);
   const [draftFilters, setDraftFilters] = React.useState<ExitedShipmentsFilters>({ limit: 100 });
   const [appliedFilters, setAppliedFilters] = React.useState<ExitedShipmentsFilters>({ limit: 100 });
   const [restoreTarget, setRestoreTarget] = React.useState<ExitedShipment | null>(null);

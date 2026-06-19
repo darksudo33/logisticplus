@@ -33,12 +33,12 @@ import { cn } from "@/lib/utils";
 import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
 import { DOCUMENT_TYPE_ALL, DOCUMENT_TYPE_FILTERS, DOCUMENT_TYPE_OPTIONS, getDocumentTypeFilterValue, getDocumentTypeLabel } from "@/src/shared/document-types";
 import { downloadBinaryFile } from "@/src/lib/downloads";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 import type { DocumentType } from "@/src/types";
 
 function ShipmentDocumentView({ shipmentId }: { shipmentId: string }) {
-  const documents = useMockStore((state) => state.documents);
-  const refreshDocuments = useMockStore((state) => state.refreshDocuments);
+  const documents = useAppStore((state) => state.documents);
+  const refreshDocuments = useAppStore((state) => state.refreshDocuments);
 
   const shipmentDocs = React.useMemo(
     () => documents.filter((document) => document.shipmentId === shipmentId && !document.isArchived),

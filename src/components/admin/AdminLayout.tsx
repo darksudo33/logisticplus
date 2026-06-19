@@ -19,7 +19,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/co
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useCurrentUserPermissions } from "@/src/hooks/useCurrentUserPermissions";
-import { useAppDataStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 
 export type AdminSectionKey =
   | "overview"
@@ -149,8 +149,8 @@ export function AdminForbidden() {
 }
 
 export function AdminProtectedLayout({ children }: { children: React.ReactNode }) {
-  const currentUser = useAppDataStore((state) => state.currentUser);
-  const setCurrentUser = useAppDataStore((state) => state.setCurrentUser);
+  const currentUser = useAppStore((state) => state.currentUser);
+  const setCurrentUser = useAppStore((state) => state.setCurrentUser);
   const { isPlatformAdmin, loading, status } = useCurrentUserPermissions();
 
   React.useEffect(() => {
@@ -236,8 +236,8 @@ export function AdminTopBar({
   activeSection: AdminSectionKey;
   onSectionChange: (section: AdminSectionKey) => void;
 }) {
-  const currentUser = useAppDataStore((state) => state.currentUser);
-  const setCurrentUser = useAppDataStore((state) => state.setCurrentUser);
+  const currentUser = useAppStore((state) => state.currentUser);
+  const setCurrentUser = useAppStore((state) => state.setCurrentUser);
   const navigate = useNavigate();
   const activeItem = items.find((item) => item.key === activeSection) || items[0];
 

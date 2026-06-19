@@ -1,5 +1,5 @@
 import React from "react";
-import { useAppDataStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 
 type AuthMePayload = {
   ok?: boolean;
@@ -80,7 +80,7 @@ export function clearCurrentUserPermissionsCache() {
 }
 
 export function useCurrentUserPermissions() {
-  const currentUser = useAppDataStore((state) => state.currentUser);
+  const currentUser = useAppStore((state) => state.currentUser);
   const [permissions, setPermissions] = React.useState<string[]>(
     currentUser?.id && cachedUserId === currentUser.id ? cachedPermissions : []
   );

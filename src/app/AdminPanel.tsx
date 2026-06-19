@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 import { EmptyState, EmptyTableRow } from "@/src/components/EmptyState";
 import { AdminPanelSkeleton } from "@/src/components/SkeletonStates";
 import { ActionSkeleton } from "@/components/ui/skeleton";
-import { useAppDataStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 
 export type AdminTabKey = "overview" | "organizations" | "subscriptions" | "billing" | "errors";
 type Organization = {
@@ -271,7 +271,7 @@ type AdminPanelProps = {
 };
 
 export default function AdminPanel({ activeTab, onTabChange, embedded = false }: AdminPanelProps = {}) {
-  const currentUser = useAppDataStore((state) => state.currentUser);
+  const currentUser = useAppStore((state) => state.currentUser);
   const [internalTab, setInternalTab] = React.useState<AdminTabKey>("overview");
   const tab = activeTab || internalTab;
   const setTab = React.useCallback((nextTab: AdminTabKey) => {

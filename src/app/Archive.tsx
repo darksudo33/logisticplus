@@ -17,7 +17,7 @@ import {
   ExternalLink,
   Trash
 } from "lucide-react";
-import { useMockStore } from "../store/useMockStore";
+import { useAppStore } from "../store/useAppStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
@@ -45,8 +45,8 @@ export default function ArchivePage() {
     permanentDeleteShipment, 
     permanentDeleteCheque, 
     permanentDeleteDocument 
-  } = useMockStore();
-  const loadCurrentUserRecords = useMockStore(state => state.loadCurrentUserRecords);
+  } = useAppStore();
+  const loadCurrentUserRecords = useAppStore(state => state.loadCurrentUserRecords);
   const [apiArchiveItems, setApiArchiveItems] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [viewMode, setViewMode] = useState<"archives" | "trash">("archives");

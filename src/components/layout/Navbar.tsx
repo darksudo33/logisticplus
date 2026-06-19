@@ -10,7 +10,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { LayoutDashboard, Ship, Users, CheckSquare, MessageSquare, ChevronRight, ChevronLeft, LogOut, Search, Bell, FileText, FileSearch, History, Settings as SettingsIcon, Menu, ShieldCheck, CreditCard, Archive, Calculator, X, Sun, Moon, IdCard, ClipboardList, GitBranch, Banknote } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EXITED_SHIPMENTS_NAV_ENABLED, QUOTATIONS_UI_ENABLED, SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED } from "@/src/config/features";
-import { useMockStore } from "../../store/useMockStore";
+import { useAppStore } from "../../store/useAppStore";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
@@ -79,8 +79,8 @@ export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
-  const currentUser = useMockStore(state => state.currentUser);
-  const setCurrentUser = useMockStore(state => state.setCurrentUser);
+  const currentUser = useAppStore(state => state.currentUser);
+  const setCurrentUser = useAppStore(state => state.setCurrentUser);
   const { isPlatformAdmin } = useCurrentUserPermissions();
 
   const menuItems = sidebarItems.filter(item => canShowSidebarItem(item, currentUser));
@@ -192,17 +192,17 @@ export function Sidebar() {
 }
 
 export function TopBar() {
-  const currentUser = useMockStore(state => state.currentUser);
-  const setCurrentUser = useMockStore(state => state.setCurrentUser);
-  const notifications = useMockStore(state => state.notifications);
-  const markNotificationRead = useMockStore(state => state.markNotificationRead);
-  const markAllNotificationsRead = useMockStore(state => state.markAllNotificationsRead);
+  const currentUser = useAppStore(state => state.currentUser);
+  const setCurrentUser = useAppStore(state => state.setCurrentUser);
+  const notifications = useAppStore(state => state.notifications);
+  const markNotificationRead = useAppStore(state => state.markNotificationRead);
+  const markAllNotificationsRead = useAppStore(state => state.markAllNotificationsRead);
   const navigate = useNavigate();
   const location = useLocation();
 
   const unreadCount = notifications.filter(n => !n.isRead).length;
-  const currentTheme = useMockStore(state => state.currentTheme);
-  const toggleTheme = useMockStore(state => state.toggleTheme);
+  const currentTheme = useAppStore(state => state.currentTheme);
+  const toggleTheme = useAppStore(state => state.toggleTheme);
   const { isPlatformAdmin } = useCurrentUserPermissions();
 
   const handleLogout = () => {

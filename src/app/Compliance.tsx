@@ -39,7 +39,7 @@ import {
   addMonths,
   subMonths
 } from "date-fns-jalali";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 import { Appointment, AppointmentStatus, AppointmentDocument } from "@/src/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -118,9 +118,9 @@ const getDocumentCompletion = (appointment: Appointment) => {
 };
 
 export default function Compliance() {
-  const appointments = useMockStore(state => state.appointments);
-  const loadCurrentUserRecords = useMockStore(state => state.loadCurrentUserRecords);
-  const users = useMockStore(state => state.users);
+  const appointments = useAppStore(state => state.appointments);
+  const loadCurrentUserRecords = useAppStore(state => state.loadCurrentUserRecords);
+  const users = useAppStore(state => state.users);
   
   const [searchTerm, setSearchTerm] = useState("");
   const [isAddOpen, setIsAddOpen] = useState(false);

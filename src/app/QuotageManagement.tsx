@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 import { 
   Calculator, 
   Plus, 
@@ -88,7 +88,7 @@ const QuoteStatusBadge = ({ status }: { status: QuoteStatus }) => {
 };
 
 export default function QuotageManagement() {
-  const { quotes, loadCurrentUserRecords, currentUser } = useMockStore();
+  const { quotes, loadCurrentUserRecords, currentUser } = useAppStore();
   const canViewCustomerPrivateDetails = currentUser?.role === "CEO";
   const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState<QuoteStatus | "ALL">("ALL");

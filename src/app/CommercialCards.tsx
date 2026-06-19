@@ -47,7 +47,7 @@ import {
   toEnglishDigits,
   toPersianDigits,
 } from "@/src/components/ShamsiDateTimeField";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 import type {
   BusinessEntityContact,
   BusinessEntityContactType,
@@ -529,10 +529,10 @@ function apiErrorMessage(error: unknown, fallback: string) {
 }
 
 export default function CommercialCards() {
-  const commercialCards = useMockStore((state) => state.commercialCards);
-  const addCommercialCard = useMockStore((state) => state.addCommercialCard);
-  const updateCommercialCard = useMockStore((state) => state.updateCommercialCard);
-  const deleteCommercialCard = useMockStore((state) => state.deleteCommercialCard);
+  const commercialCards = useAppStore((state) => state.commercialCards);
+  const addCommercialCard = useAppStore((state) => state.addCommercialCard);
+  const updateCommercialCard = useAppStore((state) => state.updateCommercialCard);
+  const deleteCommercialCard = useAppStore((state) => state.deleteCommercialCard);
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("commercialCards");
   const [searchTerm, setSearchTerm] = useState("");

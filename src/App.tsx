@@ -10,7 +10,7 @@ import { ProtectedShellSkeleton, PublicRouteSkeleton } from "./components/Skelet
 import { QUOTATIONS_UI_ENABLED, SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED } from "./config/features";
 import { installClientErrorReporting } from "./lib/errorReporting";
 import { installClientPerformanceMonitoring } from "./lib/clientPerformance";
-import { useMockStore } from "./store/useMockStore";
+import { useAppStore } from "./store/useAppStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 const LazyToaster = lazy(() =>
@@ -80,7 +80,7 @@ const isProtectedPath = (pathname: string) =>
   protectedRoutePrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 
 function PublicLoginEntry() {
-  const currentUser = useMockStore((state) => state.currentUser);
+  const currentUser = useAppStore((state) => state.currentUser);
   return currentUser ? <Navigate to="/dashboard" replace /> : <LoginPage />;
 }
 

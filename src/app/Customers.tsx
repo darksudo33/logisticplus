@@ -40,7 +40,7 @@ import { ActionSkeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
 import { EmptyState, EmptyTableRow, resetFiltersAction } from "@/src/components/EmptyState";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 import type { Customer } from "@/src/types";
 
 type CustomerPhoneDraft = {
@@ -142,9 +142,9 @@ function customerDisplayName(customer: Customer) {
 
 export default function Customers() {
   const navigate = useNavigate();
-  const customers = useMockStore((state) => state.customers);
-  const currentUser = useMockStore((state) => state.currentUser);
-  const loadCurrentUserRecords = useMockStore((state) => state.loadCurrentUserRecords);
+  const customers = useAppStore((state) => state.customers);
+  const currentUser = useAppStore((state) => state.currentUser);
+  const loadCurrentUserRecords = useAppStore((state) => state.loadCurrentUserRecords);
   const [searchTerm, setSearchTerm] = useState("");
   const [isFormDialogOpen, setIsFormDialogOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
