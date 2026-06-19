@@ -53,6 +53,7 @@ const RatesAndTariffs = lazy(() => import("./app/RatesAndTariffs"));
 const protectedRoutePrefixes = [
   "/dashboard",
   "/daily-status",
+  // Reserved for the upcoming kootaj-board feature; currently redirects below.
   "/kootaj-board",
   "/shipments",
   "/changelog",
