@@ -21,7 +21,6 @@ const LazyToaster = lazy(() =>
 const ProtectedAppLayout = lazy(() => import("./components/layout/ProtectedAppLayout"));
 const LoginPage = lazy(() => import("./app/LoginPage"));
 const Dashboard = lazy(() => import("./app/Dashboard"));
-const HamyarPage = lazy(() => import("./app/HamyarPage"));
 const Shipments = lazy(() => import("./app/Shipments"));
 const ExitedShipments = lazy(() => import("./app/ExitedShipments"));
 const DailyStatus = lazy(() => import("./app/DailyStatus"));
@@ -53,8 +52,6 @@ const RatesAndTariffs = lazy(() => import("./app/RatesAndTariffs"));
 
 const protectedRoutePrefixes = [
   "/dashboard",
-  "/Hamyar",
-  "/hamyar",
   "/daily-status",
   "/kootaj-board",
   "/shipments",
@@ -105,8 +102,6 @@ function AppRoutes() {
         <Route path="/track/:token" element={<PublicTrack />} />
 
         <Route path="/dashboard" element={<ProtectedAppLayout><Dashboard /></ProtectedAppLayout>} />
-        <Route caseSensitive path="/Hamyar" element={<ProtectedAppLayout roles={["CEO"]}><HamyarPage /></ProtectedAppLayout>} />
-        <Route caseSensitive path="/hamyar" element={<Navigate to="/Hamyar" replace />} />
         <Route path="/daily-status" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><DailyStatus /></ProtectedAppLayout>} />
         <Route path="/kootaj-board" element={<Navigate to="/daily-status" replace />} />
         <Route path="/shipments" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><Shipments /></ProtectedAppLayout>} />

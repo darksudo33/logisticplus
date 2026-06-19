@@ -167,7 +167,6 @@ import {
   uploadChatAttachmentSingle,
 } from "../../src/server/document-storage.js";
 import {
-  aiChatBodySchema,
   archiveEntityParamsSchema,
   chatDirectBodySchema,
   chatAttachmentUploadBodySchema,
@@ -227,7 +226,6 @@ import {
 } from "../../src/server/rate-limit.js";
 import { runStartupChecks, shouldTrustProxy } from "../../src/server/startup-checks.js";
 import { startCurrencyRatesWorker } from "../../src/server/rates-worker.js";
-import { AI_MESSAGES, runAiChat } from "../../src/server/ai/ai-orchestrator.js";
 
 const listCustomerRelated = (id, type, { organizationId, includePrivateDetails = true } = {}) =>
   listCustomerRelatedFromRepository(pool, id, type, { organizationId, includePrivateDetails });
@@ -273,7 +271,6 @@ const CHAT_TYPING_LIMIT = { limit: 1, windowMs: 2 * 1000 };
 const CHAT_SOCKET_EVENT_LIMIT = { limit: 180, windowMs: 60 * 1000 };
 const CHAT_SOCKET_CONNECTION_LIMIT = { limit: 12, windowMs: 60 * 1000 };
 const CHAT_SOCKET_MAX_BYTES = 8 * 1024;
-const AI_CHAT_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
 
 const chatClients = new Map();
 const chatRateLimitBuckets = new Map();
@@ -955,11 +952,6 @@ function toDashboardHomeDto(user, dashboardData = {}) {
     ],
     myActiveTasks,
     lastUpdatedShipments,
-    aiAssistant: {
-      name: AI_MESSAGES.ASSISTANT_NAME,
-      status: "ready",
-      subtitle: "از وضعیت محموله‌ها، اسناد و وظایف بپرسید",
-    },
   };
 }
 
@@ -2370,72 +2362,6 @@ async function startServer() {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
       console.error("Dashboard failed:", error);
       createApiError(res, 500, "DASHBOARD_FAILED", "Could not load dashboard data.");
-    }
-  });
-
-  app.post("/api/ai/chat", async (req, res) => {
-    try {
-      const tenantRequest = await requireAuthenticatedTenantUser(req, res, "AI assistant chat API");
-      if (!tenantRequest) return;
-      const { user, organizationId } = tenantRequest;
-      await requirePermission(user, "dashboard.view");
-      if (String(user.role || "").toUpperCase() !== "CEO") {
-        return createApiError(res, 403, "FORBIDDEN", AI_MESSAGES.CEO_ONLY_MESSAGE);
-      }
-      if (!(await consumeRateLimit(req, res, "ai-chat", { ...AI_CHAT_LIMIT, discriminator: user.id }))) return;
-      const body = parseRequestValue(res, aiChatBodySchema, req.body || {});
-      if (!body) return;
-
-      const result = await runAiChat({
-        pool,
-        user,
-        organizationId,
-        message: body.message,
-        context: body.context,
-        conversationId: body.conversationId,
-        recentMessages: body.recentMessages,
-        activeEntity: body.activeEntity,
-      });
-      const responseId = crypto.randomUUID();
-      const createdAt = new Date().toISOString();
-      const responseData = {
-        id: responseId,
-        assistantName: AI_MESSAGES.ASSISTANT_NAME,
-        status: result.audit?.success ? "answered" : "ready",
-        answer: result.data?.answer || AI_MESSAGES.NO_CODE_DETECTED,
-        tone: result.data?.tone || "direct",
-        responseMode: result.data?.responseMode || "direct_answer",
-        activeEntity: result.data?.activeEntity,
-        suggestions: result.data?.suggestions || [],
-        sources: result.data?.sources || [],
-        createdAt,
-      };
-
-      await auditLog({
-        organizationId,
-        actorUserId: user.id,
-        action: "ai.chat.ask",
-        entityType: "AI_ASSISTANT",
-        entityId: responseId,
-        summary: "AI assistant read-only question was processed.",
-        metadata: {
-          route: "/api/ai/chat",
-          context: body.context,
-          conversationId: body.conversationId,
-          queryType: result.audit?.queryType,
-          toolsCalled: result.audit?.toolsCalled || [],
-          success: Boolean(result.audit?.success),
-          reason: result.audit?.reason || null,
-          activeEntityType: body.activeEntity?.type || null,
-        },
-        requestContext: requestContext(req),
-      });
-
-      res.json({ ok: true, data: responseData });
-    } catch (error) {
-      if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
-      console.error("AI assistant chat failed:", error);
-      createApiError(res, 500, "AI_CHAT_FAILED", "Could not answer the AI assistant question.");
     }
   });
 

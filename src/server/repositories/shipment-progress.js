@@ -19,24 +19,6 @@ import {
 } from "./shipment-workflow-templates.js";
 import { requireOrganizationScope } from "../tenant-scope.js";
 import { withTransaction } from "../transaction.js";
-import { refreshCompanyBrainEntity } from "../ai/company-brain.js";
-
-async function refreshWorkflowBrainBestEffort(pool, organizationId, shipmentId, workflowItemId = "") {
-  if (!organizationId || !shipmentId) return;
-  try {
-    await refreshCompanyBrainEntity(pool, organizationId, "shipment", shipmentId);
-    if (workflowItemId) {
-      await refreshCompanyBrainEntity(pool, organizationId, "workflow_item", workflowItemId);
-    }
-  } catch (error) {
-    if (error?.code === "42P01" || error?.code === "42703") return;
-    console.warn("Company brain workflow refresh failed:", {
-      shipmentId,
-      workflowItemId,
-      message: error?.message || String(error),
-    });
-  }
-}
 
 function fallbackWorkflowDefinition() {
   return normalizeWorkflowDefinition({
@@ -660,7 +642,6 @@ export async function updateShipmentWorkflowCurrent(pool, {
     });
     return buildProgressPayload(client, shipmentId, scopedOrganizationId);
   });
-  await refreshWorkflowBrainBestEffort(pool, scopedOrganizationId, shipmentId);
   return payload;
 }
 
@@ -737,7 +718,6 @@ export async function addShipmentWorkflowBlocker(pool, {
       progress: await buildProgressPayload(client, shipmentId, scopedOrganizationId),
     };
   });
-  await refreshWorkflowBrainBestEffort(pool, scopedOrganizationId, shipmentId, payload?.blocker?.id ? `blocker:${payload.blocker.id}` : "");
   return payload;
 }
 
@@ -819,7 +799,6 @@ export async function resolveShipmentWorkflowBlocker(pool, {
       progress: await buildProgressPayload(client, shipmentId, scopedOrganizationId),
     };
   });
-  await refreshWorkflowBrainBestEffort(pool, scopedOrganizationId, shipmentId, payload?.blocker?.id ? `blocker:${payload.blocker.id}` : "");
   return payload;
 }
 

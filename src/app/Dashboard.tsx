@@ -4,7 +4,6 @@ import type { LucideIcon } from "lucide-react";
 import {
   AlertCircle,
   ArrowLeft,
-  Bot,
   CheckCircle2,
   ClipboardList,
   FileSearch,
@@ -13,7 +12,6 @@ import {
   PackageSearch,
   Search,
   Ship,
-  Sparkles,
   Users,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -60,11 +58,6 @@ type DashboardHomeData = {
   metrics: DashboardMetric[];
   myActiveTasks: DashboardTask[];
   lastUpdatedShipments: DashboardShipment[];
-  aiAssistant: {
-    name: string;
-    status: string;
-    subtitle: string;
-  };
 };
 
 type ShipmentSearchResult = {
@@ -74,47 +67,6 @@ type ShipmentSearchResult = {
   subtitle?: string;
   description?: string;
   url?: string;
-};
-
-type AiActiveEntity = {
-  type: "shipment" | "customer";
-  id: string;
-  code?: string;
-  label?: string;
-};
-
-type AiSource = {
-  type:
-    | "shipment"
-    | "customer"
-    | "document"
-    | "malvani"
-    | "captain"
-    | "workflow"
-    | "task"
-    | "cheque"
-    | "tariff"
-    | "rate"
-    | "public_tracking"
-    | "chat"
-    | "archive"
-    | "audit"
-    | "user"
-    | "system";
-  id?: string;
-  label: string;
-  url?: string;
-};
-
-type AiChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  tone?: "direct" | "conversational" | "clarification";
-  responseMode?: "direct_answer" | "short_summary" | "report";
-  sources?: AiSource[];
-  suggestions?: string[];
-  activeEntity?: AiActiveEntity;
 };
 
 const metricIcons: Record<DashboardMetric["key"], LucideIcon> = {
@@ -159,14 +111,6 @@ function formatShortDate(value?: string) {
   }).format(parsed);
 }
 
-function createChatMessageId(prefix: string) {
-  const random = globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
-  return `${prefix}-${random}`;
-}
-
-function hasPersianText(value: string) {
-  return /[\u0600-\u06ff]/.test(value);
-}
 
 function statusText(status: string) {
   const normalized = String(status || "").toUpperCase();
@@ -417,236 +361,6 @@ function DocumentShipmentQuickSearch() {
   );
 }
 
-function AiAssistantCard({ assistant }: { assistant: DashboardHomeData["aiAssistant"] }) {
-  const navigate = useNavigate();
-  const [draft, setDraft] = React.useState("");
-  const [messages, setMessages] = React.useState<AiChatMessage[]>([]);
-  const [activeEntity, setActiveEntity] = React.useState<AiActiveEntity | null>(null);
-  const [error, setError] = React.useState("");
-  const [isSubmitting, setIsSubmitting] = React.useState(false);
-  const [conversationId] = React.useState(() => createChatMessageId("dashboard-ai"));
-  const threadEndRef = React.useRef<HTMLDivElement | null>(null);
-
-  const latestAssistantId = React.useMemo(
-    () => [...messages].reverse().find((item) => item.role === "assistant")?.id,
-    [messages]
-  );
-
-  React.useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ block: "end" });
-  }, [messages, isSubmitting]);
-
-  const sendMessage = React.useCallback(async (rawMessage: string) => {
-    const trimmedMessage = rawMessage.trim();
-    setError("");
-
-    if (!trimmedMessage) {
-      setError("متن سوال را وارد کنید.");
-      return;
-    }
-
-    const recentMessages = messages.slice(-8).map((item) => ({
-      role: item.role,
-      content: item.content,
-    }));
-    const userMessage: AiChatMessage = {
-      id: createChatMessageId("user"),
-      role: "user",
-      content: trimmedMessage,
-    };
-
-    setMessages((current) => [...current, userMessage]);
-    setDraft("");
-    setIsSubmitting(true);
-    try {
-      const response = await fetch("/api/ai/chat", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: trimmedMessage,
-          context: "dashboard",
-          conversationId,
-          recentMessages,
-          ...(activeEntity ? { activeEntity } : {}),
-        }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (response.status === 401) {
-        navigate("/login");
-        return;
-      }
-      if (!response.ok || payload.ok === false) {
-        throw new Error(payload?.error?.message || "پاسخ همیار آماده نشد.");
-      }
-      const responseData = payload.data || {};
-      const assistantMessage: AiChatMessage = {
-        id: responseData.id || createChatMessageId("assistant"),
-        role: "assistant",
-        content: responseData.answer || "همیار لاجستیک هنوز پاسخی برای این سوال ندارد.",
-        tone: responseData.tone || "direct",
-        responseMode: responseData.responseMode || "direct_answer",
-        sources: Array.isArray(responseData.sources) ? responseData.sources : [],
-        suggestions: Array.isArray(responseData.suggestions) ? responseData.suggestions : [],
-        activeEntity: responseData.activeEntity,
-      };
-      setMessages((current) => [...current, assistantMessage]);
-      setActiveEntity(responseData.activeEntity || null);
-    } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "پاسخ همیار آماده نشد.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  }, [activeEntity, conversationId, messages, navigate]);
-
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    void sendMessage(draft);
-  };
-
-  const handleInputKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Enter" || event.shiftKey) return;
-    event.preventDefault();
-    void sendMessage(draft);
-  };
-
-  const openSource = (sourceItem: AiSource) => {
-    if (!sourceItem.url) return;
-    navigate(sourceItem.url);
-  };
-
-  return (
-    <Card data-testid="dashboard-ai-assistant">
-      <CardHeader className="pb-0">
-        <div className="flex items-start gap-3">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-600 dark:text-violet-300">
-            <Bot className="h-5 w-5" />
-          </span>
-          <div className="min-w-0">
-            <CardTitle className="text-base font-black">{assistant.name}</CardTitle>
-            <CardDescription className="mt-1 text-xs font-bold">{assistant.subtitle}</CardDescription>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="pt-4">
-        <div className="rounded-lg border border-border bg-background/70">
-          <div className="flex max-h-[360px] min-h-[180px] flex-col gap-3 overflow-y-auto p-3" data-testid="dashboard-ai-thread">
-            {messages.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border bg-muted/25 p-3 text-sm font-bold leading-7 text-muted-foreground">
-                سوال کوتاه بپرسید؛ مثلاً وضعیت یک محموله، شماره ناخدا یا شماره تماس مشتری.
-              </div>
-            ) : null}
-
-            {messages.map((item) => {
-              const isUser = item.role === "user";
-              const isLatestAssistant = item.id === latestAssistantId;
-              const isPersianAssistantText = !isUser && hasPersianText(item.content);
-              return (
-                <div
-                  key={item.id}
-                  className={cn("flex flex-col", isUser ? "items-end" : "items-start")}
-                  data-testid={isUser ? "dashboard-ai-user-message" : "dashboard-ai-assistant-message"}
-                >
-                  <div
-                    className={cn(
-                      "max-w-[88%] break-words rounded-lg px-3 py-2 text-sm font-bold leading-7 shadow-none",
-                      isUser
-                        ? "bg-primary text-primary-foreground"
-                        : "ai-chat-message-text border border-border bg-muted/40 text-foreground",
-                      !isUser && (isPersianAssistantText ? "ai-chat-message-text-rtl" : "ai-chat-message-text-ltr")
-                    )}
-                    dir={!isUser ? (isPersianAssistantText ? "rtl" : "ltr") : undefined}
-                    data-testid={isLatestAssistant ? "dashboard-ai-answer" : undefined}
-                  >
-                    {item.content}
-                  </div>
-
-                  {!isUser && item.sources?.length ? (
-                    <div className="mt-2 flex max-w-[88%] flex-wrap gap-1.5" data-testid="dashboard-ai-source-chips">
-                      {item.sources.map((sourceItem, index) => (
-                        <button
-                          key={`${sourceItem.type}-${sourceItem.id || sourceItem.label}-${index}`}
-                          type="button"
-                          className={cn(
-                            "h-7 max-w-full truncate rounded-lg border border-border bg-background px-2 text-[11px] font-black text-muted-foreground transition-colors",
-                            sourceItem.url ? "hover:border-primary/40 hover:text-primary" : "cursor-default"
-                          )}
-                          onClick={() => openSource(sourceItem)}
-                          disabled={!sourceItem.url}
-                          data-testid="dashboard-ai-source-chip"
-                        >
-                          {sourceItem.label}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {!isUser && isLatestAssistant && item.suggestions?.length ? (
-                    <div className="mt-2 flex max-w-[88%] flex-wrap gap-1.5" data-testid="dashboard-ai-suggestions">
-                      {item.suggestions.slice(0, 4).map((suggestion) => (
-                        <button
-                          key={suggestion}
-                          type="button"
-                          className="min-h-7 rounded-lg border border-primary/20 bg-primary/5 px-2 py-1 text-[11px] font-black leading-5 text-primary transition-colors hover:border-primary/50 hover:bg-primary/10 disabled:opacity-60"
-                          onClick={() => void sendMessage(suggestion)}
-                          disabled={isSubmitting}
-                          data-testid="dashboard-ai-suggestion-chip"
-                        >
-                          {suggestion}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-
-            {isSubmitting ? (
-              <div className="flex items-start" data-testid="dashboard-ai-typing">
-                <div className="flex max-w-[88%] items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm font-bold text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  همیار لاجستیک در حال بررسی...
-                </div>
-              </div>
-            ) : null}
-            <div ref={threadEndRef} />
-          </div>
-        </div>
-
-        <form className="mt-3 space-y-2" onSubmit={handleSubmit}>
-          <textarea
-            value={draft}
-            onChange={(event) => {
-              setDraft(event.target.value);
-              if (error) setError("");
-            }}
-            onKeyDown={handleInputKeyDown}
-            placeholder="مثلاً: وضعیت محموله 14051102036 چیه؟"
-            className="min-h-12 w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm font-bold leading-7 outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-3 focus:ring-ring/25"
-            data-testid="dashboard-ai-input"
-          />
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <Badge variant="outline" className="h-6 w-fit rounded-lg text-[11px] font-black">
-              {activeEntity?.label || (assistant.status === "placeholder" ? "نسخه آزمایشی امن" : "فعال")}
-            </Badge>
-            <Button type="submit" className="h-9 px-4 text-xs font-black" disabled={isSubmitting} data-testid="dashboard-ai-submit">
-              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              ارسال
-            </Button>
-          </div>
-        </form>
-
-        {error ? (
-          <p className="mt-3 flex items-center gap-1 text-xs font-bold text-destructive">
-            <AlertCircle className="h-3.5 w-3.5" />
-            {error}
-          </p>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
 function MyTasksPanel({ tasks }: { tasks: DashboardTask[] }) {
   const navigate = useNavigate();
 
@@ -825,8 +539,6 @@ export default function Dashboard() {
       <ShipmentQuickSearch />
 
       <DocumentShipmentQuickSearch />
-
-      <AiAssistantCard assistant={data.aiAssistant} />
 
       <MyTasksPanel tasks={data.myActiveTasks} />
 

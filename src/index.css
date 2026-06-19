@@ -140,23 +140,6 @@
   padding: 1rem;
 }
 
-.ai-chat-message-text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  unicode-bidi: plaintext;
-  line-height: 1.8;
-}
-
-.ai-chat-message-text-rtl {
-  direction: rtl;
-  text-align: right;
-}
-
-.ai-chat-message-text-ltr {
-  direction: ltr;
-  text-align: left;
-}
-
 @media (min-width: 768px) {
   .app-page {
     padding: 1.25rem;

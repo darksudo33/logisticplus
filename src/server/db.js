@@ -58,7 +58,6 @@ import {
   resolveManualShipmentCode,
   SHIPMENT_CODE_ERRORS,
 } from "./shipment-codes.js";
-import { refreshCompanyBrainEntity } from "./ai/company-brain.js";
 import {
   previewUserDeletion as previewUserDeletionFromRepository,
 } from "../../server/src/modules/users/user.repository.js";
@@ -69,21 +68,6 @@ import { shipmentTimerOrderBy } from "./repositories/shipment-sort.js";
 
 export { checkDatabase, createApiError, pool };
 
-async function refreshCompanyBrainEntityBestEffort(organizationId, entityType, entityId) {
-  if (!organizationId || !entityType || !entityId) return;
-  try {
-    const result = await refreshCompanyBrainEntity(pool, organizationId, entityType, entityId);
-    if (result?.reason && result.reason !== "memory_tables_missing") {
-      console.warn("Company brain refresh skipped:", { entityType, entityId, reason: result.reason });
-    }
-  } catch (error) {
-    console.warn("Company brain refresh failed:", {
-      entityType,
-      entityId,
-      message: error?.message || String(error),
-    });
-  }
-}
 
 const TRANSIENT_SESSION_HOURS = 12;
 const REMEMBER_SESSION_DAYS = 30;
@@ -1517,7 +1501,6 @@ export async function createShipmentRecord({ ownerUserId, actorUserId, organizat
       },
       { includeCustomerPrivateDetails }
     );
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "shipment", result.rows[0].id);
     return savedShipment;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -1678,7 +1661,6 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
         { includeCustomerPrivateDetails }
       ),
     };
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "shipment", id);
     return payload;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -1743,7 +1725,6 @@ export async function moveShipmentToExitedArchive(id, { organizationId, actorUse
       before: toUiShipment(before),
       after: toUiShipment(result.rows[0]),
     };
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "shipment", id);
     return payload;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -1787,7 +1768,6 @@ export async function restoreShipmentFromExitedArchive(id, { organizationId, act
       after: toUiShipment(result.rows[0]),
       actorUserId,
     };
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "shipment", id);
     return payload;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -2345,7 +2325,6 @@ export async function createDocumentRecord({
     await syncDocumentUserRecord(client, ownerUserId, result.rows[0]);
     await client.query("COMMIT");
     const savedDocument = result.rows[0];
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "document", savedDocument.id);
     return savedDocument;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -2547,7 +2526,6 @@ export async function updateDocumentMetadata(documentId, updates = {}, { organiz
     }
     await client.query("COMMIT");
     const payload = { before, after: result.rows[0] };
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "document", documentId);
     return payload;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -2611,7 +2589,6 @@ export async function archiveDocumentRecord(documentId, { organizationId, actorU
     await syncDocumentUserRecord(client, archived.owner_user_id, archived);
     await client.query("COMMIT");
     const payload = { before, after: archived };
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "document", documentId);
     return payload;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -2826,7 +2803,6 @@ export async function createTaskRecord({
     await queueHighPriorityTaskSms(client, result.rows[0], "assigned");
     await client.query("COMMIT");
     const savedTask = result.rows[0];
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "task", savedTask.id);
     return savedTask;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -2973,7 +2949,6 @@ export async function updateTaskRecord(taskId, updates = {}, { organizationId } 
     }
     await client.query("COMMIT");
     const payload = { before, after: result.rows[0] };
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "task", taskId);
     return payload;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -3118,7 +3093,6 @@ export async function assignTaskRecord(taskId, {
     }
     await client.query("COMMIT");
     const payload = { before, after };
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "task", taskId);
     return payload;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -3200,7 +3174,6 @@ export async function updateTaskStatusRecord(taskId, {
     }
     await client.query("COMMIT");
     const payload = { before, after };
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "task", taskId);
     return payload;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -3640,7 +3613,6 @@ export async function createChequeRecord({ ownerUserId, actorUserId, organizatio
     await syncChequeUserRecord(client, ownerUserId, result.rows[0]);
     await client.query("COMMIT");
     const savedCheque = result.rows[0];
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "cheque", savedCheque.id);
     return savedCheque;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -3698,7 +3670,6 @@ export async function updateChequeRecord(id, updates = {}, { organizationId } = 
     await syncChequeUserRecord(client, result.rows[0].owner_user_id, result.rows[0]);
     await client.query("COMMIT");
     const payload = { before, after: result.rows[0] };
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "cheque", id);
     return payload;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -6261,7 +6232,6 @@ export async function createCustomerRecord({ ownerUserId, actorUserId, customer 
     await syncCustomerUserRecord(client, ownerUserId, result.rows[0]);
     await client.query("COMMIT");
     const savedCustomer = toUiCustomer(result.rows[0], { phoneNumbers: savedPhoneNumbers });
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "customer", result.rows[0].id);
     return savedCustomer;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -6362,7 +6332,6 @@ export async function updateCustomerRecord(id, updates, { organizationId, actorU
       before: toUiCustomer(current),
       after: toUiCustomer(result.rows[0], { phoneNumbers: savedPhoneNumbers }),
     };
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "customer", id);
     return payload;
   } catch (error) {
     await client.query("ROLLBACK");
@@ -6395,7 +6364,6 @@ export async function archiveCustomerRecord(id, { organizationId } = {}) {
     await syncCustomerUserRecord(client, result.rows[0]?.owner_user_id, result.rows[0]);
     await client.query("COMMIT");
     const payload = { before: toUiCustomer(before.rows[0]), after: toUiCustomer(result.rows[0]) };
-    await refreshCompanyBrainEntityBestEffort(scopedOrganizationId, "customer", id);
     return payload;
   } catch (error) {
     await client.query("ROLLBACK");
