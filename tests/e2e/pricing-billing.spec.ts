@@ -1,51 +1,24 @@
 import { expect, test } from "@playwright/test";
-import { USER_PASSWORD, apiContext, disposeContexts, loginApi, readOk, uniqueEmail } from "./helpers";
-import { extraUsagePricing, formatIrr, pricingPlans } from "../../src/lib/pricing";
+import { USER_PASSWORD, apiContext, disposeContexts, expectUnavailable, loginApi, readOk, uniqueEmail } from "./helpers";
+import { pricingPlans } from "../../src/lib/pricing";
 
 const expectedPlans = Object.fromEntries(pricingPlans.map((plan) => [plan.id, plan])) as Record<string, (typeof pricingPlans)[number]>;
 
-function normalizeDigits(value: string) {
-  const persian = "۰۱۲۳۴۵۶۷۸۹";
-  const arabic = "٠١٢٣٤٥٦٧٨٩";
-  return value
-    .replace(/[۰-۹]/g, (digit) => String(persian.indexOf(digit)))
-    .replace(/[٠-٩]/g, (digit) => String(arabic.indexOf(digit)))
-    .replace(/[٬,]/g, "");
-}
+test("retired pricing and public signup pages render login instead of self-serve checkout", async ({ page }) => {
+  for (const route of ["/pricing", "/signup", "/signup?plan=business", "/signup/pending"]) {
+    await page.goto(route);
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.locator('input[type="email"]')).toBeVisible();
+    await expect(page.locator('a[href*="/signup?plan="]')).toHaveCount(0);
 
-async function normalizedBodyText(page: any) {
-  return normalizeDigits(await page.locator("body").innerText());
-}
-
-test("pricing page shows updated plan names, prices, limits, and add-ons", async ({ page }) => {
-  await page.goto("/pricing");
-  await expect(page.locator("h1").first()).toBeVisible();
-
-  const body = await normalizedBodyText(page);
-  for (const plan of pricingPlans) {
-    expect(body).toContain(plan.name);
-    expect(body).toContain(normalizeDigits(formatIrr(plan.monthlyPriceIrr)));
-    for (const feature of plan.summaryFeatures) {
-      expect(body).toContain(normalizeDigits(feature));
+    const body = await page.locator("body").innerText();
+    for (const plan of pricingPlans) {
+      expect(body).not.toContain(plan.name);
     }
-  }
-  for (const usagePrice of extraUsagePricing) {
-    expect(body).toContain(normalizeDigits(usagePrice));
   }
 });
 
-for (const [planId, plan] of Object.entries(expectedPlans)) {
-  test(`signup payment summary shows ${plan.name} price`, async ({ page }) => {
-    await page.goto(`/signup?plan=${planId}`);
-    await expect(page.locator("h1").first()).toBeVisible();
-
-    const body = await normalizedBodyText(page);
-    expect(body).toContain(plan.name);
-    expect(body).toContain(normalizeDigits(formatIrr(plan.monthlyPriceIrr)));
-  });
-}
-
-test("/api/plans returns updated prices, limits, and SMS feature flags", async () => {
+test("/api/plans returns current plan prices, limits, and feature flags for admin signup", async () => {
   const context = await apiContext();
   const plans = await readOk<any[]>(await context.get("/api/plans"));
 
@@ -64,16 +37,35 @@ test("/api/plans returns updated prices, limits, and SMS feature flags", async (
   await disposeContexts(context);
 });
 
-test("public signup creates a billing payment using the selected updated plan price", async () => {
-  const publicContext = await apiContext();
-  const admin = await loginApi();
-  const ownerEmail = uniqueEmail("pricing-payment");
+test("public signup and public payment handoff APIs stay unavailable", async () => {
+  const context = await apiContext();
 
-  const signup = await readOk<any>(
-    await publicContext.post("/api/signup", {
+  await expectUnavailable(await context.post("/api/signup", {
+    data: {
+      companyName: `Disabled Signup ${Date.now()}`,
+      ownerName: "Disabled Signup Owner",
+      ownerEmail: uniqueEmail("disabled-public-signup"),
+      password: USER_PASSWORD,
+      planId: "business",
+      billingCycle: "monthly",
+      contactPhone: "09120000000",
+    },
+  }));
+  await expectUnavailable(await context.post("/api/billing/payments/disabled-payment/start"));
+  await expectUnavailable(await context.get("/api/billing/zarinpal/callback?Authority=disabled-public-release&Status=OK"));
+
+  await disposeContexts(context);
+});
+
+test("platform admin can create the only allowed company signup with the selected plan", async () => {
+  const admin = await loginApi();
+  const ownerEmail = uniqueEmail("admin-manual-signup");
+
+  const created = await readOk<any>(
+    await admin.post("/api/admin/organizations/manual-signup", {
       data: {
-        companyName: `Pricing Payment ${Date.now()}`,
-        ownerName: "Pricing Payment Owner",
+        companyName: `Admin Manual Signup ${Date.now()}`,
+        ownerName: "Admin Manual Signup Owner",
         ownerEmail,
         password: USER_PASSWORD,
         planId: "business",
@@ -83,14 +75,15 @@ test("public signup creates a billing payment using the selected updated plan pr
     })
   );
 
-  expect(signup.amountIrr).toBe(expectedPlans.business.monthlyPriceIrr);
-  expect(signup.plan.id).toBe("business");
-  expect(signup.plan.monthlyPriceIrr).toBe(expectedPlans.business.monthlyPriceIrr);
+  expect(created.organizationId).toBeTruthy();
+  expect(created.plan.id).toBe("business");
+  expect(created.plan.monthlyPriceIrr).toBe(expectedPlans.business.monthlyPriceIrr);
+  expect(created.organization.status).toBe("active");
+  expect(created.organization.planId).toBe("business");
+  expect(created.organization.contactEmail).toBe(ownerEmail);
+  expect(created.organization.subscription.planId).toBe("business");
+  expect(created.organization.subscription.status).toBe("active");
+  expect(created.organization.subscription.billingCycle).toBe("monthly");
 
-  const payments = await readOk<any[]>(await admin.get("/api/admin/payments"));
-  const payment = payments.find((item) => item.id === signup.paymentId);
-  expect(payment).toBeTruthy();
-  expect(payment.amountIrr).toBe(expectedPlans.business.monthlyPriceIrr);
-
-  await disposeContexts(publicContext, admin);
+  await disposeContexts(admin);
 });

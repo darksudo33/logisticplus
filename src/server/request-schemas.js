@@ -9,6 +9,7 @@ import {
   DAILY_STATUS_RELEASE_STATUSES,
   DAILY_STATUS_TAX_PAYMENT_STATUSES,
 } from "../shared/daily-status-board.js";
+import { SHIPMENT_STATUS_VALUES } from "../shared/shipment-statuses.js";
 
 export {
   customerCreateBodySchema,
@@ -269,6 +270,18 @@ const dailyStatusNumberShape = Object.fromEntries(
 const dailyStatusCommonStatusShape = Object.fromEntries(
   DAILY_STATUS_COMMON_STATUS_FIELDS.map((field) => [field, dailyStatusCommonStatusField])
 );
+const dailyStatusBaseInfoPatchSchema = z.object({
+  status: z.enum(SHIPMENT_STATUS_VALUES).optional(),
+  currentStage: optionalNullableTrimmedText(500),
+  origin: optionalNullableTrimmedText(180),
+  deliveryPort: optionalNullableTrimmedText(180),
+  dischargePort: optionalNullableTrimmedText(180),
+  consigneeName: optionalNullableTrimmedText(240),
+  orderRegistrationNumber: optionalNullableTrimmedText(120),
+}).strict().refine(
+  (value) => Object.values(value).some((item) => item !== undefined),
+  { message: "At least one base info field is required." }
+);
 export const organizationMembersQuerySchema = z.object({
   includeInactive: queryBoolean(false),
 });
@@ -372,10 +385,12 @@ export const dailyStatusListQuerySchema = z.object({
   customsRoute: optionalQueryEnum(DAILY_STATUS_CUSTOMS_ROUTES),
   customsStatus: optionalQueryEnum(DAILY_STATUS_CUSTOMS_STATUSES),
   releaseStatus: optionalQueryEnum(DAILY_STATUS_RELEASE_STATUSES),
+  shipmentStatus: optionalQueryEnum(SHIPMENT_STATUS_VALUES),
   limit: queryLimit(50),
 }).strict();
 
 export const dailyStatusPatchBodySchema = z.object({
+  baseInfo: dailyStatusBaseInfoPatchSchema.optional(),
   commercialCardId: optionalNullableId,
   orderRegistrationNumber: optionalNullableTrimmedText(120),
   proformaNumber: optionalNullableTrimmedText(120),

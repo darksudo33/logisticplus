@@ -11,6 +11,7 @@ import {
   expectForbidden,
   expectPublicTrackingPayloadIsSafe,
   loginApi,
+  nextValidShipmentCode,
   readOk,
   uniqueEmail,
 } from "./helpers";
@@ -139,7 +140,7 @@ test.describe.serial("daily status board", () => {
         holderName: "Cross tenant daily status card",
       });
 
-      const rows = await readOk<any[]>(await owner.get("/api/daily-status"));
+      const rows = await readOk<any[]>(await owner.get("/api/daily-status?shipmentId=s1"));
       expect(rows.length).toBeGreaterThan(0);
       const seedRow = rows.find((row) => row.shipment.id === "s1");
       expect(seedRow).toBeTruthy();
@@ -191,7 +192,7 @@ test.describe.serial("daily status board", () => {
            status, shipment_direction, transport_mode, shipment_type_code, origin, destination,
            created_by_id, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', 'import', 'sea', 'IMPORT_LENJ', 'Bushehr', 'Dubai', $3, NOW())`,
+         VALUES ($1, $2, $3, $4, $5, $6, 'KOOTAJ_DONE', 'import', 'sea', 'IMPORT_LENJ', 'Bushehr', 'Dubai', $3, NOW())`,
         [lenjShipmentId, ownerOrganizationId, ownerUserId, lenjShipmentCode, seedRow.customer.id, seedRow.customer.customerCode]
       );
       await dbQuery(
@@ -217,6 +218,10 @@ test.describe.serial("daily status board", () => {
       expect(lenjRows[0].shipment.shipmentTypeCode).toBe("IMPORT_LENJ");
       expect(lenjRows[0].baseInfo.credentialLabel).toBe("ملوانی");
       expect(lenjRows[0].baseInfo.credentialDisplayName).toBe(malvaniDisplayName);
+
+      const kootajRows = await readOk<any[]>(await owner.get("/api/daily-status?shipmentStatus=KOOTAJ_DONE"));
+      expect(kootajRows.some((row) => row.id === lenjShipmentId)).toBe(true);
+      expect(kootajRows.every((row) => row.shipment.status === "KOOTAJ_DONE")).toBe(true);
 
       const spoofedList = await owner.get(`/api/daily-status?organizationId=${encodeURIComponent(tenantInfo.organizationId)}`);
       await expectForbidden(spoofedList);
@@ -256,6 +261,42 @@ test.describe.serial("daily status board", () => {
         data: { currencyAmount: -1 },
       });
       expect(invalidNegativePatch.status(), await invalidNegativePatch.text()).toBe(400);
+
+      const invalidBaseStatusPatch = await owner.patch("/api/shipments/s1/daily-status", {
+        data: { baseInfo: { status: "NOT_A_SHIPMENT_STATUS" } },
+      });
+      expect(invalidBaseStatusPatch.status(), await invalidBaseStatusPatch.text()).toBe(400);
+
+      const baseOrderRegistrationNumber = `BASE-ORDER-${suffix}`;
+      const baseCurrentStage = `Base stage ${suffix}`;
+      const baseInfoUpdated = await readOk<any>(
+        await owner.patch("/api/shipments/s1/daily-status", {
+          data: {
+            baseInfo: {
+              status: "ARRIVED",
+              currentStage: baseCurrentStage,
+              origin: "Daily origin",
+              deliveryPort: "Daily delivery port",
+              dischargePort: "Daily discharge port",
+              consigneeName: "Daily consignee",
+              orderRegistrationNumber: baseOrderRegistrationNumber,
+            },
+          },
+        })
+      );
+      expect(baseInfoUpdated.shipment.status).toBe("ARRIVED");
+      expect(baseInfoUpdated.shipment.origin).toBe("Daily origin");
+      expect(baseInfoUpdated.shipment.destination).toBe("Daily delivery port");
+      expect(baseInfoUpdated.baseInfo.currentStage).toBe(baseCurrentStage);
+      expect(baseInfoUpdated.baseInfo.dischargePort).toBe("Daily discharge port");
+      expect(baseInfoUpdated.baseInfo.consigneeName).toBe("Daily consignee");
+      expect(baseInfoUpdated.baseInfo.orderRegistrationNumber).toBe(baseOrderRegistrationNumber);
+      expect(baseInfoUpdated.kootaj.orderRegistrationNumber).toBe(baseOrderRegistrationNumber);
+
+      const canonicalAfterBaseEdit = await readOk<any>(await owner.get("/api/shipments/s1"));
+      expect(canonicalAfterBaseEdit.status).toBe("ARRIVED");
+      expect(canonicalAfterBaseEdit.origin).toBe("Daily origin");
+      expect(canonicalAfterBaseEdit.destination).toBe("Daily delivery port");
 
       const startedAt = new Date(Date.now() - 1000).toISOString();
       const updated = await readOk<any>(
@@ -344,6 +385,63 @@ test.describe.serial("daily status board", () => {
     }
   });
 
+  test("orders daily status rows by closest active shipment timer before created date fallback", async () => {
+    const owner = await loginApi();
+    try {
+      const noTimer = await readOk<any>(
+        await owner.post("/api/shipments", {
+          data: {
+            trackingNumber: await nextValidShipmentCode(),
+            origin: "Daily no timer origin",
+            destination: "Daily no timer destination",
+            status: "LOADING",
+          },
+        })
+      );
+      const laterTimer = await readOk<any>(
+        await owner.post("/api/shipments", {
+          data: {
+            trackingNumber: await nextValidShipmentCode(),
+            origin: "Daily later timer origin",
+            destination: "Daily later timer destination",
+            status: "LOADING",
+          },
+        })
+      );
+      const closestTimer = await readOk<any>(
+        await owner.post("/api/shipments", {
+          data: {
+            trackingNumber: await nextValidShipmentCode(),
+            origin: "Daily closest timer origin",
+            destination: "Daily closest timer destination",
+            status: "LOADING",
+          },
+        })
+      );
+
+      await readOk<any>(
+        await owner.patch(`/api/shipments/${encodeURIComponent(laterTimer.id)}/operational-fields`, {
+          data: { timerDeadlineAt: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString() },
+        })
+      );
+      await readOk<any>(
+        await owner.patch(`/api/shipments/${encodeURIComponent(closestTimer.id)}/operational-fields`, {
+          data: { timerDeadlineAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() },
+        })
+      );
+
+      const rows = await readOk<any[]>(await owner.get("/api/daily-status"));
+      const ids = rows.map((row) => row.id);
+      expect(ids.indexOf(closestTimer.id)).toBeGreaterThanOrEqual(0);
+      expect(ids.indexOf(laterTimer.id)).toBeGreaterThanOrEqual(0);
+      expect(ids.indexOf(noTimer.id)).toBeGreaterThanOrEqual(0);
+      expect(ids.indexOf(closestTimer.id)).toBeLessThan(ids.indexOf(laterTimer.id));
+      expect(ids.indexOf(laterTimer.id)).toBeLessThan(ids.indexOf(noTimer.id));
+    } finally {
+      await disposeContexts(owner);
+    }
+  });
+
   test("keeps the board usable on desktop/mobile and syncs edits both ways with shipment detail", async ({ page }) => {
     const owner = await loginApi();
     const suffix = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
@@ -383,6 +481,11 @@ test.describe.serial("daily status board", () => {
             customsOffice: "UI Test Customs Office",
             internalNote: `daily-status-ui-private-${suffix}`,
           },
+        })
+      );
+      await readOk<any>(
+        await owner.patch("/api/shipments/s1/operational-fields", {
+          data: { timerDeadlineAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() },
         })
       );
       const uiRows = await readOk<any[]>(await owner.get("/api/daily-status"));
@@ -575,6 +678,7 @@ test.describe.serial("daily status board", () => {
         [ownerOrganizationId, originalCotageNumber, editedCotageNumber, detailCotageNumber]
       ).catch(() => null);
       await dbQuery("DELETE FROM user_records WHERE item_id IN ($1, $2)", [ownerCardId, detailCardId]).catch(() => null);
+      await owner.patch("/api/shipments/s1/operational-fields", { data: { timerDeadlineAt: null } }).catch(() => null);
       await disposeContexts(owner);
     }
   });

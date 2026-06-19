@@ -47,16 +47,7 @@ test("shipment V2 create renders while legacy bootstrap hydrates", async ({ page
   await expect(page.getByTestId("background-sync-notice")).toBeVisible();
 });
 
-test("public async surfaces use skeleton placeholders", async ({ page }) => {
-  await page.route("**/api/plans", async (route) => {
-    await delay(700);
-    await route.continue();
-  });
-
-  await page.goto("/pricing");
-  await expect(page.getByTestId("plans-sync-skeleton")).toBeVisible();
-  await expect(page.getByTestId("plans-sync-skeleton")).toBeHidden({ timeout: 15_000 });
-
+test("public tracking async surface uses skeleton placeholders", async ({ page }) => {
   await page.route("**/api/public/track/skeleton-token", async (route) => {
     await delay(700);
     await route.fulfill({

@@ -6,6 +6,7 @@ import {
   expectPublicTrackingPayloadIsSafe,
   loginApi,
   loginViaUi,
+  nextValidShipmentCode,
   readOk,
   uniqueEmail,
   USER_PASSWORD,
@@ -44,7 +45,7 @@ async function createShipmentWithTemplateApi(
         customerName: "Shipment template QA customer",
         origin: options.operation === "export" ? "Tehran" : "Dubai",
         destination: options.operation === "export" ? "Dubai" : "Tehran",
-        status: "PENDING",
+        status: "LOADING",
         shipmentTypeCode: options.typeCode,
         shipmentDirection: options.operation,
         transportMode: options.method === "lenj" ? "sea" : options.method,
@@ -73,14 +74,14 @@ test.describe.serial("shipment form templates", () => {
       operation: "import",
       method: "sea",
       typeCode: "IMPORT_SEA_CONTAINER",
-      trackingNumber: `WIZ-IMP-${Date.now()}`,
+      trackingNumber: await nextValidShipmentCode(),
     });
 
     await createShipmentWithTemplateApi(page.request, {
       operation: "export",
       method: "sea",
       typeCode: "EXPORT_SEA_BULK",
-      trackingNumber: `WIZ-EXP-${Date.now()}`,
+      trackingNumber: await nextValidShipmentCode(),
     });
   });
 
@@ -161,12 +162,12 @@ test.describe.serial("shipment form templates", () => {
       const shipment = await readOk<any>(
         await owner.post("/api/shipments", {
           data: {
-            trackingNumber: `FORM-${suffix}`,
+            trackingNumber: await nextValidShipmentCode(),
             containerNumber: `AIR-${suffix}`,
             customerName: "Shipment form QA customer",
             origin: "Dubai",
             destination: "Tehran",
-            status: "PENDING",
+            status: "LOADING",
             shipmentTypeCode: "IMPORT_AIR_CARGO",
             shipmentDirection: "import",
             transportMode: "air",

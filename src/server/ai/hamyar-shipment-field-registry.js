@@ -225,7 +225,7 @@ export const HAMYAR_SHIPMENT_FIELD_DEFINITIONS = deepFreeze([
     key: "shipment.goods.contents",
     labelFa: "محتویات بار",
     labelEn: "goods contents",
-    aliases: ["محتویاتش", "شرح کالاش", "شرح کالا", "شرح کالاها", "محتویات بار چیه", "چیا توشه", "چی توشه", "کالاها", "کالاهاش", "goods description", "contents"],
+    aliases: ["محتویاتش", "شرح کالاش", "شرح کالا", "شرح کالاها", "محتویات بار چیه", "چیا توشه", "چی توشه", "کالا", "کالای", "کالای محموله", "کالاها", "کالاهاش", "goods description", "contents"],
     relationPath: ["shipment", "goods", "contents"],
     sourcePath: "shipment_v2_profiles.sections_json.goods.goodsRows.description",
     answerPolicy: HAMYAR_SHIPMENT_FIELD_POLICY.LIST,

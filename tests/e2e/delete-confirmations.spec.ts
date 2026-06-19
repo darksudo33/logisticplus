@@ -80,7 +80,7 @@ test.describe.serial("delete buttons confirm before archiving", () => {
           profitMargin: 10,
           totalPrice: 1292500,
           validUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-          status: "PENDING",
+          status: "LOADING",
         },
       })
     );

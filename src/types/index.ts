@@ -4,7 +4,7 @@
  */
 
 export type UserRole = "CEO" | "MANAGER" | "OPERATIONS" | "CUSTOMER_SERVICE" | "FINANCE";
-export type ShipmentStatus = "PENDING" | "BOOKED" | "IN_TRANSIT" | "ARRIVED" | "CUSTOMS" | "CLEARED" | "DELIVERED" | "CLOSED";
+export type ShipmentStatus = "LOADING" | "IN_TRANSIT" | "ARRIVED" | "KOOTAJ_DONE" | "EXITED";
 export type StepStatus = "PENDING" | "IN_PROGRESS" | "COMPLETED";
 export type TaskStatus = "TODO" | "ASSIGNED" | "IN_PROGRESS" | "WAITING" | "BLOCKED" | "DONE" | "CANCELLED";
 export type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
@@ -90,6 +90,10 @@ export interface Shipment {
   estimatedDelivery: string;
   actualDelivery?: string;
   freeTimeDays: number;
+  timerStartedAt?: string | null;
+  timerDeadlineAt?: string | null;
+  timerCompletedAt?: string | null;
+  timerRemovedAt?: string | null;
   isArchived?: boolean;
   isExitedArchived?: boolean;
   exitedArchivedAt?: string | null;
@@ -134,6 +138,10 @@ export interface ShipmentV2ShipmentSummary {
   origin: string;
   destination: string;
   estimatedDelivery: string;
+  timerStartedAt?: string | null;
+  timerDeadlineAt?: string | null;
+  timerCompletedAt?: string | null;
+  timerRemovedAt?: string | null;
   assignedManagerId?: string | null;
   isExitedArchived?: boolean;
   createdAt?: string | null;
@@ -154,6 +162,7 @@ export interface ShipmentV2BaseSection {
   commercialCardDisplayName?: string;
   malvaniProfileId?: string | null;
   malvaniDisplayName?: string;
+  status?: ShipmentStatus;
 }
 
 export interface ShipmentV2GoodsRow {
@@ -766,6 +775,15 @@ export interface DailyStatusBoardRow {
 }
 
 export type DailyStatusPatch = Partial<{
+  baseInfo: Partial<{
+    status: ShipmentStatus;
+    currentStage: string | null;
+    origin: string | null;
+    deliveryPort: string | null;
+    dischargePort: string | null;
+    consigneeName: string | null;
+    orderRegistrationNumber: string | null;
+  }>;
   commercialCardId: string | null;
   orderRegistrationNumber: string | null;
   orderRegistrationDate: string | null;

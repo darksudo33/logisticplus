@@ -1,12 +1,55 @@
 import { expect, request as requestFactory, type APIRequestContext, type APIResponse, type Page } from "@playwright/test";
+import pg from "pg";
 
 export const BASE_URL = process.env.E2E_BASE_URL || `http://127.0.0.1:${process.env.TEST_PORT || 3010}`;
 export const OWNER_EMAIL = "darksudo22@gmail.com";
 export const OWNER_PASSWORD = process.env.TEST_SEED_USER_PASSWORD || "playwright-owner-pass";
 export const USER_PASSWORD = "PlaywrightPass123!";
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL || "postgres://postgres@localhost:5432/logisticplus_test";
+const { Client } = pg;
 
 export function uniqueEmail(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}@example.test`;
+}
+
+export function currentTehranShamsiParts() {
+  const parts = new Intl.DateTimeFormat("en-US-u-ca-persian", {
+    timeZone: "Asia/Tehran",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const valueByType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const year = String(valueByType.year || "").padStart(4, "0");
+  const month = String(valueByType.month || "").padStart(2, "0");
+  const day = String(valueByType.day || "").padStart(2, "0");
+  return {
+    year,
+    month,
+    day,
+    compactDate: `${year}${month}${day}`,
+    slashDate: `${year}/${month}/${day}`,
+  };
+}
+
+export async function nextValidShipmentCode() {
+  const { compactDate } = currentTehranShamsiParts();
+  const client = new Client({ connectionString: TEST_DATABASE_URL });
+  await client.connect();
+  try {
+    const result = await client.query(
+      `SELECT COALESCE(MAX(COALESCE(shamsi_sequence, substring(shipment_code from 9 for 3)::int)), 0)::int AS max_sequence
+       FROM shipments
+       WHERE shipment_code ~ '^\\d{11}$'
+         AND substring(shipment_code from 1 for 8) = $1`,
+      [compactDate]
+    );
+    const nextSequence = Number(result.rows[0]?.max_sequence || 0) + 1;
+    expect(nextSequence).toBeLessThanOrEqual(999);
+    return `${compactDate}${String(nextSequence).padStart(3, "0")}`;
+  } finally {
+    await client.end();
+  }
 }
 
 export async function loginViaUi(page: Page, email = OWNER_EMAIL, password = OWNER_PASSWORD) {

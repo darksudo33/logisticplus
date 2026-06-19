@@ -19,6 +19,12 @@ import {
 
 const { Client } = pg;
 const testDatabaseUrl = process.env.TEST_DATABASE_URL || "postgres://postgres@localhost:5432/logisticplus_test";
+let shipmentCodeSequence = 300 + (Date.now() % 500);
+
+function validShipmentCode() {
+  shipmentCodeSequence = shipmentCodeSequence >= 998 ? 300 : shipmentCodeSequence + 1;
+  return `14050316${String(shipmentCodeSequence).padStart(3, "0")}`;
+}
 
 async function dbQuery(sql: string, params: any[] = []) {
   const client = new Client({ connectionString: testDatabaseUrl });
@@ -170,16 +176,16 @@ test.describe.serial("append-only audit logging", () => {
       const shipment = await readOk<any>(
         await owner.post("/api/shipments", {
           data: {
-            trackingNumber: `AUDIT-${Date.now()}`,
+            trackingNumber: validShipmentCode(),
             origin: "Shanghai",
             destination: "Bandar Abbas",
-            status: "PENDING",
+            status: "LOADING",
           },
         })
       );
       await readOk<any>(
         await owner.patch(`/api/shipments/${encodeURIComponent(shipment.id)}/operational-fields`, {
-          data: { status: "CUSTOMS", notes: "Audit status update" },
+          data: { status: "KOOTAJ_DONE", notes: "Audit status update" },
         })
       );
 
@@ -225,21 +231,13 @@ test.describe.serial("append-only audit logging", () => {
       await readOk(await owner.post(`/api/admin/users/${encodeURIComponent(tenantInfo.ownerUserId)}/platform-admin/grant`));
       await readOk(await owner.post(`/api/admin/users/${encodeURIComponent(tenantInfo.ownerUserId)}/platform-admin/revoke`));
 
-      const requested = await readOk<any>(
-        await smsContext.post("/api/auth/phone/request-code", {
-          data: { phone: smsPhone },
-        })
-      );
-      expect(requested.debugCode).toMatch(/^\d{6}$/);
-      const wrongSmsCode = requested.debugCode === "000000" ? "111111" : "000000";
-      const failedSms = await smsContext.post("/api/auth/phone/verify", {
-        data: { phone: smsPhone, code: wrongSmsCode },
-      });
-      expect([401, 429]).toContain(failedSms.status());
-      const verifiedSms = await smsContext.post("/api/auth/phone/verify", {
-        data: { phone: smsPhone, code: requested.debugCode },
-      });
-      expect(verifiedSms.status(), await verifiedSms.text()).toBeLessThan(400);
+      const unavailableSmsCode = "000000";
+      await expectUnavailable(await smsContext.post("/api/auth/phone/request-code", {
+        data: { phone: smsPhone },
+      }));
+      await expectUnavailable(await smsContext.post("/api/auth/phone/verify", {
+        data: { phone: smsPhone, code: unavailableSmsCode },
+      }));
 
       await readOk(await owner.post("/api/auth/logout"));
 
@@ -254,9 +252,6 @@ test.describe.serial("append-only audit logging", () => {
         "auth.login_success",
         "auth.logout",
         "auth.session_restore_rejected",
-        "auth.sms_code_requested",
-        "auth.sms_verify_failed",
-        "auth.sms_verify_success",
         "shipment.create",
         "shipment.status.update",
         "document.upload",
@@ -273,7 +268,7 @@ test.describe.serial("append-only audit logging", () => {
       const serialized = JSON.stringify(rows);
       for (const forbidden of [
         OWNER_PASSWORD,
-        requested.debugCode,
+        unavailableSmsCode,
         sessionToken,
         sessionTokenHash,
         resetAccess.token,

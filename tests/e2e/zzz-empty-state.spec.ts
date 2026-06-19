@@ -179,7 +179,7 @@ test.describe.serial("guided empty-state UX on a clean database", () => {
       await expect(page.locator("h1").first()).toBeVisible();
       await expectNoHorizontalOverflow(page);
       if (viewport.width >= 768) {
-        for (const tabName of [/ثبت/, /پرداخت/, /خطا/]) {
+        for (const tabName of [/پرداخت/, /خطا/]) {
           await page.locator("button", { hasText: tabName }).filter({ visible: true }).first().click();
           await expect(page.locator("[data-empty-state]").filter({ visible: true }).first()).toBeVisible();
           for (const forbidden of forbiddenVisibleText) {

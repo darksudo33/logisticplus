@@ -15,6 +15,7 @@ import {
   Save,
   Ship,
   ShieldCheck,
+  TimerReset,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -32,10 +33,16 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ApiError, apiGet } from "@/src/lib/api";
 import { businessEntitiesApi } from "@/src/lib/businessEntitiesApi";
-import { getShamsiDatePart, ShamsiDateTimeField, toEnglishDigits, toPersianDigits } from "@/src/components/ShamsiDateTimeField";
+import { getShamsiDatePart, parseShamsiDateTimeValue, ShamsiDateTimeField, toEnglishDigits, toPersianDigits } from "@/src/components/ShamsiDateTimeField";
 import { ShipmentChatPanel } from "@/src/components/shipments/ShipmentChatPanel";
 import { ShipmentDocumentsPanel } from "@/src/components/shipments/ShipmentDocumentsPanel";
+import { shipmentApi } from "@/src/lib/shipmentApi";
 import { shipmentV2Api } from "@/src/lib/shipmentV2Api";
+import {
+  isShipmentTerminalStatus,
+  SHIPMENT_STATUS_OPTIONS,
+  shipmentStatusLabel,
+} from "@/src/shared/shipment-statuses.js";
 import { useAppDataStore } from "@/src/store/useMockStore";
 import type {
   CommercialCard,
@@ -91,17 +98,6 @@ const sectionDefinitions: Array<{
 const flowLabels: Record<ShipmentV2FlowCode, string> = {
   IMPORT_LANJ: "واردات → لنج",
   IMPORT_SHIP: "واردات → کشتی",
-};
-
-const statusLabels: Record<string, string> = {
-  PENDING: "در انتظار ثبت",
-  BOOKED: "رزرو شده",
-  IN_TRANSIT: "در حال حمل",
-  ARRIVED: "رسیده به بندر",
-  CUSTOMS: "در گمرک",
-  CLEARED: "ترخیص شده",
-  DELIVERED: "تحویل شده",
-  CLOSED: "بسته شده",
 };
 
 const customsRouteLabels: Record<ShipmentV2CustomsRoute, string> = {
@@ -347,7 +343,7 @@ function activeBusinessContacts(contacts?: Array<{ archivedAt?: string | null }>
 }
 
 function isActiveCustomerShipment(shipment: Shipment) {
-  return !shipment.isArchived && !shipment.isExitedArchived && !["DELIVERED", "CLOSED"].includes(shipment.status);
+  return !shipment.isArchived && !shipment.isExitedArchived && !isShipmentTerminalStatus(shipment.status);
 }
 
 const malvaniActiveStatusLabels: Record<MalvaniProfile["activeStatus"], string> = {
@@ -450,6 +446,163 @@ function BaseInfoCard({
   );
 }
 
+function formatTimerDate(value?: string | null) {
+  if (!value) return "ثبت نشده";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("fa-IR-u-ca-persian", { dateStyle: "short", timeStyle: "short" });
+}
+
+function formatTimerDuration(milliseconds: number) {
+  const totalMinutes = Math.max(0, Math.floor(milliseconds / 60000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  const parts = [
+    days ? `${toPersianDigits(days)} روز` : "",
+    hours ? `${toPersianDigits(hours)} ساعت` : "",
+    !days && minutes ? `${toPersianDigits(minutes)} دقیقه` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" و ") : "کمتر از یک دقیقه";
+}
+
+function ShipmentTimerPanel({
+  shipment,
+  canUpdate,
+  onShipmentUpdate,
+}: {
+  shipment: ShipmentV2ShipmentSummary;
+  canUpdate: boolean;
+  onShipmentUpdate: (shipment: Partial<ShipmentV2ShipmentSummary>) => void;
+}) {
+  const [deadlineDraft, setDeadlineDraft] = React.useState(shipment.timerDeadlineAt || "");
+  const [now, setNow] = React.useState(() => Date.now());
+  const [isSaving, setIsSaving] = React.useState(false);
+  const deadlineMs = shipment.timerDeadlineAt ? new Date(shipment.timerDeadlineAt).getTime() : NaN;
+  const startedMs = shipment.timerStartedAt ? new Date(shipment.timerStartedAt).getTime() : NaN;
+  const completedMs = shipment.timerCompletedAt ? new Date(shipment.timerCompletedAt).getTime() : NaN;
+  const hasActiveDeadline = Number.isFinite(deadlineMs);
+  const isCompleted = Number.isFinite(completedMs);
+  const comparisonMs = isCompleted ? completedMs : now;
+  const remainingMs = hasActiveDeadline ? deadlineMs - comparisonMs : 0;
+  const elapsedMs = Number.isFinite(startedMs) ? Math.max(0, comparisonMs - startedMs) : 0;
+  const overdue = hasActiveDeadline && remainingMs < 0 && !isCompleted;
+
+  React.useEffect(() => {
+    setDeadlineDraft(shipment.timerDeadlineAt || "");
+  }, [shipment.timerDeadlineAt]);
+
+  React.useEffect(() => {
+    if (!hasActiveDeadline || isCompleted) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 30000);
+    return () => window.clearInterval(timer);
+  }, [hasActiveDeadline, isCompleted]);
+
+  const saveDeadline = async () => {
+    const parsed = parseShamsiDateTimeValue(deadlineDraft);
+    if (!parsed) {
+      toast.error("زمان پایان تایمر را با تقویم شمسی وارد کنید.");
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const updated = await shipmentApi.updateOperationalFields(shipment.id, {
+        timerDeadlineAt: parsed.toISOString(),
+      });
+      onShipmentUpdate(updated);
+      toast.success("تایمر محموله بروزرسانی شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "بروزرسانی تایمر ناموفق بود.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const removeDeadline = async () => {
+    setIsSaving(true);
+    try {
+      const updated = await shipmentApi.updateOperationalFields(shipment.id, {
+        timerDeadlineAt: null,
+      });
+      onShipmentUpdate(updated);
+      toast.success("تایمر فعال حذف شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "حذف تایمر ناموفق بود.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <Card data-testid="shipment-v2-timer-panel" className="rounded-xl border-border bg-card shadow-sm">
+      <CardContent className="p-3 sm:p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <TimerReset className="h-4 w-4 text-primary" />
+              <p className="text-xs font-black text-foreground sm:text-sm">تایمر محموله</p>
+              {isCompleted ? (
+                <Badge className="border-none bg-emerald-500/10 text-[10px] font-black text-emerald-700">تکمیل شده</Badge>
+              ) : overdue ? (
+                <Badge className="border-none bg-rose-500/10 text-[10px] font-black text-rose-700">عقب‌افتاده</Badge>
+              ) : hasActiveDeadline ? (
+                <Badge className="border-none bg-primary/10 text-[10px] font-black text-primary">فعال</Badge>
+              ) : (
+                <Badge variant="outline" className="text-[10px] font-black">بدون تایمر</Badge>
+              )}
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-4">
+              <BaseInfoCard label="مهلت پایان" testId="shipment-v2-timer-deadline-display">
+                {formatTimerDate(shipment.timerDeadlineAt)}
+              </BaseInfoCard>
+              <BaseInfoCard label={overdue ? "تاخیر" : "زمان باقی‌مانده"} testId="shipment-v2-timer-remaining">
+                {hasActiveDeadline ? formatTimerDuration(Math.abs(remainingMs)) : "ثبت نشده"}
+              </BaseInfoCard>
+              <BaseInfoCard label="زمان سپری‌شده" testId="shipment-v2-timer-elapsed">
+                {Number.isFinite(startedMs) ? formatTimerDuration(elapsedMs) : "ثبت نشده"}
+              </BaseInfoCard>
+              <BaseInfoCard label="مدت تکمیل" testId="shipment-v2-timer-completed-duration">
+                {isCompleted && Number.isFinite(startedMs) ? formatTimerDuration(completedMs - startedMs) : "ثبت نشده"}
+              </BaseInfoCard>
+            </div>
+          </div>
+          {canUpdate ? (
+            <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] lg:w-[520px]">
+              <ShamsiDateTimeField
+                value={deadlineDraft}
+                onChange={setDeadlineDraft}
+                showTime
+                className="min-w-0"
+                triggerClassName="h-9 rounded-lg text-[11px] font-bold"
+              />
+              <Button
+                type="button"
+                data-testid="shipment-v2-timer-save"
+                className="h-9 rounded-lg px-3 text-[11px] font-black"
+                onClick={() => void saveDeadline()}
+                disabled={isSaving}
+              >
+                {isSaving ? <Loader2 className="ml-1 h-3.5 w-3.5 animate-spin" /> : <Save className="ml-1 h-3.5 w-3.5" />}
+                {hasActiveDeadline ? "تنظیم" : "ثبت تایمر"}
+              </Button>
+              <Button
+                type="button"
+                data-testid="shipment-v2-timer-remove"
+                variant="outline"
+                className="h-9 rounded-lg px-3 text-[11px] font-black"
+                onClick={() => void removeDeadline()}
+                disabled={isSaving || !hasActiveDeadline}
+              >
+                حذف
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function DialogFactRow({ label, value }: { label: string; value?: string | number | null }) {
   return (
     <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 px-2.5 py-2">
@@ -537,8 +690,12 @@ function BaseSection({
 }) {
   const [isEditing, setIsEditing] = React.useState(false);
   const draftData = React.useMemo<ShipmentV2BaseSection>(
-    () => ({ ...data, trackingNumber: data.trackingNumber || shipment.trackingNumber }),
-    [data, shipment.trackingNumber]
+    () => ({
+      ...data,
+      trackingNumber: data.trackingNumber || shipment.trackingNumber,
+      status: data.status || shipment.status,
+    }),
+    [data, shipment.status, shipment.trackingNumber]
   );
   const [draft, setDraft] = React.useState<ShipmentV2BaseSection>(draftData);
   const [activeCredentialSearch, setActiveCredentialSearch] = React.useState(false);
@@ -551,7 +708,7 @@ function BaseSection({
     : documentCount === null
       ? "در دسترس نیست"
       : documentCount.toLocaleString("fa-IR");
-  const displayStatus = data.statusText || statusLabels[shipment.status] || shipment.status;
+  const displayStatus = shipmentStatusLabel(shipment.status);
   const customerIdentifier = customer?.customerCode || customer?.code || shipment.customerCode || shipment.customerId || shipment.customerName || "";
   const totalQuantity = sumGoodsMetric(goodsData.goodsRows || [], "quantity");
   const totalContainerCount = sumContainerCount(goodsData);
@@ -587,7 +744,7 @@ function BaseSection({
   const activeCustomerShipments = React.useMemo(() => {
     const byCustomer = shipments.filter((item) => item.customerId === shipment.customerId && isActiveCustomerShipment(item));
     const hasCurrentShipment = byCustomer.some((item) => item.id === shipment.id);
-    if (hasCurrentShipment || ["DELIVERED", "CLOSED"].includes(shipment.status) || shipment.isExitedArchived) return byCustomer;
+    if (hasCurrentShipment || isShipmentTerminalStatus(shipment.status) || shipment.isExitedArchived) return byCustomer;
     return [
       {
         id: shipment.id,
@@ -731,13 +888,25 @@ function BaseSection({
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-[11px] font-bold text-muted-foreground sm:text-xs">وضعیت</Label>
-              <Input
-                data-testid="shipment-v2-base-status-input"
-                className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
-                value={draft.statusText ?? ""}
-                placeholder={displayStatus}
-                onChange={(event) => updateDraft("statusText", event.target.value)}
+              <Label className="text-[11px] font-bold text-muted-foreground sm:text-xs">وضعیت محموله</Label>
+              <select
+                data-testid="shipment-v2-base-status-select"
+                className={compactSelectClassName}
+                value={draft.status || shipment.status}
+                onChange={(event) => updateDraft("status", event.target.value)}
+              >
+                {SHIPMENT_STATUS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[11px] font-bold text-muted-foreground sm:text-xs">مرحله فعلی</Label>
+              <textarea
+                data-testid="shipment-v2-base-current-stage-input"
+                className="min-h-16 w-full resize-y rounded-lg border border-input bg-background px-2.5 py-2 text-[11px] font-bold leading-5 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 sm:min-h-20 sm:px-3 sm:text-xs sm:leading-6"
+                value={draft.currentStage || ""}
+                onChange={(event) => updateDraft("currentStage", event.target.value)}
               />
             </div>
             <div className="space-y-1.5">
@@ -787,15 +956,6 @@ function BaseSection({
                 </div>
               ) : null}
             </div>
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label className="text-[11px] font-bold text-muted-foreground sm:text-xs">مرحله فعلی</Label>
-              <textarea
-                data-testid="shipment-v2-base-current-stage-input"
-                className="min-h-20 w-full resize-y rounded-lg border border-input bg-background px-2.5 py-2 text-[11px] font-bold leading-5 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 sm:min-h-24 sm:px-3 sm:text-xs sm:leading-6"
-                value={draft.currentStage || ""}
-                onChange={(event) => updateDraft("currentStage", event.target.value)}
-              />
-            </div>
           </div>
         ) : (
           <div className="grid grid-flow-row-dense grid-cols-2 gap-2 lg:grid-cols-3">
@@ -815,6 +975,9 @@ function BaseSection({
             </BaseInfoCard>
             <BaseInfoCard label="وضعیت" testId="shipment-v2-base-status">
               {displayValue(displayStatus)}
+            </BaseInfoCard>
+            <BaseInfoCard label="مرحله فعلی" testId="shipment-v2-base-current-stage">
+              <p className="whitespace-pre-wrap">{displayValue(data.currentStage)}</p>
             </BaseInfoCard>
             <BaseInfoCard label="شماره ثبت سفارش" testId="shipment-v2-base-order-registration-number">
               <span dir="ltr">{displayValue(data.orderRegistrationNumber)}</span>
@@ -845,9 +1008,6 @@ function BaseSection({
                 {formatGoodsMetric(totalContainerCount)}
               </BaseInfoCard>
             ) : null}
-            <BaseInfoCard label="مرحله فعلی" testId="shipment-v2-base-current-stage" className="col-span-2 lg:col-span-3">
-              <p className="whitespace-pre-wrap">{displayValue(data.currentStage)}</p>
-            </BaseInfoCard>
             <BaseInfoCard label="آخرین به روز رسانی" testId="shipment-v2-base-last-update" className="col-span-2 lg:col-span-3">
               <p>{formatShamsiDateTime(updatedAt)}</p>
               <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">توسط {updatedByName}</p>
@@ -981,7 +1141,7 @@ function BaseSection({
                         {item.trackingNumber}
                       </span>
                       <Badge variant="outline" className="h-5 shrink-0 rounded-md px-1.5 text-[9px] font-black">
-                        {statusLabels[item.status] || item.status}
+                        {shipmentStatusLabel(item.status)}
                       </Badge>
                     </div>
                     <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
@@ -2103,6 +2263,16 @@ export default function ShipmentDetailV2() {
     }
   };
 
+  const updateShipmentSummary = React.useCallback((updated: Partial<ShipmentV2ShipmentSummary>) => {
+    setData((current) => current ? {
+      ...current,
+      shipment: {
+        ...current.shipment,
+        ...updated,
+      },
+    } : current);
+  }, []);
+
   if (isLoading) {
     return (
       <div className="app-page flex min-h-[50vh] items-center justify-center font-sans" dir="rtl">
@@ -2164,7 +2334,7 @@ export default function ShipmentDetailV2() {
                   {flowLabels[flowCode]}
                 </Badge>
                 <Badge variant="outline" className="rounded-lg text-[11px] font-black">
-                  {statusLabels[shipment.status] || shipment.status}
+                  {shipmentStatusLabel(shipment.status)}
                 </Badge>
               </div>
               <p data-testid="shipment-v2-header-customer" className="mt-1 truncate text-xs font-black text-foreground">
@@ -2198,6 +2368,7 @@ export default function ShipmentDetailV2() {
         </Card>
       ) : (
         <div className="grid gap-4">
+          <ShipmentTimerPanel shipment={shipment} canUpdate={canUpdate} onShipmentUpdate={updateShipmentSummary} />
           {sectionDefinitions.map((section) => {
             const Icon = section.icon;
             if (section.key === "base") {

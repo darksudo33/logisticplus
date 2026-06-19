@@ -45,7 +45,7 @@ async function seedLegacyShipmentWithoutSteps(id: string) {
     customerName: "Legacy Customer",
     origin: "Tehran",
     destination: "Bandar Abbas",
-    status: "PENDING",
+    status: "LOADING",
     createdAt: "1405/01/01",
     estimatedDelivery: "1405/01/10 09:00",
     freeTimeDays: 7,
@@ -59,7 +59,7 @@ async function seedLegacyShipmentWithoutSteps(id: string) {
          id, organization_id, owner_user_id, shipment_code, customer_id, customer_name, status,
          origin, destination, estimated_delivery_at, free_time_ends_at, legacy_data, created_by_id, updated_at
        )
-       VALUES ($1, NULL, 'u1', $2, 'c1', $3, 'PENDING', $4, $5, $6, $6, $7::jsonb, 'u1', NOW())`,
+       VALUES ($1, NULL, 'u1', $2, 'c1', $3, 'LOADING', $4, $5, $6, $6, $7::jsonb, 'u1', NOW())`,
       [
         shipment.id,
         shipment.trackingNumber,
@@ -105,13 +105,28 @@ async function collectConsoleErrors(page: Page) {
 }
 
 async function createShipmentFromV2(page: Page) {
+  const marker = `UXV2${Date.now()}`;
+  const customer = await readOk<any>(
+    await page.request.post("/api/customers", {
+      data: {
+        name: `${marker} Customer`,
+        company: `${marker} Company`,
+        email: `${marker.toLowerCase()}@example.test`,
+        phone: "09120000000",
+      },
+    })
+  );
+  const customerIdentifier = customer.customerCode || customer.code || customer.id;
+
   await page.goto("/shipments/new-v2");
   await expect(page.getByTestId("shipment-v2-create-page")).toBeVisible();
   await expect(page.locator("#container")).toHaveCount(0);
   await expect(page.getByTestId("shamsi-date-time-trigger")).toHaveCount(0);
 
   await page.getByTestId("shipment-v2-flow-IMPORT_LANJ").click();
-  await page.getByTestId("shipment-v2-customer").selectOption({ index: 1 });
+  await page.getByTestId("shipment-v2-customer").fill(customerIdentifier);
+  await expect(page.getByTestId("shipment-v2-customer-suggestions")).toBeVisible();
+  await page.getByTestId("shipment-v2-customer-suggestion-0").click();
   await expect(page.getByTestId("shipment-v2-code-mode-new")).toBeVisible();
   await page.getByTestId("shipment-v2-origin").fill("Dubai");
   await page.getByTestId("shipment-v2-discharge-port").fill("Bandar Abbas");
@@ -149,7 +164,7 @@ test.describe.serial("UX/UI regression sweep", () => {
             customerName: "Stale Hydration Customer",
             origin: "Tehran",
             destination: "Bandar Abbas",
-            status: "PENDING",
+            status: "LOADING",
             estimatedDelivery: "1405/04/01 09:00",
             freeTimeDays: 7,
           },

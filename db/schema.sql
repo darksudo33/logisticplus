@@ -567,6 +567,10 @@ CREATE TABLE IF NOT EXISTS shipments (
   free_time_ends_at TEXT,
   assigned_manager_id TEXT REFERENCES app_users(id) ON DELETE SET NULL,
   current_step_id TEXT,
+  timer_started_at TIMESTAMPTZ,
+  timer_deadline_at TIMESTAMPTZ,
+  timer_completed_at TIMESTAMPTZ,
+  timer_removed_at TIMESTAMPTZ,
   customer_access_token TEXT,
   customer_access_token_hash TEXT,
   customer_access_enabled BOOLEAN NOT NULL DEFAULT FALSE,
@@ -589,6 +593,9 @@ CREATE TABLE IF NOT EXISTS shipments (
   ),
   CONSTRAINT shipments_transport_mode_check CHECK (
     transport_mode IS NULL OR transport_mode IN ('sea', 'air', 'land', 'rail')
+  ),
+  CONSTRAINT shipments_status_pillar_check CHECK (
+    status IN ('LOADING', 'IN_TRANSIT', 'ARRIVED', 'KOOTAJ_DONE', 'EXITED')
   ),
   CONSTRAINT shipments_post_exit_status_check CHECK (
     post_exit_status IS NULL OR post_exit_status IN ('needs_follow_up', 'in_progress', 'settled', 'closed')
@@ -1556,6 +1563,8 @@ CREATE INDEX IF NOT EXISTS shipments_org_customer_access_idx ON shipments (organ
 CREATE INDEX IF NOT EXISTS shipments_org_type_idx ON shipments (organization_id, shipment_type_code) WHERE archived_at IS NULL;
 CREATE INDEX IF NOT EXISTS shipments_org_exited_archive_idx ON shipments (organization_id, exited_archived_at DESC, updated_at DESC) WHERE exited_archived_at IS NOT NULL AND archived_at IS NULL;
 CREATE INDEX IF NOT EXISTS shipments_org_active_not_exited_idx ON shipments (organization_id, updated_at DESC) WHERE archived_at IS NULL AND exited_archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS shipments_org_status_active_idx ON shipments (organization_id, status, updated_at DESC) WHERE archived_at IS NULL AND exited_archived_at IS NULL;
+CREATE INDEX IF NOT EXISTS shipments_org_timer_deadline_idx ON shipments (organization_id, timer_deadline_at) WHERE timer_deadline_at IS NOT NULL AND archived_at IS NULL;
 CREATE INDEX IF NOT EXISTS shipments_org_post_exit_follow_up_idx ON shipments (organization_id, post_exit_status, post_exit_follow_up_at) WHERE exited_archived_at IS NOT NULL AND archived_at IS NULL;
 CREATE INDEX IF NOT EXISTS shipment_v2_profiles_org_updated_idx ON shipment_v2_profiles (organization_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS shipment_v2_profiles_org_flow_idx ON shipment_v2_profiles (organization_id, flow_code, updated_at DESC);

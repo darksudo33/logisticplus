@@ -123,24 +123,6 @@ async function uploadDocument(
   });
 }
 
-async function createPublicSignup(context: Awaited<ReturnType<typeof apiContext>>, prefix: string) {
-  const ownerEmail = uniqueEmail(prefix);
-  const data = await readOk<any>(
-    await context.post("/api/signup", {
-      data: {
-        companyName: `E2E Billing ${Date.now()} ${Math.random().toString(36).slice(2)}`,
-        ownerName: "E2E Billing Owner",
-        ownerEmail,
-        password: USER_PASSWORD,
-        planId: "starter",
-        billingCycle: "monthly",
-        contactPhone: "09120000000",
-      },
-    })
-  );
-  return { ...data, ownerEmail };
-}
-
 test.describe.serial("security regression harness", () => {
   test("documents the protected API RBAC and tenant-scope policy map", async () => {
     expect(RBAC_TENANT_POLICY.length).toBeGreaterThan(0);
@@ -194,9 +176,9 @@ test.describe.serial("security regression harness", () => {
     await expectForbidden(await employee.get("/api/admin/overview"));
     await expectForbidden(await employee.get("/api/admin/payments"));
     await expectForbidden(await employee.get("/api/admin/billing/invoices"));
-    await expectForbidden(await employee.get("/api/admin/sms-deliveries"));
-    await expectForbidden(await employee.get("/api/admin/sms-analytics"));
-    await expectForbidden(await employee.get("/api/admin/sms-templates"));
+    await expectUnavailable(await employee.get("/api/admin/sms-deliveries"));
+    await expectUnavailable(await employee.get("/api/admin/sms-analytics"));
+    await expectUnavailable(await employee.get("/api/admin/sms-templates"));
     await readOk(await employee.get("/api/shipments"));
     await readOk(await employee.get("/api/documents"));
     await readOk(await employee.get("/api/quotations"));
@@ -458,7 +440,7 @@ test.describe.serial("security regression harness", () => {
     await disposeContexts(owner, expiredContext, revokedContext, publicContext);
   });
 
-  test("supports remember-me cookies and phone SMS login", async () => {
+  test("supports remember-me cookies and keeps phone SMS login unavailable in public release", async () => {
     const rememberedContext = await apiContext();
     const rememberedLogin = await rememberedContext.post("/api/auth/login", {
       data: { email: OWNER_EMAIL, password: OWNER_PASSWORD, remember: true },
@@ -484,207 +466,37 @@ test.describe.serial("security regression harness", () => {
     expect(sessionOnlyCookie).not.toContain("Expires=");
 
     const phoneContext = await apiContext();
-    const requested = await readOk<any>(
-      await phoneContext.post("/api/auth/phone/request-code", {
-        data: { phone: "۰۹۳۶۵۶۸۳۶۹۴" },
-      })
-    );
-    expect(requested.codeSent).toBe(true);
-    expect(requested.debugCode).toMatch(/^\d{6}$/);
-
-    const verified = await phoneContext.post("/api/auth/phone/verify", {
-      data: { phone: "09365683694", code: requested.debugCode, remember: true },
-    });
-    expect(verified.status(), await verified.text()).toBeLessThan(400);
-    const payload = await verified.json();
-    expect(payload.user.email).toBe(OWNER_EMAIL);
-    await readOk(await phoneContext.get("/api/auth/me"));
+    await expectUnavailable(await phoneContext.post("/api/auth/phone/request-code", {
+      data: { phone: "09365683694" },
+    }));
+    await expectUnavailable(await phoneContext.post("/api/auth/phone/verify", {
+      data: { phone: "09365683694", code: "000000", remember: true },
+    }));
 
     await disposeContexts(rememberedContext, sessionOnlyContext, phoneContext);
   });
 
-  test("keeps sandbox billing and Zarinpal payment state deterministic", async () => {
-    const owner = await loginApi();
+  test("keeps public signup and Zarinpal payment routes unavailable in the public release", async () => {
     const publicContext = await apiContext();
 
-    const paidSignup = await createPublicSignup(publicContext, "paid-billing");
-    const started = await readOk<any>(
-      await publicContext.post(`/api/billing/payments/${encodeURIComponent(paidSignup.paymentId)}/start`)
-    );
-    expect(started.authority).toContain(`SANDBOX-${paidSignup.paymentId}`);
-    expect(started.gatewayUrl).toContain("/api/billing/zarinpal/callback");
-
-    const paidCallback = await publicContext.get(
-      `/api/billing/zarinpal/callback?Authority=${encodeURIComponent(started.authority)}&Status=OK`,
-      { maxRedirects: 0 }
-    );
-    expect(paidCallback.status()).toBe(302);
-    expect(paidCallback.headers().location).toContain("payment=paid");
-
-    const paidInvoice = await readOk<any>(
-      await owner.get(`/api/admin/billing/invoices/${encodeURIComponent(paidSignup.invoiceId)}`)
-    );
-    expect(paidInvoice.status).toBe("paid");
-    expect(paidInvoice.receipt?.paymentId).toBe(paidSignup.paymentId);
-
-    const replayPaidCallback = await publicContext.get(
-      `/api/billing/zarinpal/callback?Authority=${encodeURIComponent(started.authority)}&Status=OK`,
-      { maxRedirects: 0 }
-    );
-    expect(replayPaidCallback.status()).toBe(302);
-    expect(replayPaidCallback.headers().location).toContain("payment=paid");
-    const replayPaidInvoice = await readOk<any>(
-      await owner.get(`/api/admin/billing/invoices/${encodeURIComponent(paidSignup.invoiceId)}`)
-    );
-    expect(replayPaidInvoice.status).toBe("paid");
-    expect(replayPaidInvoice.receipt?.id).toBe(paidInvoice.receipt?.id);
-
-    const paidPayments = await readOk<any[]>(await owner.get("/api/admin/payments"));
-    const paidPayment = paidPayments.find((payment) => payment.id === paidSignup.paymentId);
-    expect(paidPayment?.status).toBe("paid");
-    expect(paidPayment?.receiptId).toBeTruthy();
-
-    const paidRequests = await readOk<any[]>(await owner.get("/api/admin/signup-requests"));
-    const paidRequest = paidRequests.find((request) => request.id === paidSignup.signupRequestId);
-    expect(paidRequest?.status).toBe("pending_review");
-    expect(paidRequest?.paymentStatus).toBe("paid");
-    expect(paidRequest?.organizationStatus).toBe("pending_review");
-    expect(paidRequest?.abandonedCleanupEligible).toBe(false);
-
-    const blockedPaidCleanup = await owner.delete(`/api/admin/signup-requests/${encodeURIComponent(paidSignup.signupRequestId)}/abandoned`);
-    expect(blockedPaidCleanup.status(), await blockedPaidCleanup.text()).toBe(409);
-
-    const duplicatePaidSignup = await publicContext.post("/api/signup", {
+    await expectUnavailable(await publicContext.post("/api/signup", {
       data: {
-        companyName: "E2E Duplicate Paid",
+        companyName: `E2E Disabled Signup ${Date.now()}`,
         ownerName: "E2E Billing Owner",
-        ownerEmail: paidSignup.ownerEmail,
+        ownerEmail: uniqueEmail("disabled-public-signup"),
         password: USER_PASSWORD,
         planId: "starter",
         billingCycle: "monthly",
         contactPhone: "09120000000",
       },
-    });
-    expect(duplicatePaidSignup.status(), await duplicatePaidSignup.text()).toBe(409);
-
-    const paidOrg = await readOk<any>(
-      await owner.get(`/api/admin/organizations/${encodeURIComponent(paidSignup.organizationId)}`)
-    );
-    expect(paidOrg.status).toBe("pending_review");
-    expect(paidOrg.subscription.status).toBe("pending_review");
-
-    const restartPaid = await publicContext.post(`/api/billing/payments/${encodeURIComponent(paidSignup.paymentId)}/start`);
-    expect(restartPaid.status(), await restartPaid.text()).toBe(409);
-
-    const noStartSignup = await createPublicSignup(publicContext, "nostart-billing");
-    const noStartRetry = await readOk<any>(
-      await publicContext.post("/api/signup", {
-        data: {
-          companyName: "E2E No Start Retry",
-          ownerName: "E2E No Start Retry Owner",
-          ownerEmail: noStartSignup.ownerEmail,
-          password: USER_PASSWORD,
-          planId: "starter",
-          billingCycle: "monthly",
-          contactPhone: "09120000000",
-        },
-      })
-    );
-    expect(noStartRetry.signupRequestId).toBe(noStartSignup.signupRequestId);
-    expect(noStartRetry.paymentId).not.toBe(noStartSignup.paymentId);
-
-    const cleanupRequests = await readOk<any[]>(await owner.get("/api/admin/signup-requests"));
-    const cleanupRequest = cleanupRequests.find((request) => request.id === noStartSignup.signupRequestId);
-    expect(cleanupRequest?.abandonedCleanupEligible).toBe(true);
-    const cleaned = await readOk<any>(
-      await owner.delete(`/api/admin/signup-requests/${encodeURIComponent(noStartSignup.signupRequestId)}/abandoned`)
-    );
-    expect(cleaned.deleted).toBe(true);
-    expect(cleaned.releasedEmail).toBe(noStartSignup.ownerEmail);
-    const afterCleanupSignup = await readOk<any>(
-      await publicContext.post("/api/signup", {
-        data: {
-          companyName: "E2E Cleanup Reuse",
-          ownerName: "E2E Cleanup Reuse Owner",
-          ownerEmail: noStartSignup.ownerEmail,
-          password: USER_PASSWORD,
-          planId: "starter",
-          billingCycle: "monthly",
-          contactPhone: "09120000000",
-        },
-      })
-    );
-    expect(afterCleanupSignup.signupRequestId).not.toBe(noStartSignup.signupRequestId);
-
-    const startedNoCallbackSignup = await createPublicSignup(publicContext, "started-nocallback");
-    await readOk<any>(
-      await publicContext.post(`/api/billing/payments/${encodeURIComponent(startedNoCallbackSignup.paymentId)}/start`)
-    );
-    const startedNoCallbackRetry = await readOk<any>(
-      await publicContext.post("/api/signup", {
-        data: {
-          companyName: "E2E Started No Callback Retry",
-          ownerName: "E2E Started Retry Owner",
-          ownerEmail: startedNoCallbackSignup.ownerEmail,
-          password: USER_PASSWORD,
-          planId: "starter",
-          billingCycle: "monthly",
-          contactPhone: "09120000000",
-        },
-      })
-    );
-    expect(startedNoCallbackRetry.signupRequestId).toBe(startedNoCallbackSignup.signupRequestId);
-    expect(startedNoCallbackRetry.paymentId).not.toBe(startedNoCallbackSignup.paymentId);
-
-    const failedSignup = await createPublicSignup(publicContext, "failed-billing");
-    const failedStart = await readOk<any>(
-      await publicContext.post(`/api/billing/payments/${encodeURIComponent(failedSignup.paymentId)}/start`)
-    );
-    const failedCallback = await publicContext.get(
-      `/api/billing/zarinpal/callback?Authority=${encodeURIComponent(failedStart.authority)}&Status=NOK`,
+    }));
+    await expectUnavailable(await publicContext.post("/api/billing/payments/disabled-payment/start"));
+    await expectUnavailable(await publicContext.get(
+      "/api/billing/zarinpal/callback?Authority=disabled-public-release&Status=OK",
       { maxRedirects: 0 }
-    );
-    expect(failedCallback.status()).toBe(302);
-    expect(failedCallback.headers().location).toContain("payment=failed");
+    ));
 
-    const failedInvoice = await readOk<any>(
-      await owner.get(`/api/admin/billing/invoices/${encodeURIComponent(failedSignup.invoiceId)}`)
-    );
-    expect(failedInvoice.status).toBe("issued");
-    expect(failedInvoice.receipt).toBeNull();
-
-    const failedPayments = await readOk<any[]>(await owner.get("/api/admin/payments"));
-    const failedPayment = failedPayments.find((payment) => payment.id === failedSignup.paymentId);
-    expect(failedPayment?.status).toBe("failed");
-    expect(failedPayment?.receiptId).toBeFalsy();
-
-    const failedRequests = await readOk<any[]>(await owner.get("/api/admin/signup-requests"));
-    const failedRequest = failedRequests.find((request) => request.id === failedSignup.signupRequestId);
-    expect(failedRequest?.status).toBe("payment_failed");
-    expect(failedRequest?.paymentStatus).toBe("failed");
-    expect(failedRequest?.organizationStatus).toBe("payment_failed");
-
-    const retrySignup = await readOk<any>(
-      await publicContext.post("/api/signup", {
-        data: {
-          companyName: "E2E Billing Retry",
-          ownerName: "E2E Billing Retry Owner",
-          ownerEmail: failedSignup.ownerEmail,
-          password: USER_PASSWORD,
-          planId: "starter",
-          billingCycle: "monthly",
-          contactPhone: "09120000000",
-        },
-      })
-    );
-    expect(retrySignup.signupRequestId).toBe(failedSignup.signupRequestId);
-    expect(retrySignup.paymentId).not.toBe(failedSignup.paymentId);
-
-    const retryPayments = await readOk<any[]>(await owner.get("/api/admin/payments"));
-    expect(retryPayments.find((payment) => payment.id === failedSignup.paymentId)?.status).toBe("superseded");
-    expect(retryPayments.find((payment) => payment.id === retrySignup.paymentId)?.status).toBe("pending");
-
-    await disposeContexts(owner, publicContext);
+    await disposeContexts(publicContext);
   });
 
   test("guards company and platform user management actions by tenant and deletion blockers", async () => {
@@ -883,25 +695,9 @@ test.describe.serial("security regression harness", () => {
     await disposeContexts(owner, publicContext);
   });
 
-  test("uses the shared PostgreSQL limiter for production-sensitive throttles", async () => {
+  test("uses the shared PostgreSQL limiter for document upload throttles", async () => {
     await resetRateLimitBuckets();
     const owner = await loginApi();
-    const publicContext = await apiContext();
-
-    const rateLimitedPayment = await createPublicSignup(publicContext, "rate-payment");
-    let limitedPaymentStart = null;
-    for (let attempt = 0; attempt < 13; attempt += 1) {
-      const response = await publicContext.post(
-        `/api/billing/payments/${encodeURIComponent(rateLimitedPayment.paymentId)}/start`
-      );
-      if (response.status() === 429) {
-        limitedPaymentStart = response;
-        break;
-      }
-      await readOk(response);
-    }
-    expect(limitedPaymentStart, "payment start should be throttled").not.toBeNull();
-    expect(limitedPaymentStart!.headers()["retry-after"]).toBeTruthy();
 
     let limitedDocumentUpload = null;
     for (let attempt = 0; attempt < 21; attempt += 1) {
@@ -919,29 +715,7 @@ test.describe.serial("security regression harness", () => {
     expect(limitedDocumentUpload, "document upload should be throttled").not.toBeNull();
     expect(limitedDocumentUpload!.headers()["retry-after"]).toBeTruthy();
 
-    let limitedSignup = null;
-    for (let attempt = 0; attempt < 12; attempt += 1) {
-      const response = await publicContext.post("/api/signup", {
-        data: {
-          companyName: `E2E Limited Signup ${Date.now()} ${attempt}`,
-          ownerName: "E2E Limited Owner",
-          ownerEmail: uniqueEmail(`limited-signup-${attempt}`),
-          password: USER_PASSWORD,
-          planId: "starter",
-          billingCycle: "monthly",
-          contactPhone: "09120000000",
-        },
-      });
-      if (response.status() === 429) {
-        limitedSignup = response;
-        break;
-      }
-      await readOk(response);
-    }
-    expect(limitedSignup, "public signup should be throttled").not.toBeNull();
-    expect(limitedSignup!.headers()["retry-after"]).toBeTruthy();
-
     await resetRateLimitBuckets();
-    await disposeContexts(owner, publicContext);
+    await disposeContexts(owner);
   });
 });

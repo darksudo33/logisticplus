@@ -273,7 +273,7 @@ async function main() {
           shipment_code: `${prefix}-S-${tenantIndex}-${String(i).padStart(5, "0")}`,
           customer_id: customer?.id || null,
           customer_name: customer?.company_name || `${prefix} Customer`,
-          status: ["PENDING", "BOOKED", "IN_TRANSIT", "CUSTOMS", "CLEARED", "DELIVERED"][i % 6],
+          status: ["LOADING", "IN_TRANSIT", "ARRIVED", "KOOTAJ_DONE", "EXITED"][i % 5],
           priority: i % 7 === 0 ? "high" : "normal",
           origin: ["Tehran", "Bandar Abbas", "Dubai", "Shanghai"][i % 4],
           destination: ["Mashhad", "Tehran", "Isfahan", "Shiraz"][i % 4],

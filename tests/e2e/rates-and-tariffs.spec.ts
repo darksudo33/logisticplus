@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { disposeContexts, loginApi, loginViaUi, readOk, expectForbidden, uniqueEmail } from "./helpers";
-import { fetchBrsApiProCurrencyPayload, normalizeBrsApiProCurrencyPayload } from "@/src/server/rates/brsapi.js";
+import { fetchBrsApiProCurrencyPayload, normalizeBrsApiProCurrencyPayload } from "@/server/src/modules/rates/brsapi.js";
 
 test.describe.serial("rates and tariffs", () => {
   test("normalizes BRSAPI Pro currency payloads with free, SANA, and NIMA markets", () => {

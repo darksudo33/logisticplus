@@ -32,6 +32,13 @@ const baseEnv = {
   INITIAL_ORG_BILLING_CYCLE: "annual",
 };
 
+let shipmentCodeSequence = 700 + (Date.now() % 200);
+
+function nextValidShipmentCode() {
+  shipmentCodeSequence = shipmentCodeSequence >= 998 ? 700 : shipmentCodeSequence + 1;
+  return `14050316${String(shipmentCodeSequence).padStart(3, "0")}`;
+}
+
 function withDatabase(connectionString: string, databaseName: string) {
   const parsed = new URL(connectionString);
   parsed.pathname = `/${databaseName}`;
@@ -294,11 +301,11 @@ async function exerciseFreshFlows() {
     actorUserId: user.id,
     organizationId: user.organization_id,
     shipment: {
-      trackingNumber: `FRESH-${Date.now()}`,
+      trackingNumber: nextValidShipmentCode(),
       customerId: customer.id,
       origin: "Origin",
       destination: "Destination",
-      status: "PENDING",
+      status: "LOADING",
     },
   });
   expect(shipment?.id, "Initial admin should be able to create a shipment.");

@@ -101,8 +101,8 @@ export const mockCustomers: Customer[] = [
 export const mockShipments: Shipment[] = [
   { id: "s1", trackingNumber: "LS-9801", containerNumber: "MEDU876251", customerId: "c1", customerName: "آرین سیستم", origin: "شانگهای", destination: "بندرعباس", status: "IN_TRANSIT", createdAt: formatDate(addDays(today, -20)), estimatedDelivery: formatDate(addDays(today, 15)), freeTimeDays: 14 },
   { id: "s2", trackingNumber: "LS-9802", containerNumber: "MSKU112233", customerId: "c2", customerName: "صادرات پارس", origin: "دبی", destination: "بوشهر", status: "ARRIVED", createdAt: formatDate(addDays(today, -25)), estimatedDelivery: formatDate(addDays(today, 5)), freeTimeDays: 10 },
-  { id: "s3", trackingNumber: "LS-9803", containerNumber: "CMAU445566", customerId: "c3", customerName: "فراز لجستیک", origin: "هامبورگ", destination: "بندر امام", status: "CUSTOMS", createdAt: formatDate(addDays(today, -30)), estimatedDelivery: formatDate(addDays(today, 10)), freeTimeDays: 20 },
-  { id: "s4", trackingNumber: "LS-9804", containerNumber: "COSU778899", customerId: "c1", customerName: "آرین سیستم", origin: "پکن", destination: "تهران (گمرک)", status: "CLEARED", createdAt: formatDate(addDays(today, -40)), estimatedDelivery: formatDate(addDays(today, -5)), freeTimeDays: 7 },
+  { id: "s3", trackingNumber: "LS-9803", containerNumber: "CMAU445566", customerId: "c3", customerName: "فراز لجستیک", origin: "هامبورگ", destination: "بندر امام", status: "KOOTAJ_DONE", createdAt: formatDate(addDays(today, -30)), estimatedDelivery: formatDate(addDays(today, 10)), freeTimeDays: 20 },
+  { id: "s4", trackingNumber: "LS-9804", containerNumber: "COSU778899", customerId: "c1", customerName: "آرین سیستم", origin: "پکن", destination: "تهران (گمرک)", status: "EXITED", createdAt: formatDate(addDays(today, -40)), estimatedDelivery: formatDate(addDays(today, -5)), freeTimeDays: 7 },
 ];
 
 export const defaultSteps = [

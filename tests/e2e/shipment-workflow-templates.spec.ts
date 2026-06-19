@@ -9,6 +9,7 @@ import {
   expectUnavailable,
   loginApi,
   loginViaUi,
+  nextValidShipmentCode,
   readOk,
   uniqueEmail,
 } from "./helpers";
@@ -41,7 +42,10 @@ async function cleanupWorkflowTemplateTestData() {
        SELECT id
        FROM shipments
        WHERE organization_id = $1
-         AND shipment_code LIKE 'WF-TPL-%'
+         AND (
+           shipment_code LIKE 'WF-TPL-%'
+           OR customer_name LIKE 'Workflow Template %'
+         )
      )`,
     [seedOrganizationId]
   );
@@ -49,7 +53,10 @@ async function cleanupWorkflowTemplateTestData() {
   await client.query(
     `DELETE FROM shipments
      WHERE organization_id = $1
-       AND shipment_code LIKE 'WF-TPL-%'`,
+       AND (
+         shipment_code LIKE 'WF-TPL-%'
+         OR customer_name LIKE 'Workflow Template %'
+       )`,
     [seedOrganizationId]
   );
   await client.query("DELETE FROM shipment_type_workflow_templates WHERE organization_id = $1", [seedOrganizationId]);
@@ -99,11 +106,11 @@ async function createShipmentForType(owner: Awaited<ReturnType<typeof loginApi>>
   return readOk<any>(
     await owner.post("/api/shipments", {
       data: {
-        trackingNumber: `WF-TPL-${typeCode}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        trackingNumber: await nextValidShipmentCode(),
         customerName: `Workflow Template ${typeCode}`,
         origin: template!.shipmentDirection === "export" ? "Tehran" : "Dubai",
         destination: template!.shipmentDirection === "export" ? "Dubai" : "Tehran",
-        status: "PENDING",
+        status: "LOADING",
         shipmentTypeCode: typeCode,
         shipmentDirection: template!.shipmentDirection,
         transportMode: template!.transportMode,
@@ -200,7 +207,7 @@ test.describe.serial("shipment workflow templates", () => {
     try {
       const spoofed = await owner.post("/api/shipments", {
         data: {
-          trackingNumber: `WF-TPL-SPOOF-${Date.now()}`,
+          trackingNumber: await nextValidShipmentCode(),
           customerName: "Spoofed workflow template shipment",
           origin: "Dubai",
           destination: "Tehran",

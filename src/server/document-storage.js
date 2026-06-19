@@ -333,7 +333,7 @@ function chatAttachmentValidationError(code, message, statusCode = 415) {
   return { ok: false, code, message, field: "file", statusCode };
 }
 
-function validateDocumentFile(file, displayFileName = file?.originalname || "") {
+export function validateDocumentFile(file, displayFileName = file?.originalname || "") {
   if (!file) {
     return documentValidationError("FILE_REQUIRED", "File is required.", 400);
   }

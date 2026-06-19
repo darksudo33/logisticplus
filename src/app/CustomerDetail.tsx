@@ -7,24 +7,22 @@ import { Badge } from "@/components/ui/badge";
 import { ArrowRight, Mail, Phone, MapPin, Calendar, Ship, Package, CheckCircle2, Clock, AlertCircle, StickyNote } from "lucide-react";
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
+import { isShipmentTerminalStatus, shipmentStatusLabel } from "@/src/shared/shipment-statuses.js";
 
 const StatusBadge = ({ status }: { status: string }) => {
-  const configs: Record<string, { label: string; className: string }> = {
-    PENDING: { label: "در انتظار", className: "bg-amber-500/10 text-amber-600 dark:text-amber-500 border-amber-500/20" },
-    BOOKED: { label: "رزرو شده", className: "bg-blue-500/10 text-blue-600 dark:text-blue-500 border-blue-500/20" },
-    IN_TRANSIT: { label: "در حال حمل", className: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-500 border-indigo-500/20" },
-    ARRIVED: { label: "رسیده به مقصد", className: "bg-purple-500/10 text-purple-600 dark:text-purple-500 border-purple-500/20" },
-    CUSTOMS: { label: "در گمرک", className: "bg-orange-500/10 text-orange-600 dark:text-orange-500 border-orange-500/20" },
-    CLEARED: { label: "ترخیص شده", className: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-500 border-emerald-500/20" },
-    DELIVERED: { label: "تحویل شده", className: "bg-green-500/10 text-green-600 dark:text-green-500 border-green-500/20" },
-    CLOSED: { label: "مختومه", className: "bg-slate-500/10 text-slate-600 dark:text-slate-500 border-slate-500/20" },
+  const configs: Record<string, string> = {
+    LOADING: "bg-slate-500/10 text-slate-600 dark:text-slate-500 border-slate-500/20",
+    IN_TRANSIT: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-500 border-indigo-500/20",
+    ARRIVED: "bg-purple-500/10 text-purple-600 dark:text-purple-500 border-purple-500/20",
+    KOOTAJ_DONE: "bg-orange-500/10 text-orange-600 dark:text-orange-500 border-orange-500/20",
+    EXITED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-500 border-emerald-500/20",
   };
 
-  const config = configs[status] || { label: status, className: "bg-slate-500/10 text-slate-600 dark:text-slate-500 border-slate-500/20" };
+  const className = configs[status] || "bg-slate-500/10 text-slate-600 dark:text-slate-500 border-slate-500/20";
 
   return (
-    <Badge variant="outline" className={cn("px-2 py-0 text-[10px] font-bold rounded-full border", config.className)}>
-      {config.label}
+    <Badge variant="outline" className={cn("px-2 py-0 text-[10px] font-bold rounded-full border", className)}>
+      {shipmentStatusLabel(status)}
     </Badge>
   );
 };
@@ -79,7 +77,7 @@ export default function CustomerDetail() {
     );
   }
 
-  const activeShipments = customerShipments.filter(s => s.status !== "DELIVERED" && s.status !== "CLOSED" && !s.isArchived && !s.isExitedArchived);
+  const activeShipments = customerShipments.filter(s => !isShipmentTerminalStatus(s.status) && !s.isArchived && !s.isExitedArchived);
   const canViewPrivateDetails = currentUser?.role === "CEO" && customer.canViewPrivateDetails !== false;
   const displayCustomerCode = customer.customerCode || customer.code || customer.id;
   const phoneNumbers = customer.phoneNumbers?.length
@@ -193,7 +191,7 @@ export default function CustomerDetail() {
                <CheckCircle2 className="w-6 h-6 text-emerald-500" />
              </div>
              <span className="text-[10px] font-black text-muted-foreground uppercase tracking-widest mb-1">تحویل شده</span>
-             <span className="text-3xl font-black text-foreground">{customerShipments.filter(s => s.status === "DELIVERED").length}</span>
+             <span className="text-3xl font-black text-foreground">{customerShipments.filter(s => s.status === "EXITED").length}</span>
           </Card>
 
           <Card className="bg-primary border-none rounded-2xl shadow-lg p-5 flex flex-col items-center justify-center text-center">

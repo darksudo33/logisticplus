@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import pg from "pg";
+import { checkDatabase, pool } from "../../server/src/db/pool.js";
+import { createApiError } from "../../server/src/shared/errors/api-error.js";
 import {
   getPublicDocument as getPublicDocumentFromRepository,
   getPublicDocumentByTrackingToken as getPublicDocumentByTrackingTokenFromRepository,
@@ -7,19 +8,20 @@ import {
   getPublicTrackingByToken as getPublicTrackingByTokenFromRepository,
 } from "./public-tracking.js";
 import {
-  markPaymentVerifiedByAuthority as markPaymentVerifiedByAuthorityInRepository,
-} from "./repositories/billing.js";
-import {
   DEFAULT_SHIPMENT_TYPE_CODE,
   normalizeShipmentTypeCode,
   shipmentTypeByCode,
 } from "../shared/shipment-form-fields.js";
 import {
+  isShipmentTerminalStatus,
+  normalizeShipmentStatus,
+} from "../shared/shipment-statuses.js";
+import {
   getDocumentDetail as getDocumentDetailFromRepository,
   getDocumentForDownload as getDocumentForDownloadFromRepository,
   listDocuments as listDocumentsFromRepository,
   listDocumentStorageKeysForCleanup as listDocumentStorageKeysForCleanupFromRepository,
-} from "./repositories/documents.js";
+} from "../../server/src/modules/documents/document.repository.js";
 import {
   getChequeRecord as getChequeRecordFromRepository,
   listCheques as listChequesFromRepository,
@@ -37,7 +39,7 @@ import {
   listCustomerPhoneNumbers,
   listCustomersDetailed as listCustomersDetailedFromRepository,
   toUiCustomer as toUiCustomerFromRepository,
-} from "./repositories/customers.js";
+} from "../../server/src/modules/customers/customer.repository.js";
 import {
   listExitedShipmentRecords as listExitedShipmentRecordsFromRepository,
   getShipmentOperationalRecord as getShipmentOperationalRecordFromRepository,
@@ -45,12 +47,12 @@ import {
   listBootstrapShipments as listBootstrapShipmentsFromRepository,
   listOperationalShipmentRecords as listOperationalShipmentRecordsFromRepository,
   toUiShipment,
-} from "./repositories/shipments.js";
+} from "../../server/src/modules/shipments/shipment.repository.js";
 import {
   getQuotationRecord as getQuotationRecordFromRepository,
   listQuotations as listQuotationsFromRepository,
   toUiQuote as toUiQuoteFromRepository,
-} from "./repositories/quotations.js";
+} from "../../server/src/modules/quotations/quotation.repository.js";
 import {
   parseShipmentCode,
   resolveManualShipmentCode,
@@ -59,17 +61,13 @@ import {
 import { refreshCompanyBrainEntity } from "./ai/company-brain.js";
 import {
   previewUserDeletion as previewUserDeletionFromRepository,
-} from "./repositories/users.js";
+} from "../../server/src/modules/users/user.repository.js";
 import { DEFAULT_SMS_TEMPLATE_MAP, renderSmsTemplateBody } from "./sms-templates.js";
 import { organizationIdFromTenantContext, organizationScopeClause, requireOrganizationScope } from "./tenant-scope.js";
 import { withTransaction } from "./transaction.js";
+import { shipmentTimerOrderBy } from "./repositories/shipment-sort.js";
 
-const { Pool } = pg;
-
-const connectionString =
-  process.env.DATABASE_URL || "postgres://postgres@localhost:5432/logisticplus";
-
-export const pool = new Pool({ connectionString });
+export { checkDatabase, createApiError, pool };
 
 async function refreshCompanyBrainEntityBestEffort(organizationId, entityType, entityId) {
   if (!organizationId || !entityType || !entityId) return;
@@ -89,24 +87,10 @@ async function refreshCompanyBrainEntityBestEffort(organizationId, entityType, e
 
 const TRANSIENT_SESSION_HOURS = 12;
 const REMEMBER_SESSION_DAYS = 30;
-const LOGIN_SMS_CODE_TTL_MINUTES = 5;
-const LOGIN_SMS_MAX_ATTEMPTS = 5;
 const QUOTATIONS_UI_SURFACE_ENABLED = false;
 
 export function hashSessionToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
-}
-
-export function createApiError(res, status, code, message, field) {
-  return res.status(status).json({
-    ok: false,
-    error: { code, message, ...(field ? { field } : {}) },
-  });
-}
-
-export async function checkDatabase() {
-  const result = await pool.query("SELECT NOW() AS now");
-  return result.rows[0];
 }
 
 export async function getUserByEmail(email) {
@@ -712,31 +696,6 @@ export function normalizeSmsPhone(phone) {
   return "";
 }
 
-export async function getUserByPhone(phone) {
-  const normalizedPhone = normalizeSmsPhone(phone);
-  if (!normalizedPhone) return null;
-  const localPhone = normalizedPhone.startsWith("98") ? `0${normalizedPhone.slice(2)}` : normalizedPhone;
-  const nationalPhone = normalizedPhone.startsWith("98") ? normalizedPhone.slice(2) : normalizedPhone;
-  const phoneExpression = phoneDigitsSql("u.phone");
-  const result = await pool.query(
-    `SELECT u.id, u.name, u.email, u.password_hash, u.role, u.avatar, u.is_online, u.department, u.status, u.last_seen_at,
-            u.phone, u.location, u.bio, u.two_factor_enabled, u.notification_preferences,
-            u.organization_id,
-            o.status AS organization_status,
-            o.name AS organization_name,
-            o.plan_id AS organization_plan_id,
-            os.status AS subscription_status
-     FROM app_users u
-     LEFT JOIN organizations o ON o.id = u.organization_id
-     LEFT JOIN organization_subscriptions os ON os.organization_id = o.id
-     WHERE ${phoneExpression} = ANY($1::text[])
-     ORDER BY u.created_at ASC
-     LIMIT 1`,
-    [[normalizedPhone, localPhone, nationalPhone]]
-  );
-  return result.rows[0] || null;
-}
-
 export async function getUserById(userId) {
   const result = await pool.query(
     `SELECT u.id, u.name, u.email, u.role, u.avatar, u.is_online, u.department, u.status, u.last_seen_at,
@@ -978,104 +937,6 @@ export async function createSession(userId, { remember = false } = {}) {
   );
 
   return { id, token, expiresAt, remember };
-}
-
-function createLoginSmsCode() {
-  return String(crypto.randomInt(100000, 1000000));
-}
-
-function hashLoginSmsCode(code, salt) {
-  return crypto.createHash("sha256").update(`${salt}:${String(code || "").trim()}`).digest("hex");
-}
-
-export async function createLoginSmsChallenge({ userId, phone, requestContext = {} }) {
-  const normalizedPhone = normalizeSmsPhone(phone);
-  if (!userId || !normalizedPhone) {
-    const error = new Error("A valid phone number is required.");
-    error.statusCode = 400;
-    error.code = "VALIDATION_ERROR";
-    throw error;
-  }
-
-  const id = crypto.randomUUID();
-  const code = createLoginSmsCode();
-  const salt = crypto.randomBytes(16).toString("hex");
-  const expiresAt = new Date(Date.now() + LOGIN_SMS_CODE_TTL_MINUTES * 60 * 1000);
-
-  await pool.query(
-    `UPDATE login_sms_challenges
-     SET consumed_at = COALESCE(consumed_at, NOW()),
-         updated_at = NOW()
-     WHERE user_id = $1
-       AND phone = $2
-       AND consumed_at IS NULL`,
-    [userId, normalizedPhone]
-  );
-
-  await pool.query(
-    `INSERT INTO login_sms_challenges (
-       id, user_id, phone, code_hash, code_salt, expires_at, ip_address, user_agent, updated_at
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
-    [
-      id,
-      userId,
-      normalizedPhone,
-      hashLoginSmsCode(code, salt),
-      salt,
-      expiresAt,
-      requestContext.ip || null,
-      requestContext.userAgent || null,
-    ]
-  );
-
-  return { id, code, phone: normalizedPhone, expiresAt };
-}
-
-export async function verifyLoginSmsChallenge({ phone, code }) {
-  const normalizedPhone = normalizeSmsPhone(phone);
-  const normalizedCode = normalizeDigits(code).replace(/\D/g, "");
-  if (!normalizedPhone || !normalizedCode) {
-    return { ok: false, reason: "invalid_code" };
-  }
-
-  const result = await pool.query(
-    `SELECT *
-     FROM login_sms_challenges
-     WHERE phone = $1
-       AND consumed_at IS NULL
-       AND expires_at > NOW()
-     ORDER BY created_at DESC
-     LIMIT 1`,
-    [normalizedPhone]
-  );
-  const challenge = result.rows[0];
-  if (!challenge) return { ok: false, reason: "expired_or_missing" };
-  if (Number(challenge.attempt_count || 0) >= LOGIN_SMS_MAX_ATTEMPTS) {
-    return { ok: false, reason: "too_many_attempts" };
-  }
-
-  const matches = hashLoginSmsCode(normalizedCode, challenge.code_salt) === challenge.code_hash;
-  if (!matches) {
-    await pool.query(
-      `UPDATE login_sms_challenges
-       SET attempt_count = attempt_count + 1,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [challenge.id]
-    );
-    return { ok: false, reason: "invalid_code" };
-  }
-
-  await pool.query(
-    `UPDATE login_sms_challenges
-     SET consumed_at = NOW(),
-         updated_at = NOW()
-     WHERE id = $1`,
-    [challenge.id]
-  );
-
-  return { ok: true, user: await getUserById(challenge.user_id), challengeId: challenge.id };
 }
 
 export async function getSessionByToken(token) {
@@ -1624,7 +1485,7 @@ export async function createShipmentRecord({ ownerUserId, actorUserId, organizat
         codeParts.shipmentCode,
         shipment.customerId || null,
         shipment.customerName || customer?.company_name || customer?.contact_name || null,
-        shipment.status || "PENDING",
+        normalizeShipmentStatus(shipment.status),
         codeParts.shamsiYear,
         codeParts.shamsiDate,
         codeParts.shamsiSequence,
@@ -1703,6 +1564,9 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
       assignedManagerId: updates.assignedManagerId || null,
     });
     const legacyPatch = cleanShipmentLegacyPatch(updates);
+    const hasStatusUpdate = updates.status !== undefined;
+    const nextStatus = hasStatusUpdate ? normalizeShipmentStatus(updates.status) : normalizeShipmentStatus(before.status);
+    const hasTimerDeadlineUpdate = updates.timerDeadlineAt !== undefined;
     const hasShipmentTypeUpdate =
       updates.shipmentTypeCode !== undefined ||
       updates.shipment_type_code !== undefined ||
@@ -1763,7 +1627,7 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
     if (updates.customerName !== undefined || customer) {
       addColumn("customer_name", updates.customerName || customer?.company_name || customer?.contact_name || null);
     }
-    if (updates.status !== undefined) addColumn("status", updates.status);
+    if (hasStatusUpdate) addColumn("status", nextStatus);
     if (hasShipmentTypeUpdate) {
       addColumn("shipment_direction", typeColumns.shipmentDirection || null);
       addColumn("transport_mode", typeColumns.transportMode || null);
@@ -1773,6 +1637,25 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
     if (updates.destination !== undefined) addColumn("destination", updates.destination || null);
     if (updates.estimatedDelivery !== undefined) addColumn("estimated_delivery_at", updates.estimatedDelivery || null);
     if (updates.assignedManagerId !== undefined) addColumn("assigned_manager_id", updates.assignedManagerId || null);
+    if (hasTimerDeadlineUpdate) {
+      const nextDeadline = updates.timerDeadlineAt ? new Date(updates.timerDeadlineAt).toISOString() : null;
+      addColumn("timer_deadline_at", nextDeadline);
+      if (nextDeadline) {
+        if (!before.timer_deadline_at) addColumn("timer_started_at", new Date().toISOString());
+        addColumn("timer_removed_at", null);
+      } else {
+        addColumn("timer_removed_at", new Date().toISOString());
+      }
+    }
+    if (hasStatusUpdate) {
+      const wasTerminal = isShipmentTerminalStatus(before.status);
+      const isTerminal = isShipmentTerminalStatus(nextStatus);
+      if (isTerminal && !wasTerminal && before.timer_started_at && !before.timer_completed_at) {
+        addColumn("timer_completed_at", new Date().toISOString());
+      } else if (!isTerminal && wasTerminal) {
+        addColumn("timer_completed_at", null);
+      }
+    }
     addColumn("legacy_data", JSON.stringify(nextLegacy));
 
     const result = await client.query(
@@ -4162,8 +4045,8 @@ export async function getDashboardData(user, permissions = []) {
   ] = await Promise.all([
     pool.query(
       `SELECT
-         COUNT(*) FILTER (WHERE archived_at IS NULL AND exited_archived_at IS NULL AND status NOT IN ('DELIVERED', 'CLOSED'))::int AS active_shipments,
-         COUNT(*) FILTER (WHERE archived_at IS NULL AND exited_archived_at IS NULL AND status = 'CUSTOMS')::int AS customs_shipments
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND exited_archived_at IS NULL AND status <> 'EXITED')::int AS active_shipments,
+         COUNT(*) FILTER (WHERE archived_at IS NULL AND exited_archived_at IS NULL AND status = 'KOOTAJ_DONE')::int AS customs_shipments
        FROM shipments
        WHERE ($1::text IS NULL OR organization_id = $1)`,
       [orgParam]
@@ -4177,7 +4060,7 @@ export async function getDashboardData(user, permissions = []) {
        WHERE s.archived_at IS NULL
          AND s.exited_archived_at IS NULL
          AND ($1::text IS NULL OR s.organization_id = $1)
-       ORDER BY s.updated_at DESC, s.created_at DESC
+       ORDER BY ${shipmentTimerOrderBy("s")}
        LIMIT 8`,
       [orgParam]
     ),
@@ -4189,9 +4072,9 @@ export async function getDashboardData(user, permissions = []) {
         AND c.organization_id = s.organization_id
        WHERE s.archived_at IS NULL
          AND s.exited_archived_at IS NULL
-         AND s.status IN ('ARRIVED', 'CUSTOMS', 'IN_TRANSIT')
+          AND s.status IN ('ARRIVED', 'KOOTAJ_DONE', 'IN_TRANSIT')
          AND ($1::text IS NULL OR s.organization_id = $1)
-       ORDER BY s.updated_at DESC, s.created_at DESC
+       ORDER BY ${shipmentTimerOrderBy("s")}
        LIMIT 6`,
       [orgParam]
     ),
@@ -4376,69 +4259,6 @@ function toUiPlan(row) {
   };
 }
 
-function toUiSignupRequest(row) {
-  if (!row) return null;
-  const hasPaidPayment = Boolean(row.has_paid_payment);
-  const hasReceipt = Boolean(row.has_receipt);
-  const abandonedCleanupEligible = isAbandonedSignupRow(row, { allowSuspendedUser: true });
-  return {
-    id: row.id,
-    organizationId: row.organization_id,
-    ownerUserId: row.owner_user_id,
-    planId: row.plan_id,
-    planName: row.plan_name || row.plan_id,
-    companyName: row.company_name,
-    contactName: row.contact_name,
-    contactEmail: row.contact_email,
-    contactPhone: row.contact_phone || "",
-    companySize: row.company_size || "",
-    expectedVolume: row.expected_volume || "",
-    notes: row.notes || "",
-    status: row.status,
-    paymentId: row.payment_id,
-    paymentStatus: row.payment_status,
-    paymentAmountIrr: Number(row.payment_amount_irr || 0),
-    organizationStatus: row.organization_status,
-    subscriptionStatus: row.subscription_status,
-    userStatus: row.user_status,
-    hasPaidPayment,
-    hasReceipt,
-    abandonedCleanupEligible,
-    createdAt: row.created_at,
-    reviewedAt: row.reviewed_at,
-  };
-}
-
-function isAbandonedSignupRow(row, { allowSuspendedUser = false } = {}) {
-  if (!row) return false;
-  if (row.has_paid_payment || row.has_receipt) return false;
-  if (["approved"].includes(row.status)) return false;
-  if (["active", "suspended", "cancelled"].includes(row.organization_status)) return false;
-  if (["active", "cancelled"].includes(row.subscription_status)) return false;
-  if (allowSuspendedUser) return !["active"].includes(row.user_status);
-  return ["pending"].includes(row.user_status || "pending");
-}
-
-function toUiContactRequest(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    companyName: row.company_name,
-    contactName: row.contact_name,
-    contactEmail: row.contact_email || "",
-    contactPhone: row.contact_phone || "",
-    preferredContactMethod: row.preferred_contact_method || "phone",
-    message: row.message || "",
-    status: row.status || "new",
-    resolvedById: row.resolved_by_id || null,
-    resolvedByName: row.resolved_by_name || "",
-    resolvedAt: row.resolved_at,
-    ipAddress: row.ip_address || "",
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
 function toUiSmsDelivery(row) {
   if (!row) return null;
   return {
@@ -4578,45 +4398,6 @@ async function insertSubscriptionEvent(client, { organizationId, subscriptionId,
       after === undefined ? null : JSON.stringify(after),
     ]
   );
-}
-
-async function createIssuedInvoiceForPayment(client, { organizationId, subscriptionId, signupRequestId, paymentId, plan, billingCycle, amount }) {
-  const invoiceId = crypto.randomUUID();
-  const invoiceNumber = billingNumber("INV");
-  const numericAmount = Number(amount || 0);
-  await client.query(
-    `INSERT INTO billing_invoices (
-       id, organization_id, subscription_id, signup_request_id, payment_id, invoice_number,
-       status, billing_cycle, subtotal_irr, tax_irr, total_irr, due_at, notes, metadata
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, 'issued', $7, $8, 0, $8, NOW() + INTERVAL '7 days', $9, $10::jsonb)`,
-    [
-      invoiceId,
-      organizationId,
-      subscriptionId,
-      signupRequestId,
-      paymentId,
-      invoiceNumber,
-      billingCycle,
-      numericAmount,
-      `Subscription invoice for ${plan?.name || "Logistic Plus"}`,
-      JSON.stringify({ planId: plan?.id || null, planName: plan?.name || null }),
-    ]
-  );
-  await client.query(
-    `INSERT INTO billing_invoice_items (
-       id, invoice_id, description, quantity, unit_amount_irr, total_amount_irr, metadata
-     )
-     VALUES ($1, $2, $3, 1, $4, $4, $5::jsonb)`,
-    [
-      crypto.randomUUID(),
-      invoiceId,
-      `${plan?.name || "Subscription"} - ${billingCycle}`,
-      numericAmount,
-      JSON.stringify({ type: "subscription", billingCycle }),
-    ]
-  );
-  return invoiceId;
 }
 
 async function closeInvoiceForPayment(client, payment) {
@@ -5093,7 +4874,7 @@ export async function queueScheduledSmsAlerts({ now = new Date() } = {}) {
      FROM shipments
      WHERE archived_at IS NULL
        AND organization_id IS NOT NULL
-       AND status IN ('ARRIVED', 'CUSTOMS', 'CLEARED')`
+        AND status IN ('ARRIVED', 'KOOTAJ_DONE')`
   );
   for (const shipment of shipments.rows) {
     const estimatedDelivery = parseOperationalDate(shipment.estimated_delivery_at);
@@ -5362,318 +5143,6 @@ export async function assertPlanAllowsUser(organizationId) {
   }
 }
 
-async function getRetryableSignupByOwnerEmail(email, userId) {
-  const result = await pool.query(
-    `SELECT sr.*, o.status AS organization_status, u.status AS user_status,
-            os.id AS subscription_id, os.status AS subscription_status,
-            bp.status AS payment_status,
-            EXISTS (
-              SELECT 1
-              FROM billing_payments paid
-              WHERE (paid.signup_request_id = sr.id OR paid.organization_id = sr.organization_id)
-                AND paid.status = 'paid'
-            ) AS has_paid_payment,
-            EXISTS (
-              SELECT 1
-              FROM billing_receipts receipt
-              LEFT JOIN billing_payments receipt_payment ON receipt_payment.id = receipt.payment_id
-              LEFT JOIN billing_invoices receipt_invoice ON receipt_invoice.id = receipt.invoice_id
-              WHERE receipt.organization_id = sr.organization_id
-                 OR receipt_payment.signup_request_id = sr.id
-                 OR receipt_invoice.signup_request_id = sr.id
-            ) AS has_receipt
-     FROM signup_requests sr
-     JOIN organizations o ON o.id = sr.organization_id
-     JOIN app_users u ON u.id = sr.owner_user_id
-     LEFT JOIN organization_subscriptions os ON os.organization_id = o.id
-     LEFT JOIN billing_payments bp ON bp.id = sr.payment_id
-     WHERE u.id = $2
-        OR lower(u.email) = lower($1)
-     ORDER BY sr.created_at DESC
-     LIMIT 1`,
-    [email, userId]
-  );
-  const row = result.rows[0];
-  if (!row) return null;
-  const retryableSignup = ["payment_pending", "payment_failed", "pending_review"].includes(row.status);
-  const retryablePayment = !row.payment_status || ["pending", "failed", "superseded"].includes(row.payment_status);
-  return retryableSignup && retryablePayment && isAbandonedSignupRow(row) ? row : null;
-}
-
-async function retrySignupWithPayment(client, { signup, passwordHash, plan, retryable }) {
-  const paymentId = crypto.randomUUID();
-  const billingCycle = signup.billingCycle === "annual" ? "annual" : "monthly";
-  const amount = billingCycle === "annual" ? plan.annual_price_irr : plan.monthly_price_irr;
-  const ownerEmail = signup.ownerEmail || signup.contactEmail;
-  const ownerName = signup.ownerName || signup.contactName;
-
-  await client.query(
-    `UPDATE billing_payments
-     SET status = 'superseded',
-         updated_at = NOW(),
-         raw_verify = COALESCE(raw_verify, '{}'::jsonb) || $2::jsonb
-     WHERE (signup_request_id = $1 OR organization_id = $3)
-       AND status <> 'paid'`,
-    [retryable.id, JSON.stringify({ reason: "signup_retry", supersededAt: new Date().toISOString() }), retryable.organization_id]
-  );
-  await client.query(
-    `UPDATE billing_invoices
-     SET status = 'void',
-         updated_at = NOW(),
-         metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb
-     WHERE (signup_request_id = $1 OR organization_id = $3)
-       AND status = 'issued'`,
-    [retryable.id, JSON.stringify({ voidReason: "signup_retry" }), retryable.organization_id]
-  );
-  await client.query(
-    `UPDATE organizations
-     SET name = $2,
-         plan_id = $3,
-         contact_name = $4,
-         contact_email = $5,
-         contact_phone = $6,
-         notes = $7,
-         status = 'pending_payment',
-         legacy_data = $8::jsonb,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [
-      retryable.organization_id,
-      signup.companyName,
-      plan.id,
-      ownerName,
-      ownerEmail,
-      signup.contactPhone || "",
-      signup.notes || null,
-      JSON.stringify({ companySize: signup.companySize, expectedVolume: signup.expectedVolume }),
-    ]
-  );
-  await client.query(
-    `UPDATE app_users
-     SET name = $2,
-         email = $3,
-         password_hash = $4,
-         status = 'pending',
-         updated_at = NOW()
-     WHERE id = $1`,
-    [retryable.owner_user_id, ownerName, ownerEmail, passwordHash]
-  );
-  await client.query(
-    `INSERT INTO organization_members (organization_id, user_id, role, status)
-     VALUES ($1, $2, 'owner', 'pending')
-     ON CONFLICT (organization_id, user_id) DO UPDATE SET status = 'pending'`,
-    [retryable.organization_id, retryable.owner_user_id]
-  );
-  await client.query(
-    `UPDATE organization_subscriptions
-     SET plan_id = $2,
-         status = 'pending_payment',
-         billing_cycle = $3,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [retryable.subscription_id, plan.id, billingCycle]
-  );
-  await client.query(
-    `INSERT INTO billing_payments (
-       id, organization_id, signup_request_id, subscription_id, provider, status,
-       amount_irr, currency, description
-     )
-     VALUES ($1, $2, $3, $4, 'zarinpal', 'pending', $5, 'IRR', $6)`,
-    [paymentId, retryable.organization_id, retryable.id, retryable.subscription_id, amount, `Subscription ${plan.name} Logistic Plus`]
-  );
-  await client.query(
-    `UPDATE signup_requests
-     SET plan_id = $2,
-         company_name = $3,
-         contact_name = $4,
-         contact_email = $5,
-         contact_phone = $6,
-         company_size = $7,
-         expected_volume = $8,
-         notes = $9,
-         status = 'payment_pending',
-         payment_id = $10,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [
-      retryable.id,
-      plan.id,
-      signup.companyName,
-      ownerName,
-      ownerEmail,
-      signup.contactPhone || "",
-      signup.companySize || "",
-      signup.expectedVolume || "",
-      signup.notes || "",
-      paymentId,
-    ]
-  );
-  const invoiceId = await createIssuedInvoiceForPayment(client, {
-    organizationId: retryable.organization_id,
-    subscriptionId: retryable.subscription_id,
-    signupRequestId: retryable.id,
-    paymentId,
-    plan,
-    billingCycle,
-    amount,
-  });
-  await insertSubscriptionEvent(client, {
-    organizationId: retryable.organization_id,
-    subscriptionId: retryable.subscription_id,
-    eventType: "signup.payment_retry",
-    summary: "Signup payment was retried.",
-    after: { invoiceId, paymentId, planId: plan.id, billingCycle, amountIrr: Number(amount) },
-  });
-  await syncUsersCollectionForOrganization(client, retryable.organization_id, retryable.owner_user_id);
-  return {
-    signupRequestId: retryable.id,
-    organizationId: retryable.organization_id,
-    ownerUserId: retryable.owner_user_id,
-    paymentId,
-    invoiceId,
-    amountIrr: Number(amount),
-    plan: toUiPlan(plan),
-  };
-}
-
-export async function createSignupWithPayment({ signup, passwordHash }) {
-  const plan = await getSubscriptionPlan(signup.planId || "starter");
-  if (!plan) {
-    const error = new Error("Selected plan was not found.");
-    error.statusCode = 400;
-    error.code = "PLAN_NOT_FOUND";
-    throw error;
-  }
-
-  const ownerEmail = signup.ownerEmail || signup.contactEmail;
-  const existing = await getUserByEmail(ownerEmail);
-  if (existing) {
-    const retryable = await getRetryableSignupByOwnerEmail(ownerEmail, existing.id);
-    if (!retryable) {
-      const error = new Error("A user with this email already exists.");
-      error.statusCode = 409;
-      error.code = "EMAIL_EXISTS";
-      throw error;
-    }
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const data = await retrySignupWithPayment(client, { signup, passwordHash, plan, retryable });
-      await client.query("COMMIT");
-      return data;
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  const organizationId = crypto.randomUUID();
-  const ownerUserId = crypto.randomUUID();
-  const subscriptionId = crypto.randomUUID();
-  const requestId = crypto.randomUUID();
-  const paymentId = crypto.randomUUID();
-  let invoiceId = null;
-  const billingCycle = signup.billingCycle === "annual" ? "annual" : "monthly";
-  const amount = billingCycle === "annual" ? plan.annual_price_irr : plan.monthly_price_irr;
-  const slug = `${slugifyOrganizationName(signup.companyName)}-${organizationId.slice(0, 8)}`;
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-    await client.query(
-      `INSERT INTO organizations (
-         id, name, slug, status, owner_user_id, plan_id, contact_name, contact_email, contact_phone, notes, legacy_data
-       )
-       VALUES ($1, $2, $3, 'pending_payment', $4, $5, $6, $7, $8, $9, $10::jsonb)`,
-      [
-        organizationId,
-        signup.companyName,
-        slug,
-        ownerUserId,
-        plan.id,
-        signup.ownerName || signup.contactName,
-        signup.ownerEmail || signup.contactEmail,
-        signup.contactPhone || "",
-        signup.notes || null,
-        JSON.stringify({ companySize: signup.companySize, expectedVolume: signup.expectedVolume }),
-      ]
-    );
-    await client.query(
-      `INSERT INTO app_users (
-         id, organization_id, name, email, password_hash, role, status, is_online, notification_preferences, updated_at
-       )
-       VALUES ($1, $2, $3, $4, $5, 'CEO', 'pending', FALSE, '{}'::jsonb, NOW())`,
-      [ownerUserId, organizationId, signup.ownerName || signup.contactName, signup.ownerEmail || signup.contactEmail, passwordHash]
-    );
-    await client.query(
-      `INSERT INTO organization_members (organization_id, user_id, role, status)
-       VALUES ($1, $2, 'owner', 'pending')`,
-      [organizationId, ownerUserId]
-    );
-    await client.query(
-      `INSERT INTO organization_subscriptions (
-         id, organization_id, plan_id, status, billing_cycle, created_at, updated_at
-       )
-       VALUES ($1, $2, $3, 'pending_payment', $4, NOW(), NOW())`,
-      [subscriptionId, organizationId, plan.id, billingCycle]
-    );
-    await client.query(
-      `INSERT INTO billing_payments (
-         id, organization_id, signup_request_id, subscription_id, provider, status,
-         amount_irr, currency, description
-       )
-       VALUES ($1, $2, $3, $4, 'zarinpal', 'pending', $5, 'IRR', $6)`,
-      [paymentId, organizationId, requestId, subscriptionId, amount, `اشتراک ${plan.name} لجستیک پلاس`]
-    );
-    await client.query(
-      `INSERT INTO signup_requests (
-         id, organization_id, owner_user_id, plan_id, company_name, contact_name,
-         contact_email, contact_phone, company_size, expected_volume, notes, status, payment_id
-       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'payment_pending', $12)`,
-      [
-        requestId,
-        organizationId,
-        ownerUserId,
-        plan.id,
-        signup.companyName,
-        signup.ownerName || signup.contactName,
-        signup.ownerEmail || signup.contactEmail,
-        signup.contactPhone || "",
-        signup.companySize || "",
-        signup.expectedVolume || "",
-        signup.notes || "",
-        paymentId,
-      ]
-    );
-    invoiceId = await createIssuedInvoiceForPayment(client, {
-      organizationId,
-      subscriptionId,
-      signupRequestId: requestId,
-      paymentId,
-      plan,
-      billingCycle,
-      amount,
-    });
-    await insertSubscriptionEvent(client, {
-      organizationId,
-      subscriptionId,
-      eventType: "signup.invoice_issued",
-      summary: "Signup invoice was issued.",
-      after: { invoiceId, paymentId, planId: plan.id, billingCycle, amountIrr: Number(amount) },
-    });
-    await client.query("COMMIT");
-    return { signupRequestId: requestId, organizationId, ownerUserId, paymentId, invoiceId, amountIrr: Number(amount), plan: toUiPlan(plan) };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
 export async function createManualCompanySignup({ signup, passwordHash, reviewerId }) {
   const plan = await getSubscriptionPlan(signup.planId || "starter");
   if (!plan) {
@@ -5785,352 +5254,6 @@ export async function createManualCompanySignup({ signup, passwordHash, reviewer
       plan: toUiPlan(plan),
       organization: await getOrganizationDetail(organizationId),
     };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-export async function getBillingPayment(paymentId) {
-  const result = await pool.query(
-    `SELECT bp.*, sp.name AS plan_name
-     FROM billing_payments bp
-     LEFT JOIN organization_subscriptions os ON os.id = bp.subscription_id
-     LEFT JOIN subscription_plans sp ON sp.id = os.plan_id
-     WHERE bp.id = $1
-     LIMIT 1`,
-    [paymentId]
-  );
-  return result.rows[0] || null;
-}
-
-export async function getBillingPaymentByAuthority(authority) {
-  const result = await pool.query(
-    `SELECT bp.*, sp.name AS plan_name
-     FROM billing_payments bp
-     LEFT JOIN organization_subscriptions os ON os.id = bp.subscription_id
-     LEFT JOIN subscription_plans sp ON sp.id = os.plan_id
-     WHERE bp.gateway_authority = $1
-     LIMIT 1`,
-    [authority]
-  );
-  return result.rows[0] || null;
-}
-
-export async function markPaymentRequested(paymentId, { authority, gatewayUrl, rawRequest }) {
-  const result = await pool.query(
-    `UPDATE billing_payments
-     SET gateway_authority = $2,
-         gateway_url = $3,
-         status = 'pending',
-         raw_request = $4::jsonb,
-         requested_at = NOW(),
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [paymentId, authority, gatewayUrl, JSON.stringify(rawRequest || {})]
-  );
-  return result.rows[0] || null;
-}
-
-export async function markPaymentVerifiedByAuthorityWithResult(authority, { ok, refId, rawVerify }) {
-  return markPaymentVerifiedByAuthorityInRepository(pool, authority, { ok, refId, rawVerify });
-}
-
-export async function markPaymentVerifiedByAuthority(authority, { ok, refId, rawVerify }) {
-  const result = await markPaymentVerifiedByAuthorityWithResult(authority, { ok, refId, rawVerify });
-  return result.payment || null;
-}
-
-export async function listSignupRequests({ status } = {}) {
-  const values = [];
-  const where = status ? "WHERE sr.status = $1" : "";
-  if (status) values.push(status);
-  const result = await pool.query(
-    `SELECT sr.*, sp.name AS plan_name, bp.status AS payment_status, bp.amount_irr AS payment_amount_irr,
-            o.status AS organization_status,
-            u.status AS user_status,
-            os.status AS subscription_status,
-            EXISTS (
-              SELECT 1
-              FROM billing_payments paid
-              WHERE (paid.signup_request_id = sr.id OR paid.organization_id = sr.organization_id)
-                AND paid.status = 'paid'
-            ) AS has_paid_payment,
-            EXISTS (
-              SELECT 1
-              FROM billing_receipts receipt
-              LEFT JOIN billing_payments receipt_payment ON receipt_payment.id = receipt.payment_id
-              LEFT JOIN billing_invoices receipt_invoice ON receipt_invoice.id = receipt.invoice_id
-              WHERE receipt.organization_id = sr.organization_id
-                 OR receipt_payment.signup_request_id = sr.id
-                 OR receipt_invoice.signup_request_id = sr.id
-            ) AS has_receipt
-     FROM signup_requests sr
-     LEFT JOIN subscription_plans sp ON sp.id = sr.plan_id
-     LEFT JOIN billing_payments bp ON bp.id = sr.payment_id
-     LEFT JOIN organizations o ON o.id = sr.organization_id
-     LEFT JOIN app_users u ON u.id = sr.owner_user_id
-     LEFT JOIN organization_subscriptions os ON os.organization_id = sr.organization_id
-     ${where}
-     ORDER BY sr.created_at DESC`,
-    values
-  );
-  return result.rows.map(toUiSignupRequest);
-}
-
-async function getSignupRequestLifecycle(client, requestId, { forUpdate = false } = {}) {
-  const result = await client.query(
-    `SELECT sr.*, sp.name AS plan_name, bp.status AS payment_status, bp.amount_irr AS payment_amount_irr,
-            o.status AS organization_status,
-            u.status AS user_status,
-            os.id AS subscription_id,
-            os.status AS subscription_status,
-            EXISTS (
-              SELECT 1
-              FROM billing_payments paid
-              WHERE (paid.signup_request_id = sr.id OR paid.organization_id = sr.organization_id)
-                AND paid.status = 'paid'
-            ) AS has_paid_payment,
-            EXISTS (
-              SELECT 1
-              FROM billing_receipts receipt
-              LEFT JOIN billing_payments receipt_payment ON receipt_payment.id = receipt.payment_id
-              LEFT JOIN billing_invoices receipt_invoice ON receipt_invoice.id = receipt.invoice_id
-              WHERE receipt.organization_id = sr.organization_id
-                 OR receipt_payment.signup_request_id = sr.id
-                 OR receipt_invoice.signup_request_id = sr.id
-            ) AS has_receipt
-     FROM signup_requests sr
-     LEFT JOIN subscription_plans sp ON sp.id = sr.plan_id
-     LEFT JOIN billing_payments bp ON bp.id = sr.payment_id
-     LEFT JOIN organizations o ON o.id = sr.organization_id
-     LEFT JOIN app_users u ON u.id = sr.owner_user_id
-     LEFT JOIN organization_subscriptions os ON os.organization_id = sr.organization_id
-     WHERE sr.id = $1
-     ${forUpdate ? "FOR UPDATE OF sr" : ""}`,
-    [requestId]
-  );
-  return result.rows[0] || null;
-}
-
-async function getAbandonedSignupDeleteBlockers(client, row) {
-  const blockers = [];
-  if (!row.organization_id || !row.owner_user_id) blockers.push("SIGNUP_GRAPH_INCOMPLETE");
-  if (row.has_paid_payment) blockers.push("PAID_PAYMENT_EXISTS");
-  if (row.has_receipt) blockers.push("RECEIPT_EXISTS");
-  if (row.status === "approved") blockers.push("SIGNUP_APPROVED");
-  if (row.organization_status === "active") blockers.push("ORGANIZATION_ACTIVE");
-  if (row.subscription_status === "active") blockers.push("SUBSCRIPTION_ACTIVE");
-  if (row.user_status === "active") blockers.push("OWNER_USER_ACTIVE");
-  if (!row.organization_id) return blockers;
-
-  const counts = await client.query(
-    `SELECT
-       (SELECT COUNT(*)::int FROM app_users WHERE organization_id = $1 AND id <> $2) AS other_users,
-       (SELECT COUNT(*)::int FROM customers WHERE organization_id = $1) AS customers,
-       (SELECT COUNT(*)::int FROM shipments WHERE organization_id = $1) AS shipments,
-       (SELECT COUNT(*)::int FROM tasks WHERE organization_id = $1) AS tasks,
-       (SELECT COUNT(*)::int FROM documents WHERE organization_id = $1) AS documents,
-       (SELECT COUNT(*)::int FROM cheques WHERE organization_id = $1) AS cheques,
-       (SELECT COUNT(*)::int FROM compliance_meetings WHERE organization_id = $1) AS compliance_meetings,
-       (SELECT COUNT(*)::int FROM quotations WHERE organization_id = $1) AS quotations,
-       (SELECT COUNT(*)::int FROM archive_records WHERE organization_id = $1) AS archive_records,
-       (SELECT COUNT(*)::int FROM chat_threads WHERE organization_id = $1) AS chat_threads`,
-    [row.organization_id, row.owner_user_id]
-  );
-  const recordCounts = counts.rows[0] || {};
-  if (Number(recordCounts.other_users || 0) > 0) blockers.push("ORGANIZATION_HAS_OTHER_USERS");
-  for (const [key, value] of Object.entries(recordCounts)) {
-    if (key !== "other_users" && Number(value || 0) > 0) blockers.push(`HAS_${key.toUpperCase()}`);
-  }
-  return blockers;
-}
-
-export async function deleteAbandonedSignupRequest(requestId, { actorUserId } = {}) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const row = await getSignupRequestLifecycle(client, requestId, { forUpdate: true });
-    if (!row) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-
-    const blockers = await getAbandonedSignupDeleteBlockers(client, row);
-    if (blockers.length || !isAbandonedSignupRow(row, { allowSuspendedUser: true })) {
-      const error = new Error("This signup is not an abandoned unpaid signup.");
-      error.statusCode = 409;
-      error.code = "ABANDONED_SIGNUP_DELETE_BLOCKED";
-      error.blockers = blockers.length ? blockers : ["NOT_ABANDONED_SIGNUP"];
-      throw error;
-    }
-
-    const organizationId = row.organization_id;
-    const ownerUserId = row.owner_user_id;
-    const releasedEmail = row.contact_email;
-
-    await client.query("DELETE FROM app_sessions WHERE user_id = $1", [ownerUserId]);
-    await client.query("DELETE FROM login_sms_challenges WHERE user_id = $1", [ownerUserId]);
-    await client.query(
-      `DELETE FROM billing_invoice_items
-       WHERE invoice_id IN (
-         SELECT id
-         FROM billing_invoices
-         WHERE signup_request_id = $1 OR organization_id = $2 OR payment_id IN (
-           SELECT id FROM billing_payments WHERE signup_request_id = $1 OR organization_id = $2
-         )
-       )`,
-      [requestId, organizationId]
-    );
-    await client.query(
-      "DELETE FROM billing_invoices WHERE signup_request_id = $1 OR organization_id = $2",
-      [requestId, organizationId]
-    );
-    await client.query(
-      "DELETE FROM billing_payments WHERE signup_request_id = $1 OR organization_id = $2",
-      [requestId, organizationId]
-    );
-    await client.query("DELETE FROM subscription_events WHERE organization_id = $1", [organizationId]);
-    await client.query("DELETE FROM user_records WHERE organization_id = $1 OR owner_user_id = $2", [organizationId, ownerUserId]);
-    await client.query("DELETE FROM notifications WHERE organization_id = $1 OR user_id = $2", [organizationId, ownerUserId]);
-    await client.query("DELETE FROM organization_members WHERE organization_id = $1 OR user_id = $2", [organizationId, ownerUserId]);
-    await client.query("DELETE FROM signup_requests WHERE id = $1", [requestId]);
-    await client.query("DELETE FROM organization_subscriptions WHERE organization_id = $1", [organizationId]);
-    await client.query("DELETE FROM app_users WHERE id = $1 AND organization_id = $2", [ownerUserId, organizationId]);
-    await client.query("DELETE FROM organizations WHERE id = $1", [organizationId]);
-    await client.query("COMMIT");
-    return { id: requestId, deleted: true, releasedEmail, organizationId, ownerUserId, actorUserId: actorUserId || null };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-export async function createContactRequest(request = {}, requestContext = {}) {
-  const preferred = ["phone", "email", "either"].includes(request.preferredContactMethod)
-    ? request.preferredContactMethod
-    : "phone";
-  const result = await pool.query(
-    `INSERT INTO contact_requests (
-       id, company_name, contact_name, contact_email, contact_phone,
-       preferred_contact_method, message, status, ip_address, user_agent
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'new', $8, $9)
-     RETURNING *`,
-    [
-      crypto.randomUUID(),
-      String(request.companyName || "").trim().slice(0, 200),
-      String(request.contactName || "").trim().slice(0, 200),
-      request.contactEmail ? String(request.contactEmail).trim().slice(0, 240) : null,
-      request.contactPhone ? String(request.contactPhone).trim().slice(0, 80) : null,
-      preferred,
-      request.message ? String(request.message).trim().slice(0, 2000) : null,
-      requestContext.ip || null,
-      requestContext.userAgent || null,
-    ]
-  );
-  return toUiContactRequest(result.rows[0]);
-}
-
-export async function listContactRequests({ status, limit = 100 } = {}) {
-  const values = [];
-  const conditions = [];
-  if (status && ["new", "resolved"].includes(status)) {
-    values.push(status);
-    conditions.push(`cr.status = $${values.length}`);
-  }
-  values.push(Math.min(Math.max(Number(limit) || 100, 1), 250));
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  const result = await pool.query(
-    `SELECT cr.*, u.name AS resolved_by_name
-     FROM contact_requests cr
-     LEFT JOIN app_users u ON u.id = cr.resolved_by_id
-     ${where}
-     ORDER BY cr.created_at DESC
-     LIMIT $${values.length}`,
-    values
-  );
-  return result.rows.map(toUiContactRequest);
-}
-
-export async function resolveContactRequest(requestId, resolverUserId) {
-  const result = await pool.query(
-    `UPDATE contact_requests
-     SET status = 'resolved',
-         resolved_by_id = $2,
-         resolved_at = NOW(),
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [requestId, resolverUserId || null]
-  );
-  return toUiContactRequest(result.rows[0]);
-}
-
-export async function reviewSignupRequest(requestId, { approved, reviewerId }) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const request = await client.query("SELECT * FROM signup_requests WHERE id = $1 FOR UPDATE", [requestId]);
-    const row = request.rows[0];
-    if (!row) return null;
-    if (approved) {
-      const payment = await client.query("SELECT status FROM billing_payments WHERE id = $1", [row.payment_id]);
-      if (payment.rows[0]?.status !== "paid") {
-        const error = new Error("Payment must be verified before approval.");
-        error.statusCode = 409;
-        error.code = "PAYMENT_REQUIRED";
-        throw error;
-      }
-    }
-    const nextStatus = approved ? "approved" : "rejected";
-    const organizationStatus = approved ? "active" : "rejected";
-    const userStatus = approved ? "active" : "suspended";
-    const subscriptionStatus = approved ? "active" : "rejected";
-    await client.query(
-      `UPDATE signup_requests
-       SET status = $2, reviewed_by_id = $3, reviewed_at = NOW(), updated_at = NOW()
-       WHERE id = $1`,
-      [requestId, nextStatus, reviewerId]
-    );
-    await client.query(
-      `UPDATE organizations
-       SET status = $2,
-           approved_at = CASE WHEN $2 = 'active' THEN NOW() ELSE approved_at END,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [row.organization_id, organizationStatus]
-    );
-    await client.query("UPDATE app_users SET status = $2, updated_at = NOW() WHERE id = $1", [row.owner_user_id, userStatus]);
-    await client.query(
-      "UPDATE organization_members SET status = $2 WHERE organization_id = $1 AND user_id = $3",
-      [row.organization_id, approved ? "active" : "suspended", row.owner_user_id]
-    );
-    await client.query(
-      `UPDATE organization_subscriptions
-       SET status = $2,
-           current_period_start = CASE WHEN $2 = 'active' THEN NOW() ELSE current_period_start END,
-           current_period_end = CASE WHEN $2 = 'active' THEN NOW() + CASE WHEN billing_cycle = 'annual' THEN INTERVAL '1 year' ELSE INTERVAL '1 month' END ELSE current_period_end END,
-           activated_at = CASE WHEN $2 = 'active' THEN NOW() ELSE activated_at END,
-           updated_at = NOW()
-       WHERE organization_id = $1`,
-      [row.organization_id, subscriptionStatus]
-    );
-    await insertSubscriptionEvent(client, {
-      organizationId: row.organization_id,
-      subscriptionId: null,
-      actorUserId: reviewerId,
-      eventType: approved ? "signup.approved" : "signup.rejected",
-      summary: approved ? "Signup was approved and subscription activated." : "Signup was rejected.",
-      after: { signupRequestId: requestId, subscriptionStatus, organizationStatus },
-    });
-    await client.query("COMMIT");
-    return (await listSignupRequests()).find((item) => item.id === requestId) || null;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -7536,7 +6659,7 @@ export async function convertQuotationToShipment(id, actorUserId, { organization
          id, organization_id, owner_user_id, shipment_code, customer_id, customer_name, status,
          origin, destination, estimated_delivery_at, legacy_data, created_by_id, updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, $8, $9, $10::jsonb, $11, NOW())
+       VALUES ($1, $2, $3, $4, $5, $6, 'LOADING', $7, $8, $9, $10::jsonb, $11, NOW())
        RETURNING *`,
       [
         shipmentId,
@@ -9745,7 +8868,7 @@ function bridgeShipmentSnapshot(rowOrShipment = {}) {
     customerName: rowOrShipment.customer_name || legacy.customerName || "",
     origin: rowOrShipment.origin || legacy.origin || "",
     destination: rowOrShipment.destination || legacy.destination || "",
-    status: rowOrShipment.status || legacy.status || "PENDING",
+    status: normalizeShipmentStatus(rowOrShipment.status || legacy.status),
     estimatedDelivery: rowOrShipment.estimated_delivery_at || legacy.estimatedDelivery || "",
     freeTimeDays: legacy.freeTimeDays || "",
     isArchived: Boolean(rowOrShipment.archived_at || legacy.isArchived),
@@ -9844,7 +8967,7 @@ async function syncCanonicalCollection(client, ownerUserId, ownerOrganizationId,
           shipment.trackingNumber || shipment.id,
           shipment.customerId || null,
           shipment.customerName || null,
-          shipment.status || "PENDING",
+          normalizeShipmentStatus(shipment.status),
           shipment.origin || null,
           shipment.destination || null,
           shipment.estimatedDelivery || null,

@@ -49,12 +49,13 @@ test.describe.serial("Parsrah showcase company", () => {
 
     const customers = await readOk<any[]>(await manager.get("/api/customers"));
     expect(customers).toHaveLength(5);
-    expect(customers.map((customer) => customer.company)).toContain("شرکت تجهیزات پزشکی نیکان‌طب");
+    expect(customers.map((customer) => customer.customerCode)).toContain("prs-customer-nikan");
+    expect(customers.map((customer) => customer.company)).toContain("prs-customer-nikan");
 
     const shipments = await readOk<any[]>(await manager.get("/api/shipments"));
     expect(shipments).toHaveLength(10);
-    expect(shipments.filter((shipment) => ["DELIVERED", "CLOSED"].includes(shipment.status))).toHaveLength(2);
-    expect(shipments.filter((shipment) => ["ARRIVED", "CUSTOMS"].includes(shipment.status)).length).toBeGreaterThanOrEqual(4);
+    expect(shipments.filter((shipment) => shipment.status === "EXITED")).toHaveLength(2);
+    expect(shipments.filter((shipment) => ["ARRIVED", "KOOTAJ_DONE"].includes(shipment.status)).length).toBeGreaterThanOrEqual(4);
 
     const documents = await readOk<any[]>(await manager.get("/api/documents"));
     expect(documents).toHaveLength(8);

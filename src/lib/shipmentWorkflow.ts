@@ -1,4 +1,5 @@
 import type { Shipment, ShipmentStep } from "@/src/types";
+import { shipmentStatusProgressFloor } from "@/src/shared/shipment-statuses.js";
 
 export type DefaultShipmentStep = {
   id?: string;
@@ -85,9 +86,8 @@ export function getShipmentProgress(
   const completedSteps = shipmentSteps.filter((step) => step.status === "COMPLETED").length;
   let value = totalSteps > 0 ? (completedSteps / totalSteps) * 100 : 0;
 
-  if (shipment?.status === "DELIVERED" || shipment?.status === "CLOSED") value = 100;
-  else if (shipment?.status === "CLEARED" && value < 80) value = 85;
-  else if (shipment?.status === "ARRIVED" && value < 50) value = 60;
+  const statusFloor = shipmentStatusProgressFloor(shipment?.status);
+  if (statusFloor > value) value = statusFloor;
 
   const percent = Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : 0;
   return {
