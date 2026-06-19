@@ -179,13 +179,14 @@ Editable Phase 2 requests must include an expected version for the row or the sp
 Minimum rule:
 
 1. Client reads a board row with version metadata.
-2. Client sends the patch with `expectedVersion`.
-3. Server locks the shipment/profile row inside the transaction.
-4. Server compares the expected version with the current version.
-5. If changed, return `409 Conflict` with the current safe row projection.
-6. If unchanged, apply the allowlisted patch, increment/update version metadata, and audit the change.
+2. For Kootaj-owned operation fields, the current version token is `kootajUpdatedAt`, sourced from `shipment_kootaj_details.updated_at`.
+3. Client sends the patch with `expectedKootajUpdatedAt`.
+4. Server locks the shipment/Kootaj row inside the transaction.
+5. Server compares `expectedKootajUpdatedAt` with the current `shipment_kootaj_details.updated_at`.
+6. If changed, return `409 Conflict` with `KOOTAJ_VERSION_CONFLICT` and the current safe version marker.
+7. If unchanged, apply the allowlisted patch, update version metadata, and audit the change.
 
-Do not allow blind last-write-wins updates for staff-facing operational board fields.
+Do not allow blind last-write-wins updates for staff-facing operational board fields from inline editing. The backend can temporarily accept omitted `expectedKootajUpdatedAt` for compatibility with existing non-inline clients, but the Phase 2 Kootaj Board UI must send it on every save and must refresh/retry after a `409`.
 
 ## E2E test requirements for Phase 2
 

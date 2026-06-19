@@ -90,7 +90,9 @@ export function registerDailyStatusRoutes(
     }
   }
 
-  function createPatchHandler(auditSource, summary, bodySchema = dailyStatusPatchBodySchema) {
+  function createPatchHandler(auditSource, summary, bodySchema = dailyStatusPatchBodySchema, {
+    useKootajVersionGuard = false,
+  } = {}) {
     return async function handlePatch(req, res) {
       try {
         const tenantRequest = await requireAuthenticatedTenantUser(req, res, "daily status update API");
@@ -101,12 +103,14 @@ export function registerDailyStatusRoutes(
         if (!params) return;
         const body = parseRequestValue(res, bodySchema, req.body || {});
         if (!body) return;
+        const { expectedKootajUpdatedAt, ...updates } = body;
 
         const result = await updateDailyStatusRow(pool, {
           organizationId,
           shipmentId: params.shipmentId,
           actorUserId: user.id,
-          updates: body,
+          updates,
+          expectedKootajUpdatedAt: useKootajVersionGuard ? expectedKootajUpdatedAt : undefined,
           includeCustomerPrivateDetails: user.role === "CEO",
         });
         if (!result) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
@@ -132,6 +136,17 @@ export function registerDailyStatusRoutes(
       } catch (error) {
         if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
         if (error.statusCode === 404) return createApiError(res, 404, error.code || "NOT_FOUND", error.message);
+        if (error.statusCode === 409 && error.code === "KOOTAJ_VERSION_CONFLICT") {
+          return res.status(409).json({
+            ok: false,
+            error: {
+              code: "KOOTAJ_VERSION_CONFLICT",
+              message: error.message,
+              currentKootajUpdatedAt: error.currentKootajUpdatedAt || null,
+            },
+          });
+        }
+        if (error.statusCode === 409) return createApiError(res, 409, error.code || "CONFLICT", error.message);
         if (error.statusCode === 400) return createApiError(res, 400, error.code || "VALIDATION_ERROR", error.message);
         if (isDailyStatusSchemaMissing(error)) {
           return createApiError(
@@ -158,7 +173,8 @@ export function registerDailyStatusRoutes(
   const handleKootajBoardPatch = createPatchHandler(
     "kootaj-board",
     "Kootaj board operation fields were updated.",
-    kootajBoardPatchBodySchema
+    kootajBoardPatchBodySchema,
+    { useKootajVersionGuard: true }
   );
 
   app.get("/api/daily-status", handleList);

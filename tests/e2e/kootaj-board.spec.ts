@@ -185,9 +185,12 @@ test.describe.serial("read-only kootaj board", () => {
       expect(updated.kootaj.customsRoute).toBe("yellow");
       expect(updated.kootaj.customsStatus).toBe("inspection");
       expect(updated.kootaj.releaseStatus).toBe("ready");
+      expect(updated.kootajUpdatedAt).toBeTruthy();
+      expect(updated.kootaj.updatedAt).toBe(updated.kootajUpdatedAt);
 
       const kootajRows = await readOk<any[]>(await owner.get(`/api/kootaj-board?shipmentId=${encodeURIComponent(shipmentId)}`));
       expect(kootajRows).toHaveLength(1);
+      expect(kootajRows[0].kootajUpdatedAt).toBe(updated.kootajUpdatedAt);
       expect(kootajRows[0].kootaj).toMatchObject({
         cotageNumber,
         customsRoute: "yellow",
@@ -229,14 +232,60 @@ test.describe.serial("read-only kootaj board", () => {
         releaseStatus: "ready",
       }));
 
+      const matchingVersion = kootajRows[0].kootajUpdatedAt;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const versionedCotageNumber = `KB-COTAGE-VERSIONED-${suffix}`;
+      const versionedUpdate = await readOk<any>(
+        await owner.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
+          data: {
+            cotageNumber: versionedCotageNumber,
+            releaseStatus: "released",
+            expectedKootajUpdatedAt: matchingVersion,
+          },
+        })
+      );
+      expect(versionedUpdate.kootaj.cotageNumber).toBe(versionedCotageNumber);
+      expect(versionedUpdate.kootaj.releaseStatus).toBe("released");
+      expect(versionedUpdate.kootajUpdatedAt).toBeTruthy();
+      expect(versionedUpdate.kootajUpdatedAt).not.toBe(matchingVersion);
+
+      const staleConflict = await owner.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
+        data: {
+          releaseStatus: "blocked",
+          expectedKootajUpdatedAt: matchingVersion,
+        },
+      });
+      expect(staleConflict.status(), await staleConflict.text()).toBe(409);
+      const staleConflictPayload = await staleConflict.json();
+      expect(staleConflictPayload).toMatchObject({
+        ok: false,
+        error: {
+          code: "KOOTAJ_VERSION_CONFLICT",
+          currentKootajUpdatedAt: versionedUpdate.kootajUpdatedAt,
+        },
+      });
+      expect(JSON.stringify(staleConflictPayload).toLowerCase()).not.toMatch(/phone|email|address|private/);
+
+      const afterConflictRows = await readOk<any[]>(
+        await owner.get(`/api/kootaj-board?shipmentId=${encodeURIComponent(shipmentId)}`)
+      );
+      expect(afterConflictRows[0].kootaj.cotageNumber).toBe(versionedCotageNumber);
+      expect(afterConflictRows[0].kootaj.releaseStatus).toBe("released");
+
       const tenantInfo = await createTenantOwner(owner);
       const tenant = await loginApi(tenantInfo.tenantEmail, USER_PASSWORD);
       contexts.push(tenant);
-      await expectUnavailable(
-        await tenant.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
-          data: { cotageNumber: `CROSS-${suffix}` },
-        })
-      );
+      const tenantConflictProbe = await tenant.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
+        data: {
+          cotageNumber: `CROSS-${suffix}`,
+          expectedKootajUpdatedAt: matchingVersion,
+        },
+      });
+      await expectUnavailable(tenantConflictProbe);
+      const tenantConflictText = await tenantConflictProbe.text();
+      expect(tenantConflictText).not.toContain("KOOTAJ_VERSION_CONFLICT");
+      expect(tenantConflictText).not.toContain(versionedCotageNumber);
+      expect(tenantConflictText).not.toContain(String(versionedUpdate.kootajUpdatedAt));
 
       const detailCotageNumber = `DETAIL-COTAGE-${suffix}`;
       const detailUpdated = await readOk<any>(
@@ -261,7 +310,7 @@ test.describe.serial("read-only kootaj board", () => {
       expect(afterDetailRows[0].kootaj.cotageNumber).toBe(detailCotageNumber);
       expect(afterDetailRows[0].kootaj.customsRoute).toBe("red");
       expect(afterDetailRows[0].kootaj.customsStatus).toBe("inspection");
-      expect(afterDetailRows[0].kootaj.releaseStatus).toBe("ready");
+      expect(afterDetailRows[0].kootaj.releaseStatus).toBe("released");
     } finally {
       await disposeContexts(...contexts);
     }
