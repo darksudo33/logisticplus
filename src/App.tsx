@@ -4,7 +4,7 @@
  */
 
 import React, { Suspense, lazy, useEffect } from "react";
-import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useParams } from "react-router-dom";
 import { ClientErrorBoundary } from "./components/ClientErrorBoundary";
 import { ProtectedShellSkeleton, PublicRouteSkeleton } from "./components/SkeletonStates";
 import { QUOTATIONS_UI_ENABLED, SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED } from "./config/features";
@@ -36,7 +36,6 @@ const ShipmentWorkflowTemplatesAdmin = SHIPMENT_TEMPLATE_ADMIN_UI_ENABLED ? lazy
 const AdminConsoleRoute = lazy(() => import("./app/AdminConsoleRoute"));
 const ShipmentDetail = lazy(() => import("./app/ShipmentDetail"));
 const ShipmentCreateV2 = lazy(() => import("./app/ShipmentCreateV2"));
-const ShipmentDetailV2 = lazy(() => import("./app/ShipmentDetailV2"));
 const Documents = lazy(() => import("./app/Documents"));
 const DocumentManagementCenter = lazy(() => import("./app/DocumentManagementCenter"));
 const ShipmentEdit = lazy(() => import("./app/ShipmentEdit").then((module) => ({ default: module.ShipmentEdit })));
@@ -85,6 +84,11 @@ function PublicLoginEntry() {
   return currentUser ? <Navigate to="/dashboard" replace /> : <LoginPage />;
 }
 
+function ShipmentDetailAliasRedirect() {
+  const { id } = useParams();
+  return <Navigate to={`/shipments/${encodeURIComponent(id || "")}`} replace />;
+}
+
 function AppRoutes() {
   const location = useLocation();
   const routeFallback = isProtectedPath(location.pathname) ? <ProtectedShellSkeleton /> : <PublicRouteSkeleton />;
@@ -106,9 +110,9 @@ function AppRoutes() {
         <Route path="/shipments" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><Shipments /></ProtectedAppLayout>} />
         <Route path="/shipments/new-v2" element={<ProtectedAppLayout anyOf={["shipments.create"]}><ShipmentCreateV2 /></ProtectedAppLayout>} />
         <Route path="/shipments/exited" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ExitedShipments /></ProtectedAppLayout>} />
-        <Route path="/shipments/:id/legacy" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentDetail /></ProtectedAppLayout>} />
-        <Route path="/shipments/:id/v2" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentDetailV2 /></ProtectedAppLayout>} />
-        <Route path="/shipments/:id" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentDetailV2 /></ProtectedAppLayout>} />
+        <Route path="/shipments/:id/legacy" element={<ShipmentDetailAliasRedirect />} />
+        <Route path="/shipments/:id/v2" element={<ShipmentDetailAliasRedirect />} />
+        <Route path="/shipments/:id" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentDetail /></ProtectedAppLayout>} />
         <Route path="/shipments/:id/edit" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentEdit /></ProtectedAppLayout>} />
         <Route path="/changelog" element={<ProtectedAppLayout anyOf={["changes.view"]}><ChangeLog /></ProtectedAppLayout>} />
         <Route path="/customers" element={<ProtectedAppLayout anyOf={["customers.view"]} roles={["CEO"]}><Customers /></ProtectedAppLayout>} />

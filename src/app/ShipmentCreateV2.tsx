@@ -290,7 +290,7 @@ export default function ShipmentCreateV2() {
       });
       await refreshShipments?.();
       toast.success("پرونده محموله V2 ایجاد شد.");
-      navigate(`/shipments/${response.shipment.id}/v2`);
+      navigate(`/shipments/${response.shipment.id}`);
     } catch (error) {
       console.error("Create Shipment V2 failed", error);
       const message = error instanceof Error ? error.message : "ایجاد پرونده V2 ناموفق بود.";

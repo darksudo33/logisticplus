@@ -1,2207 +1,2501 @@
-import React, { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import QRCode from "qrcode";
-import { useAppDataStore, useMockStore } from "@/src/store/useMockStore";
-import { 
-  ArrowRight, 
-  Ship, 
-  MapPin, 
-  Calendar, 
-  UserPlus, 
-  Users,
-  CheckCircle2, 
-  Clock, 
-  AlertCircle,
-  MoreVertical,
-  ChevronRight,
-  Info,
-  Package,
+import React from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import {
   Anchor,
-  FileText,
-  Download,
-  Trash2,
-  Archive,
-  ArchiveRestore,
-  FileIcon,
-  Plus,
-  Search,
-  FilePlus,
-  FileCheck,
+  ArrowRight,
+  CreditCard,
   ExternalLink,
-  ChevronLeft,
-  Edit,
-  Settings,
-  X,
-  Check,
-  Copy,
-  Link2,
-  RefreshCw,
-  Save,
-  ShieldCheck,
-  EyeOff,
+  FileCheck2,
+  FileText,
+  Landmark,
   Loader2,
-  MessageSquare,
-  Send
+  NotebookText,
+  Package,
+  RotateCw,
+  Save,
+  Ship,
+  ShieldCheck,
+  TimerReset,
+  X,
 } from "lucide-react";
-import { format, addDays } from "date-fns-jalali";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { ActionSkeleton } from "@/components/ui/skeleton";
-import { Progress } from "@/components/ui/progress";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { toast } from "sonner";
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogHeader, 
-  DialogTitle, 
-  DialogFooter,
-  DialogDescription,
-  DialogTrigger,
-  DialogClose
-} from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
-import { downloadBinaryFile } from "@/src/lib/downloads";
-import { shipmentApi, type PostExitStatus } from "@/src/lib/shipmentApi";
-import { isShipmentTerminalStatus, shipmentStatusLabel } from "@/src/shared/shipment-statuses.js";
 import {
-  DocumentType,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { ApiError, apiGet } from "@/src/lib/api";
+import { businessEntitiesApi } from "@/src/lib/businessEntitiesApi";
+import { getShamsiDatePart, parseShamsiDateTimeValue, ShamsiDateTimeField, toEnglishDigits, toPersianDigits } from "@/src/components/ShamsiDateTimeField";
+import { ShipmentChatPanel } from "@/src/components/shipments/ShipmentChatPanel";
+import { ShipmentDocumentsPanel } from "@/src/components/shipments/ShipmentDocumentsPanel";
+import { shipmentApi } from "@/src/lib/shipmentApi";
+import { shipmentV2Api } from "@/src/lib/shipmentV2Api";
+import {
+  isShipmentTerminalStatus,
+  SHIPMENT_STATUS_OPTIONS,
+  shipmentStatusLabel,
+} from "@/src/shared/shipment-statuses.js";
+import { useAppDataStore } from "@/src/store/useMockStore";
+import type {
+  CommercialCard,
+  BusinessEntityContact,
+  Customer,
+  MalvaniProfile,
   Shipment,
-  ShipmentStatus,
-  ShipmentWorkflowBlocker,
-  ShipmentWorkflowRoute,
-  ShipmentWorkflowStep,
-  StepStatus,
-  Task,
-  TaskStatus,
-} from "../types";
-import { ShamsiDateTimeField } from "@/src/components/ShamsiDateTimeField";
-import { getShipmentProgress } from "@/src/lib/shipmentWorkflow";
-import { DeleteConfirmDialog } from "@/src/components/DeleteConfirmDialog";
-import { ShipmentWorkflowTimeline } from "@/src/components/shipments/ShipmentWorkflowTimeline";
-import { RelatedShipmentTasksPanel } from "@/src/components/shipments/RelatedShipmentTasksPanel";
-import { ShipmentDailyStatusPanel } from "@/src/components/shipments/ShipmentDailyStatusPanel";
-import { ShipmentProgressBlockerDialog } from "@/src/components/shipments/ShipmentProgressBlockerDialog";
-import { ShipmentProgressUpdateDialog } from "@/src/components/shipments/ShipmentProgressUpdateDialog";
-import { TaskAssignDialog } from "@/src/components/tasks/TaskAssignDialog";
+  ShipmentV2BankingSection,
+  ShipmentDocument,
+  ShipmentV2BaseSection,
+  ShipmentV2CurrencyCode,
+  ShipmentV2CustomsRoute,
+  ShipmentV2DeclarationKootajSection,
+  ShipmentV2FlowCode,
+  ShipmentV2GoodsRow,
+  ShipmentV2GoodsSection,
+  ShipmentV2NotesSection,
+  ShipmentV2PermitRow,
+  ShipmentV2PermitsSection,
+  ShipmentV2CustomsTaxStatus,
+  ShipmentV2PaymentsSection,
+  ShipmentV2ProfileResponse,
+  ShipmentV2SectionKey,
+  ShipmentV2SectionPayload,
+  ShipmentV2ShipmentSummary,
+  User,
+} from "@/src/types";
 
-const POST_EXIT_STATUS_LABELS: Record<PostExitStatus, string> = {
-  needs_follow_up: "نیاز به پیگیری",
-  in_progress: "در حال پیگیری",
-  settled: "تسویه شده",
-  closed: "بسته شده",
+type EditableSectionProps = {
+  canUpdate: boolean;
+  isSaving: boolean;
+  onCancel: () => void;
+  onEdit: () => void;
+  onSave: () => void;
+  isEditing: boolean;
+  testIdPrefix: string;
 };
 
-function displayDate(value?: string | null) {
-  if (!value) return "";
-  return String(value).slice(0, 10);
+const sectionDefinitions: Array<{
+  key: ShipmentV2SectionKey;
+  title: string;
+  icon: typeof Package;
+}> = [
+  { key: "base", title: "اطلاعات پایه", icon: Package },
+  { key: "goods", title: "مشخصات کالا", icon: Ship },
+  { key: "declarationKootaj", title: "اظهار و کوتاژ", icon: FileText },
+  { key: "permits", title: "مجوز ها", icon: ShieldCheck },
+  { key: "payments", title: "پرداخت ها", icon: CreditCard },
+  { key: "banking", title: "اطلاعات بانکی", icon: Landmark },
+  { key: "notes", title: "یادداشت ها", icon: NotebookText },
+];
+
+const flowLabels: Record<ShipmentV2FlowCode, string> = {
+  IMPORT_LANJ: "واردات → لنج",
+  IMPORT_SHIP: "واردات → کشتی",
+};
+
+const customsRouteLabels: Record<ShipmentV2CustomsRoute, string> = {
+  GREEN: "سبز",
+  YELLOW: "زرد",
+  RED: "قرمز",
+  DIRECT_CARRIAGE: "حمل یکسره",
+};
+
+const currencyLabels: Record<ShipmentV2CurrencyCode, string> = {
+  EUR: "یورو",
+  CNY: "یوان",
+  USD: "دلار",
+  AED: "درهم",
+  IRR: "ریال",
+};
+
+const customsTaxStatusLabels: Record<ShipmentV2CustomsTaxStatus, string> = {
+  PAYABLE: "نیاز به پرداخت",
+  GOOD_STANDING: "خوش حسابی",
+};
+
+const currencyOptions: ShipmentV2CurrencyCode[] = ["EUR", "CNY", "USD", "AED", "IRR"];
+const customsRouteOptions: ShipmentV2CustomsRoute[] = ["GREEN", "YELLOW", "RED", "DIRECT_CARRIAGE"];
+const customsTaxStatusOptions: ShipmentV2CustomsTaxStatus[] = ["PAYABLE", "GOOD_STANDING"];
+const compactSelectClassName =
+  "h-8 w-full rounded-lg border border-input bg-background px-2 text-[11px] font-bold outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 sm:h-9 sm:text-xs";
+const permitNameSuggestions = [
+  "استاندارد",
+  "بهداشت",
+  "قرنطینه دامی",
+  "دامپزشکی",
+  "جهاد کشاورزی",
+  "محیط زیست",
+  "قرنطینه نباتی",
+  "انرژی اتمی",
+  "کنوانسیون بازل - محیط زیست",
+  "مخرب اوزون",
+  "قابلیت انفجار - وزارت دفاع و پشتیبانی نیروهای مسلح",
+  "نفت",
+  "وزارت امور خارجه - سلاح‌های شیمیایی",
+  "تجهیزات پزشکی",
+  "ممنوع",
+  "ممنوعیت محصولات حیوانات حرام‌گوشت یا ذبح غیراسلامی",
+  "بانک مرکزی",
+  "فرهنگ و ارشاد اسلامی",
+  "کانون پرورش فکری کودکان و نوجوانان",
+  "نظارت بر دخانیات",
+  "ارتباطات و فناوری اطلاعات",
+  "میراث فرهنگی",
+  "امور اقتصادی و دارایی",
+  "وزارت صنعت، معدن و تجارت / صمت",
+  "ماهی غیرزینتی برای اصلاح نژاد، تکثیر و پرورش",
+  "بذر و نباتات دست‌ورزی‌شده / تغییر ژنتیکی",
+  "ممنوعیت محصولات غیرشرعی",
+  "ممنوعیت فرآورده‌های خون و حیوانات حرام‌گوشت",
+  "ممنوعیت پوست، چرم، پشم و مو از حیوانات حرام‌گوشت یا ذبح غیراسلامی",
+  "کاغذ دارای علامت رسمی دولتی / واترمارک",
+  "لباس و اشیاء مستعمل - گواهی بهداشت",
+  "کالاهای سرماساز و کمپرسورهای دارای CFC11 و CFC12",
+  "اقلام نظامی و انتظامی",
+  "پرنده‌های بدون سرنشین / پهپاد",
+  "سازمان هواپیمایی کشوری",
+  "فیلم‌های سینمایی",
+  "خودرو، کامیون، موتورسیکلت و ماشین‌آلات راهسازی مشمول قانون خودرو",
+];
+
+function displayValue(value?: string | number | null) {
+  if (value === undefined || value === null || value === "") return "ثبت نشده";
+  return String(value);
 }
 
-const DocumentView = ({ shipmentId }: { shipmentId: string }) => {
-  const documents = useMockStore(state => state.documents);
-  const refreshDocuments = useMockStore(state => state.refreshDocuments);
-  
-  const shipmentDocs = React.useMemo(() => 
-    documents.filter(d => d.shipmentId === shipmentId && !d.isArchived),
-    [documents, shipmentId]
+function optionalNumber(value: string) {
+  const trimmed = toEnglishDigits(value)
+    .replace(/[٬,]/g, "")
+    .replace(/٫/g, ".")
+    .trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function numberDraftValue(value?: number | null) {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+type GoodsDraftRow = Omit<ShipmentV2GoodsRow, "quantity" | "weight" | "cbm" | "pcs"> & {
+  id: string;
+  quantity: string;
+  weight: string;
+  cbm: string;
+  pcs: string;
+};
+
+type DeclarationDraft = Omit<ShipmentV2DeclarationKootajSection, "totalValueAmount" | "finalPaidAmount"> & {
+  totalValueAmount: string;
+  finalPaidAmount: string;
+};
+
+type PaymentsDraft = Omit<ShipmentV2PaymentsSection, "customsAmount" | "customsDifferenceAmount" | "customsTaxAmount"> & {
+  customsAmount: string;
+  customsDifferenceAmount: string;
+  customsTaxAmount: string;
+};
+
+function declarationDraftFromData(data: ShipmentV2DeclarationKootajSection = {}): DeclarationDraft {
+  return {
+    ...data,
+    totalValueAmount: numberDraftValue(data.totalValueAmount),
+    finalPaidAmount: numberDraftValue(data.finalPaidAmount),
+  };
+}
+
+function paymentsDraftFromData(data: ShipmentV2PaymentsSection = {}): PaymentsDraft {
+  return {
+    ...data,
+    customsAmount: numberDraftValue(data.customsAmount),
+    customsDifferenceAmount: numberDraftValue(data.customsDifferenceAmount),
+    customsTaxAmount: numberDraftValue(data.customsTaxAmount),
+  };
+}
+
+type GoodsMetricKey = "quantity" | "weight" | "cbm" | "pcs";
+
+function sumGoodsMetric(rows: Array<Partial<Record<GoodsMetricKey, string | number | null | undefined>>>, key: GoodsMetricKey) {
+  const values = rows
+    .map((row) => {
+      const value = row[key];
+      return typeof value === "string" ? optionalNumber(value) : value;
+    })
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (!values.length) return null;
+  return values.reduce((sum, value) => sum + value, 0);
+}
+
+function formatGoodsMetric(value: number | null) {
+  if (value === null) return "ثبت نشده";
+  return value.toLocaleString("fa-IR", { maximumFractionDigits: 6 });
+}
+
+function sumContainerCount(goods: ShipmentV2GoodsSection) {
+  const values = [goods.container20Count, goods.container40Count].filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value)
   );
-  const [isAddDocOpen, setIsAddDocOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [isDraggingFile, setIsDraggingFile] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [documentToArchive, setDocumentToArchive] = useState<{ id: string; name: string } | null>(null);
-  const [newDoc, setNewDoc] = useState({
-    name: "",
-    type: "OTHER" as DocumentType,
-    visibility: "internal" as "internal" | "customer_visible",
-  });
+  if (!values.length) return null;
+  return values.reduce((sum, value) => sum + value, 0);
+}
 
-  const filteredDocs = shipmentDocs.filter(doc => 
-    doc.name.toLowerCase().includes(searchTerm.toLowerCase())
+function GoodsTotalsRow({
+  rows,
+  testIdPrefix,
+}: {
+  rows: Array<Partial<Record<GoodsMetricKey, string | number | null | undefined>>>;
+  testIdPrefix: string;
+}) {
+  return (
+    <div className="rounded-lg border border-primary/20 bg-primary/5 p-2.5" data-testid={`${testIdPrefix}-total`}>
+      <p className="text-[10px] font-black text-primary">مجموع</p>
+      <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+        {[
+          ["تعداد", "quantity"],
+          ["وزن", "weight"],
+          ["CBM", "cbm"],
+          ["PCS", "pcs"],
+        ].map(([label, key]) => (
+          <div key={key} className="min-w-0 rounded-md bg-background/80 px-2 py-1" data-testid={`${testIdPrefix}-total-${key}`}>
+            <p className="truncate text-[9px] font-black text-muted-foreground">{label}</p>
+            <p className="mt-0.5 truncate text-[11px] font-black text-foreground">{formatGoodsMetric(sumGoodsMetric(rows, key as GoodsMetricKey))}</p>
+          </div>
+        ))}
+      </div>
+    </div>
   );
+}
 
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
+function formatShamsiDateTime(value?: string | null) {
+  if (!value) return "ثبت نشده";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "ثبت نشده";
+  return new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
 
-  const selectDocumentFile = (file: File) => {
-    setSelectedFile(file);
-    setNewDoc(prev => ({ ...prev, name: file.name }));
-    toast.info(`فایل "${file.name}" انتخاب شد.`);
-  };
+function resolveUserName(userId: string | null | undefined, users: User[], currentUser: User | null) {
+  if (!userId) return "نامشخص";
+  if (currentUser?.id === userId) return currentUser.name;
+  return users.find((user) => user.id === userId)?.name || "نامشخص";
+}
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) selectDocumentFile(file);
-  };
+function displayMoneyValue(amount?: number | null, currency?: ShipmentV2CurrencyCode) {
+  if (amount === undefined || amount === null) return "ثبت نشده";
+  return `${amount.toLocaleString("fa-IR")} ${currencyLabels[currency || "IRR"]}`;
+}
 
-  const handleFileDragOver = (event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setIsDraggingFile(true);
-  };
+function displayShamsiDate(value?: string | null) {
+  const datePart = getShamsiDatePart(value || undefined);
+  return datePart ? toPersianDigits(datePart) : "ثبت نشده";
+}
 
-  const handleFileDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const nextTarget = event.relatedTarget;
-    if (!nextTarget || !(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
-      setIsDraggingFile(false);
-    }
-  };
+function normalizePermitSearchTerm(value: string) {
+  return value
+    .trim()
+    .toLocaleLowerCase("fa-IR")
+    .replace(/ي/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/\s+/g, " ");
+}
 
-  const handleFileDrop = (event: React.DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setIsDraggingFile(false);
-    const file = event.dataTransfer.files?.[0];
-    if (file) selectDocumentFile(file);
-  };
+function getPermitSuggestions(value: string) {
+  const query = normalizePermitSearchTerm(value);
+  if (!query) return [];
+  return permitNameSuggestions
+    .filter((permitName) => normalizePermitSearchTerm(permitName).includes(query))
+    .slice(0, 5);
+}
 
-  const handleAddDoc = async () => {
-    if (!selectedFile || !newDoc.name) {
-      toast.error("لطفا فایل و عنوان سند را انتخاب کنید.");
+function normalizeCredentialSearchTerm(value: string) {
+  return normalizePermitSearchTerm(value);
+}
+
+function commercialCardDisplayName(card?: CommercialCard | null) {
+  if (!card) return "";
+  return card.holderName || card.cardNumber || "";
+}
+
+function commercialCardDescription(card: CommercialCard) {
+  return [card.cardNumber, card.responsibleName].filter(Boolean).join(" • ");
+}
+
+function malvaniDisplayName(profile?: MalvaniProfile | null) {
+  if (!profile) return "";
+  return profile.displayName || profile.captainName || profile.lenjName || "";
+}
+
+function malvaniDescription(profile: MalvaniProfile) {
+  return [profile.captainName, profile.lenjName, profile.lenjRegistrationNumber].filter(Boolean).join(" • ");
+}
+
+function activeBusinessContacts(contacts?: Array<{ archivedAt?: string | null }>) {
+  return (contacts || []).filter((contact) => !contact.archivedAt);
+}
+
+function isActiveCustomerShipment(shipment: Shipment) {
+  return !shipment.isArchived && !shipment.isExitedArchived && !isShipmentTerminalStatus(shipment.status);
+}
+
+const malvaniActiveStatusLabels: Record<MalvaniProfile["activeStatus"], string> = {
+  ACTIVE: "فعال",
+  INACTIVE: "غیرفعال",
+  NEEDS_REVIEW: "نیازمند بررسی",
+};
+
+function HeaderRouteProgress({
+  steps,
+}: {
+  steps: Array<{ key: string; label: string; value?: string | number | null }>;
+}) {
+  return (
+    <div data-testid="shipment-v2-route-progress" className="rounded-xl border border-border bg-muted/20 px-3 py-3">
+      <ol className="relative grid grid-cols-3 gap-1">
+        <span className="absolute right-[16.66%] left-[16.66%] top-3 h-0.5 rounded-full bg-primary/25" aria-hidden="true" />
+        {steps.map((step, index) => (
+          <li
+            key={step.key}
+            data-testid={`shipment-v2-route-step-${step.key}`}
+            className="relative z-10 flex min-w-0 flex-col items-center text-center"
+          >
+            <span className="flex h-6 w-6 items-center justify-center rounded-full border-2 border-primary bg-background text-[10px] font-black text-primary shadow-sm">
+              {(index + 1).toLocaleString("fa-IR")}
+            </span>
+            <span className="mt-1 w-full truncate text-[10px] font-black text-muted-foreground">{step.label}</span>
+            <span className="mt-0.5 w-full truncate text-[11px] font-black text-foreground" dir="auto">{displayValue(step.value)}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+function SectionCard({
+  sectionKey,
+  title,
+  icon: Icon,
+  children,
+}: {
+  sectionKey: ShipmentV2SectionKey;
+  title: string;
+  icon: typeof Package;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card className="relative rounded-xl border-border bg-card shadow-sm" data-testid={`shipment-v2-section-${sectionKey}`}>
+      <CardHeader className="border-b border-border/60 p-3 pl-20 sm:p-4 sm:pl-28">
+        <CardTitle className="flex items-center gap-2 text-xs font-black sm:text-sm">
+          <Icon className="h-3.5 w-3.5 text-primary sm:h-4 sm:w-4" />
+          {title}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-3 sm:p-4">{children}</CardContent>
+    </Card>
+  );
+}
+
+function SectionActions({ canUpdate, isSaving, isEditing, onEdit, onCancel, onSave, testIdPrefix }: EditableSectionProps) {
+  if (!canUpdate) return null;
+  return (
+    <div className="absolute left-3 top-2.5 z-10 flex justify-start gap-1.5 sm:left-4 sm:top-3">
+      {isEditing ? (
+        <>
+          <Button type="button" variant="outline" data-testid={`${testIdPrefix}-cancel`} className="h-7 rounded-md px-2.5 text-[10px] font-black sm:h-8 sm:px-3 sm:text-[11px]" onClick={onCancel} disabled={isSaving}>
+            <X className="ml-1 h-3 w-3" />
+            انصراف
+          </Button>
+          <Button type="button" data-testid={`${testIdPrefix}-save`} className="h-7 rounded-md px-2.5 text-[10px] font-black sm:h-8 sm:px-3 sm:text-[11px]" onClick={onSave} disabled={isSaving}>
+            {isSaving ? <Loader2 className="ml-1 h-3 w-3 animate-spin" /> : <Save className="ml-1 h-3 w-3" />}
+            ذخیره
+          </Button>
+        </>
+      ) : (
+        <Button type="button" variant="outline" data-testid={`${testIdPrefix}-edit`} className="h-7 rounded-md px-3 text-[10px] font-black sm:h-8 sm:text-[11px]" onClick={onEdit}>
+          ویرایش
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function BaseInfoCard({
+  label,
+  testId,
+  children,
+  className = "",
+}: {
+  label: string;
+  testId: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div data-testid={testId} className={`min-w-0 rounded-lg border border-border bg-muted/20 p-2.5 sm:p-3 ${className}`}>
+      <p className="truncate text-[9px] font-black leading-4 text-muted-foreground sm:text-[10px]">{label}</p>
+      <div className="mt-0.5 min-h-4 min-w-0 break-words text-[11px] font-black leading-5 text-foreground sm:text-xs">{children}</div>
+    </div>
+  );
+}
+
+function formatTimerDate(value?: string | null) {
+  if (!value) return "ثبت نشده";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("fa-IR-u-ca-persian", { dateStyle: "short", timeStyle: "short" });
+}
+
+function formatTimerDuration(milliseconds: number) {
+  const totalMinutes = Math.max(0, Math.floor(milliseconds / 60000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  const parts = [
+    days ? `${toPersianDigits(days)} روز` : "",
+    hours ? `${toPersianDigits(hours)} ساعت` : "",
+    !days && minutes ? `${toPersianDigits(minutes)} دقیقه` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" و ") : "کمتر از یک دقیقه";
+}
+
+function ShipmentTimerPanel({
+  shipment,
+  canUpdate,
+  onShipmentUpdate,
+}: {
+  shipment: ShipmentV2ShipmentSummary;
+  canUpdate: boolean;
+  onShipmentUpdate: (shipment: Partial<ShipmentV2ShipmentSummary>) => void;
+}) {
+  const [deadlineDraft, setDeadlineDraft] = React.useState(shipment.timerDeadlineAt || "");
+  const [now, setNow] = React.useState(() => Date.now());
+  const [isSaving, setIsSaving] = React.useState(false);
+  const deadlineMs = shipment.timerDeadlineAt ? new Date(shipment.timerDeadlineAt).getTime() : NaN;
+  const startedMs = shipment.timerStartedAt ? new Date(shipment.timerStartedAt).getTime() : NaN;
+  const completedMs = shipment.timerCompletedAt ? new Date(shipment.timerCompletedAt).getTime() : NaN;
+  const hasActiveDeadline = Number.isFinite(deadlineMs);
+  const isCompleted = Number.isFinite(completedMs);
+  const comparisonMs = isCompleted ? completedMs : now;
+  const remainingMs = hasActiveDeadline ? deadlineMs - comparisonMs : 0;
+  const elapsedMs = Number.isFinite(startedMs) ? Math.max(0, comparisonMs - startedMs) : 0;
+  const overdue = hasActiveDeadline && remainingMs < 0 && !isCompleted;
+
+  React.useEffect(() => {
+    setDeadlineDraft(shipment.timerDeadlineAt || "");
+  }, [shipment.timerDeadlineAt]);
+
+  React.useEffect(() => {
+    if (!hasActiveDeadline || isCompleted) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 30000);
+    return () => window.clearInterval(timer);
+  }, [hasActiveDeadline, isCompleted]);
+
+  const saveDeadline = async () => {
+    const parsed = parseShamsiDateTimeValue(deadlineDraft);
+    if (!parsed) {
+      toast.error("زمان پایان تایمر را با تقویم شمسی وارد کنید.");
       return;
     }
-    setUploading(true);
+    setIsSaving(true);
     try {
-      const formData = new FormData();
-      formData.append("file", selectedFile);
-      formData.append("title", newDoc.name);
-      formData.append("type", newDoc.type);
-      formData.append("shipmentId", shipmentId);
-      formData.append("visibility", newDoc.visibility);
-
-      const response = await fetch("/api/documents/upload", {
-        method: "POST",
-        body: formData,
+      const updated = await shipmentApi.updateOperationalFields(shipment.id, {
+        timerDeadlineAt: parsed.toISOString(),
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.error?.message || "Upload failed.");
-      }
-      await refreshDocuments();
-      setIsAddDocOpen(false);
-      setSelectedFile(null);
-      setNewDoc({ name: "", type: "OTHER", visibility: "internal" });
-      if (fileInputRef.current) fileInputRef.current.value = "";
-      toast.success("سند با موفقیت بارگذاری شد.");
-    } catch (error: any) {
-      toast.error(error?.message || "بارگذاری سند ناموفق بود.");
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const handleArchiveDoc = async (id: string) => {
-    const response = await fetch(`/api/documents/${encodeURIComponent(id)}/archive`, { method: "POST" });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || !payload.ok) {
-      throw new Error(payload.error?.message || "بایگانی سند ناموفق بود.");
-    }
-    await refreshDocuments();
-    toast.success("سند با موفقیت بایگانی شد.");
-    setDocumentToArchive(null);
-  };
-
-  const handleVisibilityChange = async (id: string, visibility: "internal" | "customer_visible") => {
-    const response = await fetch(`/api/documents/${encodeURIComponent(id)}/visibility`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ visibility }),
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || !payload.ok) {
-      toast.error(payload.error?.message || "تغییر دسترسی سند ناموفق بود.");
-      return;
-    }
-    await refreshDocuments();
-    toast.success("دسترسی سند بروزرسانی شد.");
-  };
-
-  const handleDownloadDocument = async (doc: { id: string; name: string; url?: string }) => {
-    try {
-      await downloadBinaryFile(doc.url || `/api/documents/${encodeURIComponent(doc.id)}/download`, doc.name);
+      onShipmentUpdate(updated);
+      toast.success("تایمر محموله بروزرسانی شد.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Document download failed.");
+      toast.error(error instanceof Error ? error.message : "بروزرسانی تایمر ناموفق بود.");
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const getDocTypeInfo = (type: string) => {
-    const info: Record<string, { label: string; color: string; icon: any }> = {
-      BILL_OF_LADING: { label: "بارنامه", color: "text-blue-400", icon: FileText },
-      INVOICE: { label: "فاکتور", color: "text-emerald-400", icon: FileCheck },
-      PACKING_LIST: { label: "لیست عدل‌بندی", color: "text-amber-400", icon: Package },
-      CUSTOMS_PERMIT: { label: "پروانه گمرکی", color: "text-purple-400", icon: Info },
-      INSURANCE: { label: "بیمه‌نامه", color: "text-rose-400", icon: CheckCircle2 },
-      OTHER: { label: "سایر", color: "text-slate-400", icon: FileIcon }
-    };
-    return info[type] || info.OTHER;
+  const removeDeadline = async () => {
+    setIsSaving(true);
+    try {
+      const updated = await shipmentApi.updateOperationalFields(shipment.id, {
+        timerDeadlineAt: null,
+      });
+      onShipmentUpdate(updated);
+      toast.success("تایمر فعال حذف شد.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "حذف تایمر ناموفق بود.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header & Controls */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-            <FileText className="w-5 h-5" />
-          </div>
-          <div>
-            <h3 className="font-bold text-foreground">مدیریت مستندات</h3>
-            <p className="text-[10px] text-muted-foreground font-medium">مجموع اسناد: {shipmentDocs.length} فایل</p>
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-            <Input 
-              placeholder="جستجو در اسناد..." 
-              className="bg-muted/50 border-border pr-9 h-9 text-[11px] w-48 rounded-lg outline-none focus:ring-1 focus:ring-primary"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-            />
-          </div>
-          
-          <Dialog open={isAddDocOpen} onOpenChange={setIsAddDocOpen}>
-            <DialogTrigger
-              render={
-                <Button className="bg-primary hover:bg-primary/90 text-primary-foreground text-[11px] font-bold gap-2 h-9 rounded-lg px-4">
-                  <FilePlus className="w-3.5 h-3.5" />
-                  بارگذاری مدرک
-                </Button>
-              }
-            />
-            <DialogContent className="bg-card border-border text-foreground text-right" dir="rtl">
-              <DialogHeader>
-                <DialogTitle className="text-xl font-bold">بارگذاری سند جدید</DialogTitle>
-                <DialogDescription className="text-xs text-muted-foreground">فایل‌های معتبر: PDF, تصویر، Word، Excel، CSV، TXT و RTF (حداکثر ۲۵ مگابایت)</DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4 py-4">
-                <div 
-                  className={cn(
-                    "bg-muted/50 border-2 border-dashed border-border rounded-2xl p-8 flex flex-col items-center justify-center text-center group cursor-pointer hover:border-primary/50 transition-colors",
-                    isDraggingFile && "border-primary bg-primary/5"
-                  )}
-                  onClick={() => fileInputRef.current?.click()}
-                  onDragEnter={handleFileDragOver}
-                  onDragOver={handleFileDragOver}
-                  onDragLeave={handleFileDragLeave}
-                  onDrop={handleFileDrop}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      fileInputRef.current?.click();
-                    }
-                  }}
-                  role="button"
-                  tabIndex={0}
-                  data-testid="shipment-document-dropzone"
-                >
-                  <input 
-                    type="file" 
-                    ref={fileInputRef} 
-                    className="hidden" 
-                    onChange={handleFileChange}
-                  />
-                  <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center text-muted-foreground mb-3 group-hover:text-primary transition-colors">
-                    <Plus className="w-6 h-6" />
-                  </div>
-                  <p className="text-xs font-bold text-foreground/80">
-                    {newDoc.name || "انتخاب فایل از سیستم"}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground mt-1">یا فایل را به اینجا بکشید</p>
-                </div>
-
-                <div className="space-y-4 pt-2">
-                  <div className="space-y-1.5">
-                    <Label className="text-[11px] font-bold text-muted-foreground pr-1">عنوان سند</Label>
-                    <Input 
-                      placeholder="مثال: بارنامه اصلی"
-                      className="bg-muted border-border h-10 text-xs focus:ring-primary" 
-                      value={newDoc.name}
-                      onChange={e => setNewDoc({...newDoc, name: e.target.value})}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-[11px] font-bold text-muted-foreground pr-1">نوع طبقه‌بندی</Label>
-                    <select 
-                      className="w-full bg-muted border-border rounded-lg h-10 text-xs px-3 outline-none focus:ring-1 focus:ring-primary"
-                      value={newDoc.type}
-                      onChange={e => setNewDoc({...newDoc, type: e.target.value as any})}
-                    >
-                      <option value="BILL_OF_LADING">بارنامه دریایی / هوایی</option>
-                      <option value="INVOICE">فاکتور تجاری (Invoice)</option>
-                      <option value="PACKING_LIST">لیست عدل‌بندی (Packing List)</option>
-                      <option value="CUSTOMS_PERMIT">پروانه سبز گمرکی</option>
-                      <option value="INSURANCE">بیمه‌نامه محموله</option>
-                      <option value="OTHER">سایر ضمائم</option>
-                    </select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-[11px] font-bold text-muted-foreground pr-1">نمایش برای مشتری</Label>
-                    <select
-                      className="w-full bg-muted border-border rounded-lg h-10 text-xs px-3 outline-none focus:ring-1 focus:ring-primary"
-                      value={newDoc.visibility}
-                      onChange={e => setNewDoc({...newDoc, visibility: e.target.value as any})}
-                    >
-                      <option value="internal">فقط داخلی</option>
-                      <option value="customer_visible">قابل مشاهده برای مشتری</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-              <DialogFooter className="gap-2">
-                <Button variant="outline" className="flex-1 border-border hover:bg-muted text-xs h-11" onClick={() => setIsAddDocOpen(false)}>انصراف</Button>
-                <Button disabled={uploading} className="flex-1 bg-primary text-primary-foreground font-extrabold text-xs h-11" onClick={handleAddDoc}>
-                  {uploading ? <ActionSkeleton inverted className="w-32" /> : "تایید و نهایی‌سازی"}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        </div>
-      </div>
-
-      {/* Compact List View */}
-      <div className="overflow-hidden rounded-2xl border border-border/60 bg-background/40">
-        {filteredDocs.map((doc, index) => {
-          const typeInfo = getDocTypeInfo(doc.type);
-          const Icon = typeInfo.icon;
-          const documentHref = doc.url || `/api/documents/${encodeURIComponent(doc.id)}/download`;
-
-          return (
-            <div
-              key={doc.id}
-              className={cn(
-                "group flex flex-col gap-3 p-3 transition-colors hover:bg-muted/35 md:flex-row md:items-center md:justify-between",
-                index > 0 && "border-t border-border/50"
+    <Card data-testid="shipment-v2-timer-panel" className="rounded-xl border-border bg-card shadow-sm">
+      <CardContent className="p-3 sm:p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <TimerReset className="h-4 w-4 text-primary" />
+              <p className="text-xs font-black text-foreground sm:text-sm">تایمر محموله</p>
+              {isCompleted ? (
+                <Badge className="border-none bg-emerald-500/10 text-[10px] font-black text-emerald-700">تکمیل شده</Badge>
+              ) : overdue ? (
+                <Badge className="border-none bg-rose-500/10 text-[10px] font-black text-rose-700">عقب‌افتاده</Badge>
+              ) : hasActiveDeadline ? (
+                <Badge className="border-none bg-primary/10 text-[10px] font-black text-primary">فعال</Badge>
+              ) : (
+                <Badge variant="outline" className="text-[10px] font-black">بدون تایمر</Badge>
               )}
-            >
-              <div className="flex min-w-0 flex-1 items-center gap-3">
-                <div className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-muted/50 ring-1 ring-border/50", typeInfo.color)}>
-                  <Icon className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h4 className="max-w-full truncate text-sm font-black text-foreground transition-colors group-hover:text-primary">{doc.name}</h4>
-                    <Badge variant="outline" className={cn("h-5 border-transparent bg-muted/70 px-2 text-[10px] font-bold", typeInfo.color)}>
-                      {typeInfo.label}
-                    </Badge>
-                  </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] font-bold text-muted-foreground">
-                    <span>{doc.fileSize}</span>
-                    <span className="h-1 w-1 rounded-full bg-border" />
-                    <span className="truncate">توسط: {doc.uploadedBy}</span>
-                    <span className="h-1 w-1 rounded-full bg-border" />
-                    <span className="font-mono">{doc.createdAt}</span>
-                  </div>
-                </div>
-              </div>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-4">
+              <BaseInfoCard label="مهلت پایان" testId="shipment-v2-timer-deadline-display">
+                {formatTimerDate(shipment.timerDeadlineAt)}
+              </BaseInfoCard>
+              <BaseInfoCard label={overdue ? "تاخیر" : "زمان باقی‌مانده"} testId="shipment-v2-timer-remaining">
+                {hasActiveDeadline ? formatTimerDuration(Math.abs(remainingMs)) : "ثبت نشده"}
+              </BaseInfoCard>
+              <BaseInfoCard label="زمان سپری‌شده" testId="shipment-v2-timer-elapsed">
+                {Number.isFinite(startedMs) ? formatTimerDuration(elapsedMs) : "ثبت نشده"}
+              </BaseInfoCard>
+              <BaseInfoCard label="مدت تکمیل" testId="shipment-v2-timer-completed-duration">
+                {isCompleted && Number.isFinite(startedMs) ? formatTimerDuration(completedMs - startedMs) : "ثبت نشده"}
+              </BaseInfoCard>
+            </div>
+          </div>
+          {canUpdate ? (
+            <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] lg:w-[520px]">
+              <ShamsiDateTimeField
+                value={deadlineDraft}
+                onChange={setDeadlineDraft}
+                showTime
+                className="min-w-0"
+                triggerClassName="h-9 rounded-lg text-[11px] font-bold"
+              />
+              <Button
+                type="button"
+                data-testid="shipment-v2-timer-save"
+                className="h-9 rounded-lg px-3 text-[11px] font-black"
+                onClick={() => void saveDeadline()}
+                disabled={isSaving}
+              >
+                {isSaving ? <Loader2 className="ml-1 h-3.5 w-3.5 animate-spin" /> : <Save className="ml-1 h-3.5 w-3.5" />}
+                {hasActiveDeadline ? "تنظیم" : "ثبت تایمر"}
+              </Button>
+              <Button
+                type="button"
+                data-testid="shipment-v2-timer-remove"
+                variant="outline"
+                className="h-9 rounded-lg px-3 text-[11px] font-black"
+                onClick={() => void removeDeadline()}
+                disabled={isSaving || !hasActiveDeadline}
+              >
+                حذف
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-3 md:shrink-0 md:justify-end md:border-t-0 md:pt-0">
-                <select
-                  className="h-8 rounded-lg border border-border bg-background px-2 text-[11px] font-bold text-muted-foreground"
-                  value={doc.visibility || "internal"}
-                  onChange={(event) => handleVisibilityChange(doc.id, event.target.value as any)}
+function DialogFactRow({ label, value }: { label: string; value?: string | number | null }) {
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 px-2.5 py-2">
+      <span className="shrink-0 text-[10px] font-black text-muted-foreground">{label}</span>
+      <span className="min-w-0 break-words text-left text-[11px] font-black text-foreground" dir="auto">{displayValue(value)}</span>
+    </div>
+  );
+}
+
+function CompactContactList({
+  contacts,
+  emptyText,
+  testId,
+}: {
+  contacts: BusinessEntityContact[];
+  emptyText: string;
+  testId: string;
+}) {
+  const activeContacts = activeBusinessContacts(contacts) as BusinessEntityContact[];
+  if (!activeContacts.length) {
+    return (
+      <div data-testid={testId} className="rounded-lg border border-dashed border-border bg-muted/20 px-2.5 py-2 text-[11px] font-bold text-muted-foreground">
+        {emptyText}
+      </div>
+    );
+  }
+  return (
+    <div data-testid={testId} className="grid gap-1.5">
+      {activeContacts.map((contact) => (
+        <div key={contact.id} className="rounded-lg border border-border bg-muted/20 px-2.5 py-2">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-1.5">
+            <p className="min-w-0 break-words text-[11px] font-black text-foreground">{contact.contactName}</p>
+            {contact.isPrimary ? (
+              <Badge variant="outline" className="h-5 rounded-md px-1.5 text-[9px] font-black">
+                اصلی
+              </Badge>
+            ) : null}
+          </div>
+          <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[10px] font-bold text-muted-foreground">
+            {contact.roleTitle ? <span>{contact.roleTitle}</span> : null}
+            <span dir="ltr">{contact.phoneNumber}</span>
+            {contact.phoneLabel ? <span>{contact.phoneLabel}</span> : null}
+          </div>
+          {contact.note ? <p className="mt-1 text-[10px] font-bold leading-4 text-muted-foreground">{contact.note}</p> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BaseSection({
+  data,
+  goodsData,
+  shipment,
+  flowCode,
+  customer,
+  shipments,
+  commercialCards,
+  malvaniProfiles,
+  isMalvaniLoading,
+  documentCount,
+  isDocumentCountLoading,
+  updatedAt,
+  updatedByName,
+  canUpdate,
+  isSaving,
+  onSave,
+}: {
+  data: ShipmentV2BaseSection;
+  goodsData: ShipmentV2GoodsSection;
+  shipment: ShipmentV2ShipmentSummary;
+  flowCode: ShipmentV2FlowCode;
+  customer: Customer | null;
+  shipments: Shipment[];
+  commercialCards: CommercialCard[];
+  malvaniProfiles: MalvaniProfile[];
+  isMalvaniLoading: boolean;
+  documentCount: number | null;
+  isDocumentCountLoading: boolean;
+  updatedAt?: string | null;
+  updatedByName: string;
+  canUpdate: boolean;
+  isSaving: boolean;
+  onSave: (payload: ShipmentV2BaseSection) => void;
+}) {
+  const [isEditing, setIsEditing] = React.useState(false);
+  const draftData = React.useMemo<ShipmentV2BaseSection>(
+    () => ({
+      ...data,
+      trackingNumber: data.trackingNumber || shipment.trackingNumber,
+      status: data.status || shipment.status,
+    }),
+    [data, shipment.status, shipment.trackingNumber]
+  );
+  const [draft, setDraft] = React.useState<ShipmentV2BaseSection>(draftData);
+  const [activeCredentialSearch, setActiveCredentialSearch] = React.useState(false);
+  const [viewingCredential, setViewingCredential] = React.useState<"commercial_card" | "malvani" | null>(null);
+  const [isCustomerDialogOpen, setIsCustomerDialogOpen] = React.useState(false);
+  const isLanjFlow = flowCode === "IMPORT_LANJ";
+  const credentialLabel = isLanjFlow ? "ملوانی" : "کارت بازرگانی";
+  const documentCountText = isDocumentCountLoading
+    ? "در حال دریافت"
+    : documentCount === null
+      ? "در دسترس نیست"
+      : documentCount.toLocaleString("fa-IR");
+  const displayStatus = shipmentStatusLabel(shipment.status);
+  const customerIdentifier = customer?.customerCode || customer?.code || shipment.customerCode || shipment.customerId || shipment.customerName || "";
+  const totalQuantity = sumGoodsMetric(goodsData.goodsRows || [], "quantity");
+  const totalContainerCount = sumContainerCount(goodsData);
+
+  React.useEffect(() => {
+    if (!isEditing) setDraft(draftData);
+  }, [draftData, isEditing]);
+
+  const updateDraft = (key: keyof ShipmentV2BaseSection, value: string | null) => {
+    setDraft((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateDraftFields = (updates: Partial<ShipmentV2BaseSection>) => {
+    setDraft((current) => ({ ...current, ...updates }));
+  };
+
+  const updateNumericDraft = (key: keyof ShipmentV2BaseSection, value: string) => {
+    updateDraft(key, value.replace(/\D/g, ""));
+  };
+
+  const activeCommercialCards = React.useMemo(
+    () => commercialCards.filter((card) => !card.isArchived && !card.archivedAt),
+    [commercialCards]
+  );
+  const linkedCommercialCard = React.useMemo(
+    () => activeCommercialCards.find((card) => card.id === data.commercialCardId) || null,
+    [activeCommercialCards, data.commercialCardId]
+  );
+  const linkedMalvaniProfile = React.useMemo(
+    () => malvaniProfiles.find((profile) => profile.id === data.malvaniProfileId && !profile.archivedAt) || null,
+    [malvaniProfiles, data.malvaniProfileId]
+  );
+  const activeCustomerShipments = React.useMemo(() => {
+    const byCustomer = shipments.filter((item) => item.customerId === shipment.customerId && isActiveCustomerShipment(item));
+    const hasCurrentShipment = byCustomer.some((item) => item.id === shipment.id);
+    if (hasCurrentShipment || isShipmentTerminalStatus(shipment.status) || shipment.isExitedArchived) return byCustomer;
+    return [
+      {
+        id: shipment.id,
+        trackingNumber: shipment.trackingNumber,
+        containerNumber: "",
+        customerId: shipment.customerId,
+        customerName: customerIdentifier,
+        origin: shipment.origin,
+        destination: shipment.destination,
+        status: shipment.status,
+        shipmentDirection: shipment.shipmentDirection,
+        transportMode: shipment.transportMode,
+        shipmentTypeCode: shipment.shipmentTypeCode,
+        createdAt: shipment.createdAt || "",
+        estimatedDelivery: shipment.estimatedDelivery || "",
+        freeTimeDays: 0,
+        isExitedArchived: shipment.isExitedArchived,
+        updatedAt: shipment.updatedAt || undefined,
+      } satisfies Shipment,
+      ...byCustomer,
+    ];
+  }, [shipment, shipments]);
+  const credentialInputValue = isLanjFlow ? draft.malvaniDisplayName || "" : draft.commercialCardDisplayName || "";
+  const credentialDisplayName = isLanjFlow
+    ? malvaniDisplayName(linkedMalvaniProfile) || data.malvaniDisplayName || ""
+    : commercialCardDisplayName(linkedCommercialCard) || data.commercialCardDisplayName || "";
+  const credentialSuggestions = React.useMemo(() => {
+    if (!activeCredentialSearch) return [];
+    const query = normalizeCredentialSearchTerm(credentialInputValue);
+    if (!query) return [];
+    if (isLanjFlow) {
+      return malvaniProfiles
+        .filter((profile) => !profile.archivedAt)
+        .filter((profile) =>
+          normalizeCredentialSearchTerm(
+            [
+              profile.displayName,
+              profile.captainName,
+              profile.lenjName,
+              profile.lenjRegistrationNumber,
+              profile.homePort,
+            ].filter(Boolean).join(" ")
+          ).includes(query)
+        )
+        .slice(0, 5)
+        .map((profile) => ({
+          id: profile.id,
+          label: malvaniDisplayName(profile),
+          description: malvaniDescription(profile),
+          kind: "malvani" as const,
+          record: profile,
+        }));
+    }
+    return activeCommercialCards
+      .filter((card) =>
+        normalizeCredentialSearchTerm(
+          [
+            card.holderName,
+            card.cardNumber,
+            card.nationalId,
+            card.responsibleName,
+          ].filter(Boolean).join(" ")
+        ).includes(query)
+      )
+      .slice(0, 5)
+      .map((card) => ({
+        id: card.id,
+        label: commercialCardDisplayName(card),
+        description: commercialCardDescription(card),
+        kind: "commercial_card" as const,
+        record: card,
+      }));
+  }, [activeCommercialCards, activeCredentialSearch, credentialInputValue, isLanjFlow, malvaniProfiles]);
+
+  const handleCredentialInputChange = (value: string) => {
+    if (isLanjFlow) {
+      updateDraftFields({
+        malvaniDisplayName: value,
+        malvaniProfileId: null,
+      });
+      return;
+    }
+    updateDraftFields({
+      commercialCardDisplayName: value,
+      commercialCardId: null,
+    });
+  };
+
+  const selectCredentialSuggestion = (suggestion: (typeof credentialSuggestions)[number]) => {
+    if (suggestion.kind === "malvani") {
+      updateDraftFields({
+        malvaniProfileId: suggestion.id,
+        malvaniDisplayName: suggestion.label,
+      });
+    } else {
+      updateDraftFields({
+        commercialCardId: suggestion.id,
+        commercialCardDisplayName: suggestion.label,
+      });
+    }
+    setActiveCredentialSearch(false);
+  };
+
+  const handleSave = () => {
+    const nextDraft: ShipmentV2BaseSection = {
+      ...draft,
+      trackingNumber: (draft.trackingNumber || shipment.trackingNumber || "").trim(),
+      orderRegistrationNumber: (draft.orderRegistrationNumber || "").trim(),
+      commercialCardDisplayName: (draft.commercialCardDisplayName || "").trim(),
+      malvaniDisplayName: (draft.malvaniDisplayName || "").trim(),
+    };
+    if (!nextDraft.trackingNumber) {
+      toast.error("کد محموله را وارد کنید.");
+      return;
+    }
+    if (isLanjFlow) {
+      nextDraft.commercialCardId = null;
+      nextDraft.commercialCardDisplayName = "";
+    } else {
+      nextDraft.malvaniProfileId = null;
+      nextDraft.malvaniDisplayName = "";
+    }
+    onSave(nextDraft);
+    setActiveCredentialSearch(false);
+    setIsEditing(false);
+  };
+
+  return (
+    <>
+      <div className="space-y-2.5">
+        {isEditing ? (
+          <div className="grid gap-2.5 sm:grid-cols-2 sm:gap-3">
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label className="text-[11px] font-bold text-muted-foreground sm:text-xs">کد محموله / شماره پرونده</Label>
+              <Input
+                data-testid="shipment-v2-base-tracking-number-input"
+                className="h-8 rounded-lg text-left font-mono text-[11px] font-bold sm:h-9 sm:text-xs"
+                dir="ltr"
+                value={draft.trackingNumber || ""}
+                onChange={(event) => updateDraft("trackingNumber", event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[11px] font-bold text-muted-foreground sm:text-xs">وضعیت محموله</Label>
+              <select
+                data-testid="shipment-v2-base-status-select"
+                className={compactSelectClassName}
+                value={draft.status || shipment.status}
+                onChange={(event) => updateDraft("status", event.target.value)}
+              >
+                {SHIPMENT_STATUS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[11px] font-bold text-muted-foreground sm:text-xs">مرحله فعلی</Label>
+              <textarea
+                data-testid="shipment-v2-base-current-stage-input"
+                className="min-h-16 w-full resize-y rounded-lg border border-input bg-background px-2.5 py-2 text-[11px] font-bold leading-5 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 sm:min-h-20 sm:px-3 sm:text-xs sm:leading-6"
+                value={draft.currentStage || ""}
+                onChange={(event) => updateDraft("currentStage", event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[11px] font-bold text-muted-foreground sm:text-xs">شماره ثبت سفارش</Label>
+              <Input
+                data-testid="shipment-v2-base-order-registration-number-input"
+                className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+                inputMode="numeric"
+                value={draft.orderRegistrationNumber || ""}
+                onChange={(event) => updateNumericDraft("orderRegistrationNumber", event.target.value)}
+              />
+            </div>
+            <div className="relative space-y-1.5 sm:col-span-2">
+              <Label className="text-[11px] font-bold text-muted-foreground sm:text-xs">{credentialLabel}</Label>
+              <Input
+                data-testid="shipment-v2-base-business-credential-input"
+                className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+                value={credentialInputValue}
+                placeholder={isMalvaniLoading && isLanjFlow ? "در حال دریافت ملوانی‌ها" : `جستجو و انتخاب ${credentialLabel}`}
+                onFocus={() => setActiveCredentialSearch(true)}
+                onBlur={() => window.setTimeout(() => setActiveCredentialSearch(false), 120)}
+                onChange={(event) => {
+                  handleCredentialInputChange(event.target.value);
+                  setActiveCredentialSearch(true);
+                }}
+              />
+              {credentialSuggestions.length ? (
+                <div
+                  data-testid="shipment-v2-base-business-credential-suggestions"
+                  className="absolute right-0 left-0 top-full z-20 mt-1 max-h-44 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-xl"
                 >
-                  <option value="internal">داخلی</option>
-                  <option value="customer_visible">مشتری</option>
-                </select>
-
-                <div className="flex items-center gap-1">
-                  <Button
-                    asChild
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 rounded-lg text-muted-foreground hover:text-primary"
-                  >
-                    <a
-                      href={documentHref}
-                      target="_blank"
-                      rel="noreferrer"
-                      aria-label={`Open ${doc.name}`}
-                      title="Open document"
+                  {credentialSuggestions.map((suggestion, index) => (
+                    <button
+                      key={`${suggestion.kind}-${suggestion.id}`}
+                      type="button"
+                      data-testid={`shipment-v2-base-business-credential-suggestion-${index}`}
+                      className="block w-full rounded-md px-2 py-1.5 text-right text-[11px] font-bold leading-5 text-popover-foreground hover:bg-muted"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => selectCredentialSuggestion(suggestion)}
                     >
-                      <ExternalLink className="h-4 w-4" />
-                    </a>
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground"
-                    onClick={() => handleDownloadDocument(doc)}
-                    aria-label={`Download ${doc.name}`}
-                    title="Download document"
-                  >
-                    <Download className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 rounded-lg text-muted-foreground hover:text-destructive"
-                    onClick={() => setDocumentToArchive({ id: doc.id, name: doc.name })}
-                    aria-label={`Archive ${doc.name}`}
-                    title="Archive document"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                      <span className="block truncate">{suggestion.label}</span>
+                      {suggestion.description ? (
+                        <span className="block truncate text-[10px] text-muted-foreground">{suggestion.description}</span>
+                      ) : null}
+                    </button>
+                  ))}
                 </div>
-              </div>
+              ) : null}
             </div>
-          );
-        })}
-
-        {filteredDocs.length === 0 && (
-          <div className="flex flex-col items-center justify-center border-2 border-dashed border-border bg-card/30 py-12 text-center transition-all hover:border-primary/30">
-            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-muted/50 text-muted-foreground">
-              <FilePlus className="h-7 w-7" />
-            </div>
-            <h4 className="text-sm font-bold text-muted-foreground">هنوز سندی بارگذاری نشده است</h4>
-            <p className="text-[11px] text-muted-foreground mt-1">برای شروع، اولین مدرک را بارگذاری کنید</p>
-            <Button 
-              variant="outline" 
-              className="mt-6 border-border text-primary text-xs h-9 px-6 rounded-xl hover:bg-primary hover:text-primary-foreground font-bold"
-              onClick={() => setIsAddDocOpen(true)}
-            >
-              افزودن مدرک
-            </Button>
+          </div>
+        ) : (
+          <div className="grid grid-flow-row-dense grid-cols-2 gap-2 lg:grid-cols-3">
+            <BaseInfoCard label="کد محموله" testId="shipment-v2-base-code">
+              <span className="block break-all text-left font-mono text-[10px] leading-5 sm:text-xs" dir="ltr">{displayValue(shipment.trackingNumber)}</span>
+            </BaseInfoCard>
+            <BaseInfoCard label="مشتری" testId="shipment-v2-base-customer">
+              <button
+                type="button"
+                data-testid="shipment-v2-base-customer-button"
+                className="inline-flex max-w-full items-center gap-1 rounded-md text-right text-[11px] font-black text-primary underline-offset-4 hover:underline sm:text-xs"
+                onClick={() => setIsCustomerDialogOpen(true)}
+              >
+                <span className="truncate">{displayValue(customerIdentifier)}</span>
+                <ExternalLink className="h-3 w-3 shrink-0" />
+              </button>
+            </BaseInfoCard>
+            <BaseInfoCard label="وضعیت" testId="shipment-v2-base-status">
+              {displayValue(displayStatus)}
+            </BaseInfoCard>
+            <BaseInfoCard label="مرحله فعلی" testId="shipment-v2-base-current-stage">
+              <p className="whitespace-pre-wrap">{displayValue(data.currentStage)}</p>
+            </BaseInfoCard>
+            <BaseInfoCard label="شماره ثبت سفارش" testId="shipment-v2-base-order-registration-number">
+              <span dir="ltr">{displayValue(data.orderRegistrationNumber)}</span>
+            </BaseInfoCard>
+            <BaseInfoCard label={credentialLabel} testId="shipment-v2-base-business-credential">
+              {(isLanjFlow ? linkedMalvaniProfile : linkedCommercialCard) ? (
+                <button
+                  type="button"
+                  data-testid="shipment-v2-base-business-credential-button"
+                  className="inline-flex max-w-full items-center gap-1 rounded-md text-right text-[11px] font-black text-primary underline-offset-4 hover:underline sm:text-xs"
+                  onClick={() => setViewingCredential(isLanjFlow ? "malvani" : "commercial_card")}
+                >
+                  <span className="truncate">{credentialDisplayName}</span>
+                  <ExternalLink className="h-3 w-3 shrink-0" />
+                </button>
+              ) : (
+                displayValue(credentialDisplayName)
+              )}
+            </BaseInfoCard>
+            <BaseInfoCard label="تعداد اسناد" testId="shipment-v2-base-document-count">
+              {documentCountText}
+            </BaseInfoCard>
+            <BaseInfoCard label="تعداد کالا" testId="shipment-v2-base-total-quantity">
+              {formatGoodsMetric(totalQuantity)}
+            </BaseInfoCard>
+            {!isLanjFlow ? (
+              <BaseInfoCard label="تعداد کانتینر" testId="shipment-v2-base-total-container-count">
+                {formatGoodsMetric(totalContainerCount)}
+              </BaseInfoCard>
+            ) : null}
+            <BaseInfoCard label="آخرین به روز رسانی" testId="shipment-v2-base-last-update" className="col-span-2 lg:col-span-3">
+              <p>{formatShamsiDateTime(updatedAt)}</p>
+              <p className="mt-0.5 text-[10px] font-bold text-muted-foreground">توسط {updatedByName}</p>
+            </BaseInfoCard>
           </div>
         )}
+        <SectionActions
+          canUpdate={canUpdate}
+          isSaving={isSaving}
+          isEditing={isEditing}
+          testIdPrefix="shipment-v2-base"
+          onEdit={() => setIsEditing(true)}
+          onCancel={() => {
+            setDraft(draftData);
+            setActiveCredentialSearch(false);
+            setIsEditing(false);
+          }}
+          onSave={handleSave}
+        />
       </div>
-      <DeleteConfirmDialog
-        isOpen={Boolean(documentToArchive)}
-        onClose={() => setDocumentToArchive(null)}
-        onConfirm={() => documentToArchive ? handleArchiveDoc(documentToArchive.id) : undefined}
-        title="بایگانی سند"
-        description="این سند از فهرست فعال خارج می‌شود و از بخش بایگانی قابل بازیابی خواهد بود."
-        itemName={documentToArchive?.name}
-        confirmLabel="انتقال به بایگانی"
-        pendingLabel="در حال بایگانی..."
+
+      <Dialog open={Boolean(viewingCredential)} onOpenChange={(open) => !open && setViewingCredential(null)}>
+        <DialogContent
+          data-testid="shipment-v2-base-business-credential-dialog"
+          className="max-h-[90vh] overflow-y-auto rounded-xl border-border bg-card p-4 text-right text-foreground sm:max-w-xl"
+          dir="rtl"
+        >
+          {viewingCredential === "commercial_card" && linkedCommercialCard ? (
+            <>
+              <DialogHeader className="gap-1 border-b border-border/60 pb-3">
+                <DialogTitle className="flex items-center gap-2 text-sm font-black">
+                  <CreditCard className="h-4 w-4 text-primary" />
+                  {commercialCardDisplayName(linkedCommercialCard)}
+                </DialogTitle>
+                <DialogDescription className="text-right text-[11px] font-bold text-muted-foreground">
+                  اطلاعات کارت بازرگانی لینک شده به محموله
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-1.5">
+                <DialogFactRow label="شماره کارت" value={linkedCommercialCard.cardNumber} />
+                <DialogFactRow label="تاریخ صدور" value={displayShamsiDate(linkedCommercialCard.issueDate)} />
+                <DialogFactRow label="تاریخ انقضا" value={displayShamsiDate(linkedCommercialCard.expirationDate)} />
+                <DialogFactRow label="شناسه ملی" value={linkedCommercialCard.nationalId || "ثبت نشده"} />
+                <DialogFactRow label="اسناد" value={toPersianDigits(linkedCommercialCard.documents?.length || 0)} />
+                {linkedCommercialCard.description ? (
+                  <div className="rounded-lg border border-border bg-muted/20 px-2.5 py-2">
+                    <p className="text-[10px] font-black text-muted-foreground">توضیحات</p>
+                    <p className="mt-1 text-[11px] font-bold leading-5 text-foreground">{linkedCommercialCard.description}</p>
+                  </div>
+                ) : null}
+                <div className="pt-1">
+                  <p className="mb-1.5 text-[10px] font-black text-muted-foreground">مخاطبین</p>
+                  <CompactContactList
+                    contacts={(linkedCommercialCard.contacts || []) as BusinessEntityContact[]}
+                    emptyText="مخاطبی برای این کارت ثبت نشده است."
+                    testId="shipment-v2-base-business-credential-contacts"
+                  />
+                </div>
+              </div>
+            </>
+          ) : null}
+          {viewingCredential === "malvani" && linkedMalvaniProfile ? (
+            <>
+              <DialogHeader className="gap-1 border-b border-border/60 pb-3">
+                <DialogTitle className="flex items-center gap-2 text-sm font-black">
+                  <Anchor className="h-4 w-4 text-primary" />
+                  {malvaniDisplayName(linkedMalvaniProfile)}
+                </DialogTitle>
+                <DialogDescription className="text-right text-[11px] font-bold text-muted-foreground">
+                  اطلاعات ملوانی لینک شده به محموله
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-1.5">
+                <DialogFactRow label="نام ناخدا" value={linkedMalvaniProfile.captainName} />
+                <DialogFactRow label="نام لنج" value={linkedMalvaniProfile.lenjName} />
+                <DialogFactRow label="شماره/شناسه لنج" value={linkedMalvaniProfile.lenjRegistrationNumber} />
+                <DialogFactRow label="نوع لنج" value={linkedMalvaniProfile.lenjType || "ثبت نشده"} />
+                <DialogFactRow label="بندر اصلی" value={linkedMalvaniProfile.homePort || "ثبت نشده"} />
+                <DialogFactRow label="وضعیت" value={malvaniActiveStatusLabels[linkedMalvaniProfile.activeStatus] || linkedMalvaniProfile.activeStatus} />
+                {linkedMalvaniProfile.note ? (
+                  <div className="rounded-lg border border-border bg-muted/20 px-2.5 py-2">
+                    <p className="text-[10px] font-black text-muted-foreground">یادداشت</p>
+                    <p className="mt-1 text-[11px] font-bold leading-5 text-foreground">{linkedMalvaniProfile.note}</p>
+                  </div>
+                ) : null}
+                <div className="pt-1">
+                  <p className="mb-1.5 text-[10px] font-black text-muted-foreground">مخاطبین</p>
+                  <CompactContactList
+                    contacts={(linkedMalvaniProfile.contacts || []) as BusinessEntityContact[]}
+                    emptyText="مخاطبی برای این ملوانی ثبت نشده است."
+                    testId="shipment-v2-base-business-credential-contacts"
+                  />
+                </div>
+              </div>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isCustomerDialogOpen} onOpenChange={setIsCustomerDialogOpen}>
+        <DialogContent
+          data-testid="shipment-v2-base-customer-dialog"
+          className="max-h-[90vh] overflow-y-auto rounded-xl border-border bg-card p-4 text-right text-foreground sm:max-w-xl"
+          dir="rtl"
+        >
+          <DialogHeader className="gap-1 border-b border-border/60 pb-3">
+            <DialogTitle className="flex items-center gap-2 text-sm font-black">
+              <Package className="h-4 w-4 text-primary" />
+              {customerIdentifier || "مشتری"}
+            </DialogTitle>
+            <DialogDescription className="text-right text-[11px] font-bold text-muted-foreground">
+              شناسه مشتری و محموله‌های فعال
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-1.5">
+            <DialogFactRow label="کد مشتری" value={customerIdentifier} />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-[10px] font-black text-muted-foreground">محموله‌های فعال</p>
+            {activeCustomerShipments.length ? (
+              <div data-testid="shipment-v2-base-customer-active-shipments" className="grid gap-1.5">
+                {activeCustomerShipments.map((item) => (
+                  <Link
+                    key={item.id}
+                    to={`/shipments/${item.id}`}
+                    className="group rounded-lg border border-border bg-muted/20 px-2.5 py-2 text-right hover:border-primary/50 hover:bg-primary/5"
+                    onClick={() => setIsCustomerDialogOpen(false)}
+                  >
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <span className="min-w-0 truncate font-mono text-[11px] font-black text-primary" dir="ltr">
+                        {item.trackingNumber}
+                      </span>
+                      <Badge variant="outline" className="h-5 shrink-0 rounded-md px-1.5 text-[9px] font-black">
+                        {shipmentStatusLabel(item.status)}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 truncate text-[10px] font-bold text-muted-foreground">
+                      {displayValue(item.origin)} → {displayValue(item.destination)}
+                    </p>
+                  </Link>
+                ))}
+              </div>
+            ) : (
+              <div data-testid="shipment-v2-base-customer-active-shipments" className="rounded-lg border border-dashed border-border bg-muted/20 px-2.5 py-2 text-[11px] font-bold text-muted-foreground">
+                محموله فعال برای این مشتری ثبت نشده است.
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function GoodsSection({
+  data,
+  flowCode,
+  canUpdate,
+  isSaving,
+  onSave,
+}: {
+  data: ShipmentV2GoodsSection;
+  flowCode: ShipmentV2FlowCode;
+  canUpdate: boolean;
+  isSaving: boolean;
+  onSave: (payload: ShipmentV2GoodsSection) => void;
+}) {
+  const [isEditing, setIsEditing] = React.useState(false);
+  const [container20Count, setContainer20Count] = React.useState("");
+  const [container40Count, setContainer40Count] = React.useState("");
+  const [rows, setRows] = React.useState<GoodsDraftRow[]>([]);
+  const showContainerCounts = flowCode === "IMPORT_SHIP";
+
+  const resetDraft = React.useCallback(() => {
+    setContainer20Count(data.container20Count === null || data.container20Count === undefined ? "" : String(data.container20Count));
+    setContainer40Count(data.container40Count === null || data.container40Count === undefined ? "" : String(data.container40Count));
+    const goodsRows = data.goodsRows || [];
+    setRows(
+      goodsRows.length
+        ? goodsRows.map((row, index) => ({
+          ...row,
+          id: `goods-${index}-${row.description}`,
+          quantity: numberDraftValue(row.quantity),
+          weight: numberDraftValue(row.weight),
+          cbm: numberDraftValue(row.cbm),
+          pcs: numberDraftValue(row.pcs),
+        }))
+        : [{ id: "goods-empty", description: "", packagingType: "", quantity: "", weight: "", cbm: "", pcs: "" }]
+    );
+  }, [data]);
+
+  React.useEffect(() => {
+    if (!isEditing) resetDraft();
+  }, [isEditing, resetDraft]);
+
+  const updateRow = (rowId: string, updates: Partial<GoodsDraftRow>) => {
+    setRows((current) => current.map((row) => (row.id === rowId ? { ...row, ...updates } : row)));
+  };
+
+  const addRow = () => {
+    setRows((current) => [
+      ...current,
+      { id: `goods-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, description: "", packagingType: "", quantity: "", weight: "", cbm: "", pcs: "" },
+    ]);
+  };
+
+  const removeRow = (rowId: string) => {
+    setRows((current) => {
+      const next = current.filter((row) => row.id !== rowId);
+      return next.length ? next : [{ id: "goods-empty", description: "", packagingType: "", quantity: "", weight: "", cbm: "", pcs: "" }];
+    });
+  };
+
+  const handleSave = () => {
+    const goodsRows = rows
+      .map((row) => ({
+        description: row.description.trim(),
+        packagingType: (row.packagingType || "").trim(),
+        quantity: optionalNumber(row.quantity),
+        weight: optionalNumber(row.weight),
+        cbm: optionalNumber(row.cbm),
+        pcs: optionalNumber(row.pcs),
+      }))
+      .filter((row) => row.description);
+    onSave({
+      container20Count: showContainerCounts ? optionalNumber(container20Count) : null,
+      container40Count: showContainerCounts ? optionalNumber(container40Count) : null,
+      goodsRows,
+    });
+    setIsEditing(false);
+  };
+
+  const savedRows = data.goodsRows || [];
+
+  return (
+    <div className="space-y-2.5">
+      {isEditing ? (
+        <div className="space-y-2.5">
+          {showContainerCounts ? (
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold text-muted-foreground sm:text-xs">کانتینر ۲۰ فوت</Label>
+                <Input className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs" inputMode="decimal" value={container20Count} onChange={(event) => setContainer20Count(event.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold text-muted-foreground sm:text-xs">کانتینر ۴۰ فوت</Label>
+                <Input className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs" inputMode="decimal" value={container40Count} onChange={(event) => setContainer40Count(event.target.value)} />
+              </div>
+            </div>
+          ) : null}
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] font-black text-muted-foreground sm:text-xs">ردیف‌های کالا</p>
+              <Button type="button" variant="outline" className="h-7 rounded-md px-2.5 text-[10px] font-black sm:h-8 sm:text-[11px]" onClick={addRow} data-testid="shipment-v2-goods-add">
+                افزودن کالا
+              </Button>
+            </div>
+            {rows.map((row, index) => (
+              <div key={row.id} className="rounded-lg border border-border bg-muted/20 p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-black text-muted-foreground">کالای {(index + 1).toLocaleString("fa-IR")}</p>
+                  <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-md text-muted-foreground hover:text-red-600" onClick={() => removeRow(row.id)} aria-label={`حذف کالای ${index + 1}`}>
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <Input
+                  data-testid={`shipment-v2-goods-row-${index}-description`}
+                  className="mt-1.5 h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+                  placeholder="شرح کالا"
+                  value={row.description}
+                  onChange={(event) => updateRow(row.id, { description: event.target.value })}
+                />
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+                  <Input data-testid={`shipment-v2-goods-row-${index}-quantity`} className="h-8 min-w-0 rounded-lg px-2 text-[11px] font-bold sm:h-9 sm:text-xs" inputMode="decimal" placeholder="تعداد" value={row.quantity} onChange={(event) => updateRow(row.id, { quantity: event.target.value })} />
+                  <Input data-testid={`shipment-v2-goods-row-${index}-weight`} className="h-8 min-w-0 rounded-lg px-2 text-[11px] font-bold sm:h-9 sm:text-xs" inputMode="decimal" placeholder="وزن" value={row.weight} onChange={(event) => updateRow(row.id, { weight: event.target.value })} />
+                  <Input data-testid={`shipment-v2-goods-row-${index}-cbm`} className="h-8 min-w-0 rounded-lg px-2 text-[11px] font-bold sm:h-9 sm:text-xs" inputMode="decimal" placeholder="CBM" value={row.cbm} onChange={(event) => updateRow(row.id, { cbm: event.target.value })} />
+                  <Input data-testid={`shipment-v2-goods-row-${index}-pcs`} className="h-8 min-w-0 rounded-lg px-2 text-[11px] font-bold sm:h-9 sm:text-xs" inputMode="decimal" placeholder="PCS" value={row.pcs} onChange={(event) => updateRow(row.id, { pcs: event.target.value })} />
+                  <Input
+                    data-testid={`shipment-v2-goods-row-${index}-packaging`}
+                    className="h-8 min-w-0 rounded-lg px-2 text-[11px] font-bold sm:h-9 sm:text-xs"
+                    placeholder="بسته بندی"
+                    value={row.packagingType || ""}
+                    onChange={(event) => updateRow(row.id, { packagingType: event.target.value })}
+                  />
+                </div>
+              </div>
+            ))}
+            <GoodsTotalsRow rows={rows} testIdPrefix="shipment-v2-goods" />
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          {showContainerCounts ? (
+            <div className="grid grid-cols-2 gap-2">
+              <BaseInfoCard label="کانتینر ۲۰ فوت" testId="shipment-v2-goods-container20">
+                {displayValue(data.container20Count)}
+              </BaseInfoCard>
+              <BaseInfoCard label="کانتینر ۴۰ فوت" testId="shipment-v2-goods-container40">
+                {displayValue(data.container40Count)}
+              </BaseInfoCard>
+            </div>
+          ) : null}
+          {savedRows.length ? (
+            <div className="space-y-2">
+              {savedRows.map((row, index) => (
+                <div key={`${row.description}-${index}`} className="rounded-lg border border-border bg-muted/20 p-2.5 text-xs">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-black text-primary">
+                      {(index + 1).toLocaleString("fa-IR")}
+                    </span>
+                    <p className="min-w-0 flex-1 break-words font-black leading-5 text-foreground">{row.description}</p>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+                    {[
+                      ["تعداد", row.quantity],
+                      ["وزن", row.weight],
+                      ["CBM", row.cbm],
+                      ["PCS", row.pcs],
+                      ["بسته بندی", row.packagingType],
+                    ].map(([label, value]) => (
+                      <div key={label} className="min-w-0 rounded-md bg-background/80 px-2 py-1">
+                        <p className="truncate text-[9px] font-black text-muted-foreground">{label}</p>
+                        <p className="mt-0.5 truncate text-[11px] font-black text-foreground">{displayValue(value)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <GoodsTotalsRow rows={savedRows} testIdPrefix="shipment-v2-goods" />
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 p-2.5 text-[11px] font-bold leading-5 text-muted-foreground">
+              <Package className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span>هنوز کالایی در ثبت نشده است.</span>
+            </div>
+          )}
+        </div>
+      )}
+      <SectionActions
+        canUpdate={canUpdate}
+        isSaving={isSaving}
+        isEditing={isEditing}
+        testIdPrefix="shipment-v2-goods"
+        onEdit={() => setIsEditing(true)}
+        onCancel={() => {
+          resetDraft();
+          setIsEditing(false);
+        }}
+        onSave={handleSave}
       />
     </div>
   );
-};
+}
 
-const StatusBadge = ({ status }: { status: string }) => {
-  const styles: Record<string, string> = {
-    LOADING: "bg-slate-500/10 text-slate-500 border-slate-500/20",
-    IN_TRANSIT: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-    ARRIVED: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-    KOOTAJ_DONE: "bg-purple-500/10 text-purple-400 border-purple-500/20",
-    EXITED: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-  };
-  return <Badge variant="outline" className={cn(styles[status] || "", "py-0.5 px-2 text-[10px] font-bold")}>{shipmentStatusLabel(status)}</Badge>;
-};
-
-type CustomerAccessState = {
-  enabled: boolean;
-  hasToken: boolean;
-  token?: string;
-  url?: string;
-  publicStatus: {
-    label: string;
-    description: string;
-    isCustomerVisible: boolean;
-    lastUpdatedAt?: string | null;
-  };
-};
-
-const CustomerAccessPanel = ({ shipmentId, trackingNumber }: { shipmentId: string; trackingNumber: string }) => {
-  const [access, setAccess] = useState<CustomerAccessState | null>(null);
-  const [publicLabel, setPublicLabel] = useState("");
-  const [publicDescription, setPublicDescription] = useState("");
-  const [isVisible, setIsVisible] = useState(true);
-  const [rawLink, setRawLink] = useState("");
-  const [qrDataUrl, setQrDataUrl] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-
-  const loadAccess = React.useCallback(async () => {
-    try {
-      const response = await fetch(`/api/shipments/${shipmentId}/customer-access`);
-      const payload = await response.json();
-      if (!response.ok || !payload.ok) throw new Error(payload.error?.message || "Could not load access.");
-      setAccess(payload.data);
-      setRawLink(payload.data.enabled && payload.data.url ? payload.data.url : "");
-      setPublicLabel(payload.data.publicStatus?.label || "");
-      setPublicDescription(payload.data.publicStatus?.description || "");
-      setIsVisible(payload.data.publicStatus?.isCustomerVisible !== false);
-    } catch (error) {
-      console.error(error);
-    }
-  }, [shipmentId]);
+function DeclarationKootajSection({
+  data,
+  canUpdate,
+  isSaving,
+  onSave,
+}: {
+  data: ShipmentV2DeclarationKootajSection;
+  canUpdate: boolean;
+  isSaving: boolean;
+  onSave: (payload: ShipmentV2DeclarationKootajSection) => void;
+}) {
+  const [isEditing, setIsEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState<DeclarationDraft>(() => declarationDraftFromData(data || {}));
 
   React.useEffect(() => {
-    loadAccess();
-  }, [loadAccess]);
+    if (!isEditing) setDraft(declarationDraftFromData(data || {}));
+  }, [data, isEditing]);
 
-  React.useEffect(() => {
-    let cancelled = false;
-    if (!rawLink) {
-      setQrDataUrl("");
-      return;
-    }
-    QRCode.toDataURL(rawLink, { margin: 1, width: 180 })
-      .then((url) => {
-        if (!cancelled) setQrDataUrl(url);
-      })
-      .catch(() => {
-        if (!cancelled) setQrDataUrl("");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [rawLink]);
-
-  const runAccessAction = async (action: "generate" | "reset" | "disable") => {
-    setIsLoading(true);
-    try {
-      const response = await fetch(`/api/shipments/${shipmentId}/customer-access/${action}`, {
-        method: "POST",
-      });
-      const payload = await response.json();
-      if (!response.ok || !payload.ok) throw new Error(payload.error?.message || "Action failed.");
-      setAccess(payload.data);
-      if (payload.data.url) {
-        setRawLink(payload.data.url);
-        toast.success(action === "reset" ? "لینک مشتری با موفقیت بازنشانی شد." : "لینک مشتری با موفقیت ساخته شد.");
-      } else {
-        setRawLink("");
-        toast.success("دسترسی مشتری غیرفعال شد.");
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "انجام عملیات دسترسی مشتری ناموفق بود.");
-    } finally {
-      setIsLoading(false);
-    }
+  const updateDraft = (updates: Partial<DeclarationDraft>) => {
+    setDraft((current) => ({ ...current, ...updates }));
   };
 
-  const savePublicStatus = async () => {
-    if (!publicLabel.trim()) {
-      toast.error("عنوان وضعیت قابل نمایش برای مشتری الزامی است.");
-      return;
-    }
-    setIsLoading(true);
-    try {
-      const response = await fetch(`/api/shipments/${shipmentId}/public-status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          publicLabel,
-          publicDescription,
-          isCustomerVisible: isVisible,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok || !payload.ok) throw new Error(payload.error?.message || "Could not save status.");
-      toast.success("وضعیت قابل نمایش برای مشتری به روز شد.");
-      await loadAccess();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not save public status.");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const copyLink = async () => {
-    if (!rawLink) return;
-    try {
-      await navigator.clipboard.writeText(rawLink);
-      toast.success("Customer tracking link copied.");
-    } catch {
-      const textArea = document.createElement("textarea");
-      textArea.value = rawLink;
-      textArea.setAttribute("readonly", "");
-      textArea.style.position = "fixed";
-      textArea.style.opacity = "0";
-      document.body.appendChild(textArea);
-      textArea.select();
-      const copied = document.execCommand("copy");
-      document.body.removeChild(textArea);
-      if (copied) toast.success("Customer tracking link copied.");
-      else toast.error("Clipboard access is blocked by the browser.");
-    }
-  };
+  const routeLabel = data.customsRoute ? customsRouteLabels[data.customsRoute] : "";
+  const totalCurrency = draft.totalValueCurrency || data.totalValueCurrency || "IRR";
+  const finalPaidCurrency = draft.finalPaidCurrency || data.finalPaidCurrency || "IRR";
 
   return (
-    <Card className="overflow-hidden rounded-2xl border-border/70 bg-card shadow-sm">
-      <CardHeader className="border-b border-border/50 bg-muted/20 p-4">
-        <CardTitle className="flex items-center justify-between gap-3 text-sm font-black">
-          <span className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-primary" />
-            دسترسی مشتری
-          </span>
-          <Badge className={cn("rounded-full text-[10px]", access?.enabled ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-600 border-slate-200")}>
-            {access?.enabled ? "فعال" : "غیرفعال"}
-          </Badge>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4 p-4">
-        <div className="rounded-xl bg-muted/35 p-3 text-right ring-1 ring-border/40">
-          <p className="text-[11px] font-bold text-muted-foreground">شماره رهگیری</p>
-          <p className="mt-1 text-sm font-black text-foreground">{trackingNumber}</p>
-        </div>
-
-        <div className="grid grid-cols-1 gap-2">
-          <Button
-            size="sm"
-            className="h-9 justify-center gap-1 rounded-xl text-[11px] font-bold"
-            disabled={isLoading}
-            data-testid="customer-access-generate"
-            onClick={() => runAccessAction("generate")}
-          >
-            {isLoading ? (
-              <ActionSkeleton inverted className="w-14" />
-            ) : (
-              <>
-                <Link2 className="h-3.5 w-3.5" />
-                ساخت لینک
-              </>
-            )}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-9 justify-center gap-1 rounded-xl text-[11px] font-bold"
-            disabled={isLoading || !access?.hasToken}
-            data-testid="customer-access-reset"
-            onClick={() => runAccessAction("reset")}
-          >
-            {isLoading ? (
-              <ActionSkeleton className="w-14" />
-            ) : (
-              <>
-                <RefreshCw className="h-3.5 w-3.5" />
-                بازنشانی
-              </>
-            )}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-9 justify-center gap-1 rounded-xl text-[11px] font-bold text-red-600 hover:text-red-700"
-            disabled={isLoading || !access?.enabled}
-            data-testid="customer-access-disable"
-            onClick={() => runAccessAction("disable")}
-          >
-            {isLoading ? (
-              <ActionSkeleton className="w-14 bg-red-500/20" />
-            ) : (
-              <>
-                <EyeOff className="h-3.5 w-3.5" />
-                غیرفعال
-              </>
-            )}
-          </Button>
-        </div>
-
-        {rawLink ? (
-          <div className="rounded-xl bg-blue-50/70 p-3 ring-1 ring-blue-100">
-            <div className="flex items-center gap-2">
-              <Input value={rawLink} readOnly className="h-9 bg-white text-left text-[11px]" dir="ltr" data-testid="customer-access-link" />
-              <Button size="icon" variant="outline" className="h-9 w-9 shrink-0 bg-white" data-testid="customer-access-copy" onClick={copyLink}>
-                <Copy className="h-4 w-4" />
-              </Button>
-            </div>
-            {qrDataUrl && (
-              <div className="mt-3 flex justify-center rounded-lg bg-white p-2">
-                <img src={qrDataUrl} alt="Customer tracking QR code" className="h-28 w-28" />
-              </div>
-            )}
-            <p className="mt-2 text-[11px] font-medium text-blue-700">
-              لینک امن ذخیره می‌شود و تا زمان بازنشانی بعدی ثابت می‌ماند.
-            </p>
-          </div>
-        ) : (
-          <p className="rounded-lg bg-muted/40 p-3 text-[11px] font-medium leading-5 text-muted-foreground">
-            هنوز لینک فعال ذخیره‌شده‌ای برای این محموله وجود ندارد. لینک را بسازید تا بعد از رفرش هم همینجا بماند.
-          </p>
-        )}
-
-        <div className="space-y-2 rounded-xl bg-muted/25 p-3 ring-1 ring-border/40">
-          <Label className="text-[11px] font-black">عنوان وضعیت عمومی</Label>
-          <Input
-            value={publicLabel}
-            onChange={(event) => setPublicLabel(event.target.value)}
-            placeholder="محموله در حال بررسی گمرکی است"
-            className="h-9 text-xs"
-            data-testid="public-status-label"
-          />
-          <Label className="text-[11px] font-black">توضیح قابل نمایش برای مشتری</Label>
-          <Input
-            value={publicDescription}
-            onChange={(event) => setPublicDescription(event.target.value)}
-            placeholder="به روزرسانی امن و قابل نمایش برای مشتری"
-            className="h-9 text-xs"
-            data-testid="public-status-description"
-          />
-          <label className="flex items-center gap-2 text-[11px] font-bold text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={isVisible}
-              onChange={(event) => setIsVisible(event.target.checked)}
-              data-testid="public-status-visible"
+    <div className="space-y-2.5">
+      {isEditing ? (
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-bold text-muted-foreground sm:text-xs">شماره کوتاژ</Label>
+            <Input
+              data-testid="shipment-v2-declaration-cotage-number"
+              className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+              inputMode="numeric"
+              value={draft.cotageNumber || ""}
+              onChange={(event) => updateDraft({ cotageNumber: event.target.value })}
             />
-            نمایش این وضعیت در صفحه رهگیری مشتری
-          </label>
-          <Button
-            size="sm"
-            variant="secondary"
-            className="w-full text-[11px]"
-            disabled={isLoading}
-            data-testid="public-status-save"
-            onClick={savePublicStatus}
-          >
-            {isLoading ? <ActionSkeleton className="w-32" /> : "ذخیره وضعیت عمومی"}
-          </Button>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-bold text-muted-foreground sm:text-xs">مسیر گمرکی</Label>
+            <select
+              data-testid="shipment-v2-declaration-customs-route"
+              className={compactSelectClassName}
+              value={draft.customsRoute || ""}
+              onChange={(event) => updateDraft({ customsRoute: (event.target.value || null) as ShipmentV2CustomsRoute | null })}
+            >
+              <option value="">ثبت نشده</option>
+              {customsRouteOptions.map((option) => (
+                <option key={option} value={option}>
+                  {customsRouteLabels[option]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div data-testid="shipment-v2-declaration-cotage-date" className="space-y-1.5">
+            <ShamsiDateTimeField
+              id="shipment-v2-declaration-cotage-date-field"
+              label="تاریخ ثبت کوتاژ"
+              value={draft.cotageRegistrationDate || ""}
+              onChange={(cotageRegistrationDate) => updateDraft({ cotageRegistrationDate })}
+              showTime={false}
+              triggerClassName="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-bold text-muted-foreground sm:text-xs">ارزش کل</Label>
+            <div className="grid grid-cols-[minmax(0,1fr)_104px] gap-1.5">
+              <Input
+                data-testid="shipment-v2-declaration-total-value"
+                className="h-8 min-w-0 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+                inputMode="decimal"
+                value={draft.totalValueAmount}
+                onChange={(event) => updateDraft({ totalValueAmount: event.target.value })}
+              />
+              <select
+                data-testid="shipment-v2-declaration-total-currency"
+                className={compactSelectClassName}
+                value={totalCurrency}
+                onChange={(event) => updateDraft({ totalValueCurrency: event.target.value as ShipmentV2CurrencyCode })}
+              >
+                {currencyOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {currencyLabels[option]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label className="text-[10px] font-bold text-muted-foreground sm:text-xs">مبلغ نهایی پرداختی</Label>
+            <div className="grid grid-cols-[minmax(0,1fr)_104px] gap-1.5">
+              <Input
+                data-testid="shipment-v2-declaration-final-paid"
+                className="h-8 min-w-0 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+                inputMode="decimal"
+                value={draft.finalPaidAmount}
+                onChange={(event) => updateDraft({ finalPaidAmount: event.target.value })}
+              />
+              <select
+                data-testid="shipment-v2-declaration-final-paid-currency"
+                className={compactSelectClassName}
+                value={finalPaidCurrency}
+                onChange={(event) => updateDraft({ finalPaidCurrency: event.target.value as ShipmentV2CurrencyCode })}
+              >
+                {currencyOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {currencyLabels[option]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
         </div>
-      </CardContent>
-    </Card>
+      ) : (
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
+          <BaseInfoCard label="شماره کوتاژ" testId="shipment-v2-declaration-cotage-number-value">
+            {displayValue(data.cotageNumber)}
+          </BaseInfoCard>
+          <BaseInfoCard label="مسیر گمرکی" testId="shipment-v2-declaration-customs-route-value">
+            {displayValue(routeLabel)}
+          </BaseInfoCard>
+          <BaseInfoCard label="تاریخ ثبت کوتاژ" testId="shipment-v2-declaration-cotage-date-value">
+            {displayShamsiDate(data.cotageRegistrationDate)}
+          </BaseInfoCard>
+          <BaseInfoCard label="ارزش کل" testId="shipment-v2-declaration-total-value-value">
+            {displayMoneyValue(data.totalValueAmount, data.totalValueCurrency)}
+          </BaseInfoCard>
+          <BaseInfoCard label="مبلغ نهایی پرداختی" testId="shipment-v2-declaration-final-paid-value" className="col-span-2 lg:col-span-1">
+            {displayMoneyValue(data.finalPaidAmount, data.finalPaidCurrency)}
+          </BaseInfoCard>
+        </div>
+      )}
+      <SectionActions
+        canUpdate={canUpdate}
+        isSaving={isSaving}
+        isEditing={isEditing}
+        testIdPrefix="shipment-v2-declaration"
+        onEdit={() => setIsEditing(true)}
+        onCancel={() => {
+          setDraft(declarationDraftFromData(data || {}));
+          setIsEditing(false);
+        }}
+        onSave={() => {
+          onSave({
+            ...draft,
+            totalValueAmount: optionalNumber(draft.totalValueAmount),
+            totalValueCurrency: draft.totalValueCurrency || "IRR",
+            finalPaidAmount: optionalNumber(draft.finalPaidAmount),
+            finalPaidCurrency: draft.finalPaidCurrency || "IRR",
+          });
+          setIsEditing(false);
+        }}
+      />
+    </div>
   );
-};
+}
 
-type ShipmentChatThread = {
-  id: string;
-  shipmentCode?: string;
-};
+function PermitsSection({
+  data,
+  canUpdate,
+  isSaving,
+  onSave,
+}: {
+  data: ShipmentV2PermitsSection;
+  canUpdate: boolean;
+  isSaving: boolean;
+  onSave: (payload: ShipmentV2PermitsSection) => void;
+}) {
+  const [isEditing, setIsEditing] = React.useState(false);
+  const [rows, setRows] = React.useState<Array<ShipmentV2PermitRow & { id: string }>>([]);
+  const [activeRowId, setActiveRowId] = React.useState<string | null>(null);
 
-type ShipmentChatMessage = {
-  id: string;
-  threadId: string;
-  senderId: string;
-  senderName: string;
-  body?: string;
-  content?: string;
-  createdAt: string;
-};
+  const resetDraft = React.useCallback(() => {
+    const permitRows = data.permitRows || [];
+    setRows(
+      permitRows.length
+        ? permitRows.map((row, index) => ({ ...row, id: `permit-${index}-${row.permitName}` }))
+        : [{ id: "permit-empty", permitName: "", permitState: "" }]
+    );
+  }, [data]);
 
-const shipmentChatMessageText = (message: ShipmentChatMessage) => message.body || message.content || "";
-const SHIPMENT_CHAT_MESSAGE_PAGE_SIZE = 20;
-const SHIPMENT_CHAT_HISTORY_TOP_THRESHOLD_PX = 48;
-const SHIPMENT_CHAT_BOTTOM_THRESHOLD_PX = 80;
+  React.useEffect(() => {
+    if (!isEditing) resetDraft();
+  }, [isEditing, resetDraft]);
 
-const ShipmentChatPanel = ({ shipmentId, shipmentCode }: { shipmentId: string; shipmentCode: string }) => {
-  const navigate = useNavigate();
-  const currentUser = useMockStore((state) => state.currentUser);
-  const canUseChat = Boolean(currentUser?.permissions?.includes("chat.use"));
-  const [thread, setThread] = React.useState<ShipmentChatThread | null>(null);
-  const [messages, setMessages] = React.useState<ShipmentChatMessage[]>([]);
-  const [draft, setDraft] = React.useState("");
-  const [isLoading, setIsLoading] = React.useState(false);
-  const [isSending, setIsSending] = React.useState(false);
-  const [error, setError] = React.useState("");
-  const [hasMoreMessages, setHasMoreMessages] = React.useState(false);
-  const wsRef = React.useRef<WebSocket | null>(null);
-  const messageListRef = React.useRef<HTMLDivElement | null>(null);
-  const messagesEndRef = React.useRef<HTMLDivElement | null>(null);
-  const historyLoadingRef = React.useRef(false);
-  const historyScrollRestoreRef = React.useRef<{ previousHeight: number; previousTop: number } | null>(null);
-  const pendingBottomScrollRef = React.useRef<ScrollBehavior | null>(null);
-  const initialBottomScrolledThreadRef = React.useRef("");
-
-  const loadMessages = React.useCallback(async (
-    threadId: string,
-    options: { before?: string; mode?: "initial" | "history" } = {}
-  ) => {
-    const params = new URLSearchParams({ limit: String(SHIPMENT_CHAT_MESSAGE_PAGE_SIZE) });
-    if (options.before) params.set("before", options.before);
-    const response = await fetch(`/api/chat/threads/${encodeURIComponent(threadId)}/messages?${params.toString()}`);
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || !payload.ok) throw new Error(payload.error?.message || "Could not load shipment chat messages.");
-    const nextMessages = (payload.data || []) as ShipmentChatMessage[];
-    setHasMoreMessages(nextMessages.length === SHIPMENT_CHAT_MESSAGE_PAGE_SIZE);
-    if (options.mode === "history") {
-      setMessages((items) => {
-        const existingIds = new Set(items.map((item) => item.id));
-        const olderMessages = nextMessages.filter((message) => !existingIds.has(message.id));
-        return olderMessages.length ? [...olderMessages, ...items] : items;
-      });
-      return nextMessages;
-    }
-    pendingBottomScrollRef.current = "auto";
-    setMessages(nextMessages);
-    return nextMessages;
-  }, []);
-
-  const isMessageListNearBottom = () => {
-    const list = messageListRef.current;
-    if (!list) return true;
-    return list.scrollHeight - list.scrollTop - list.clientHeight <= SHIPMENT_CHAT_BOTTOM_THRESHOLD_PX;
+  const updateRow = (rowId: string, updates: Partial<ShipmentV2PermitRow>) => {
+    setRows((current) => current.map((row) => (row.id === rowId ? { ...row, ...updates } : row)));
   };
 
-  const scrollMessageListToBottom = (behavior: ScrollBehavior) => {
-    const applyScroll = () => {
-      const list = messageListRef.current;
-      messagesEndRef.current?.scrollIntoView({ behavior, block: "end" });
-      if (!list) return;
-      if (behavior === "smooth") {
-        list.scrollTo({ top: list.scrollHeight, behavior });
-        return;
-      }
-      list.scrollTop = list.scrollHeight;
-    };
-    applyScroll();
-    window.requestAnimationFrame(() => {
-      applyScroll();
-      window.requestAnimationFrame(applyScroll);
+  const addRow = () => {
+    setRows((current) => [
+      ...current,
+      { id: `permit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, permitName: "", permitState: "" },
+    ]);
+  };
+
+  const removeRow = (rowId: string) => {
+    setRows((current) => {
+      const next = current.filter((row) => row.id !== rowId);
+      return next.length ? next : [{ id: "permit-empty", permitName: "", permitState: "" }];
     });
   };
 
-  const loadOlderMessages = async () => {
-    const oldestMessage = messages[0];
-    if (!thread?.id || !oldestMessage || !hasMoreMessages || historyLoadingRef.current) return;
-    const list = messageListRef.current;
-    historyScrollRestoreRef.current = list
-      ? { previousHeight: list.scrollHeight, previousTop: list.scrollTop }
-      : null;
-    historyLoadingRef.current = true;
-    try {
-      const olderMessages = await loadMessages(thread.id, { before: oldestMessage.id, mode: "history" });
-      if (!olderMessages?.length) {
-        historyScrollRestoreRef.current = null;
-      }
-    } catch (nextError) {
-      historyScrollRestoreRef.current = null;
-      setError(nextError instanceof Error ? nextError.message : "Could not load older shipment chat messages.");
-    } finally {
-      historyLoadingRef.current = false;
-    }
+  const handleSave = () => {
+    const permitRows = rows
+      .map((row) => ({
+        permitName: row.permitName.trim(),
+        permitState: (row.permitState || "").trim(),
+      }))
+      .filter((row) => row.permitName);
+    onSave({ permitRows });
+    setActiveRowId(null);
+    setIsEditing(false);
   };
 
-  const handleMessageListScroll = () => {
-    const list = messageListRef.current;
-    if (!list || list.scrollHeight <= list.clientHeight) return;
-    if (list.scrollTop <= SHIPMENT_CHAT_HISTORY_TOP_THRESHOLD_PX) {
-      void loadOlderMessages();
-    }
+  const savedRows = data.permitRows || [];
+
+  return (
+    <div className="space-y-2.5">
+      {isEditing ? (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] font-black text-muted-foreground sm:text-xs">ردیف‌های مجوز</p>
+            <Button type="button" variant="outline" data-testid="shipment-v2-permits-add" className="h-7 rounded-md px-2.5 text-[10px] font-black sm:h-8 sm:text-[11px]" onClick={addRow}>
+              افزودن مجوز
+            </Button>
+          </div>
+          {rows.map((row, index) => {
+            const suggestions = activeRowId === row.id ? getPermitSuggestions(row.permitName) : [];
+            return (
+              <div key={row.id} className="rounded-lg border border-border bg-muted/20 p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[10px] font-black text-muted-foreground">مجوز {(index + 1).toLocaleString("fa-IR")}</p>
+                  <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-md text-muted-foreground hover:text-red-600" onClick={() => removeRow(row.id)} aria-label={`حذف مجوز ${index + 1}`}>
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+                <div className="mt-1.5 grid gap-1.5 sm:grid-cols-[minmax(0,1.3fr)_minmax(0,0.8fr)]">
+                  <div className="relative">
+                    <Input
+                      data-testid={`shipment-v2-permit-row-${index}-name`}
+                      className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+                      placeholder="نام مجوز"
+                      value={row.permitName}
+                      onFocus={() => setActiveRowId(row.id)}
+                      onBlur={() => window.setTimeout(() => setActiveRowId((current) => (current === row.id ? null : current)), 120)}
+                      onChange={(event) => {
+                        updateRow(row.id, { permitName: event.target.value });
+                        setActiveRowId(row.id);
+                      }}
+                    />
+                    {suggestions.length ? (
+                      <div
+                        data-testid={`shipment-v2-permit-row-${index}-suggestions`}
+                        className="absolute right-0 left-0 top-full z-20 mt-1 max-h-40 overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-xl"
+                      >
+                        {suggestions.map((suggestion, suggestionIndex) => (
+                          <button
+                            key={suggestion}
+                            type="button"
+                            data-testid={`shipment-v2-permit-row-${index}-suggestion-${suggestionIndex}`}
+                            className="block w-full rounded-md px-2 py-1.5 text-right text-[11px] font-bold leading-5 text-popover-foreground hover:bg-muted"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => {
+                              updateRow(row.id, { permitName: suggestion });
+                              setActiveRowId(null);
+                            }}
+                          >
+                            {suggestion}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <Input
+                    data-testid={`shipment-v2-permit-row-${index}-state`}
+                    className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+                    placeholder="وضعیت مجوز"
+                    value={row.permitState || ""}
+                    onChange={(event) => updateRow(row.id, { permitState: event.target.value })}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {savedRows.length ? (
+            savedRows.map((row, index) => (
+              <div key={`${row.permitName}-${index}`} className="flex min-w-0 items-start gap-2 rounded-lg border border-border bg-muted/20 p-2.5">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-black text-primary">
+                  {(index + 1).toLocaleString("fa-IR")}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="break-words text-[11px] font-black leading-5 text-foreground sm:text-xs">{row.permitName}</p>
+                  <p className="mt-0.5 break-words text-[10px] font-bold leading-4 text-muted-foreground">
+                    وضعیت: {displayValue(row.permitState)}
+                  </p>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="flex items-center gap-2 rounded-lg border border-dashed border-border bg-muted/20 p-2.5 text-[11px] font-bold leading-5 text-muted-foreground">
+              <ShieldCheck className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span>هنوز مجوزی برای این محموله ثبت نشده است.</span>
+            </div>
+          )}
+        </div>
+      )}
+      <SectionActions
+        canUpdate={canUpdate}
+        isSaving={isSaving}
+        isEditing={isEditing}
+        testIdPrefix="shipment-v2-permits"
+        onEdit={() => setIsEditing(true)}
+        onCancel={() => {
+          resetDraft();
+          setActiveRowId(null);
+          setIsEditing(false);
+        }}
+        onSave={handleSave}
+      />
+    </div>
+  );
+}
+
+function PaymentsSection({
+  data,
+  canUpdate,
+  isSaving,
+  onSave,
+}: {
+  data: ShipmentV2PaymentsSection;
+  canUpdate: boolean;
+  isSaving: boolean;
+  onSave: (payload: ShipmentV2PaymentsSection) => void;
+}) {
+  const [isEditing, setIsEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState<PaymentsDraft>(() => paymentsDraftFromData(data || {}));
+
+  React.useEffect(() => {
+    if (!isEditing) setDraft(paymentsDraftFromData(data || {}));
+  }, [data, isEditing]);
+
+  const updateDraft = (updates: Partial<PaymentsDraft>) => {
+    setDraft((current) => ({ ...current, ...updates }));
   };
 
-  React.useEffect(() => {
-    if (!canUseChat) return;
-    let cancelled = false;
-    setIsLoading(true);
-    setError("");
-    setMessages([]);
-    setHasMoreMessages(false);
-    historyLoadingRef.current = false;
-    historyScrollRestoreRef.current = null;
-    pendingBottomScrollRef.current = "auto";
-    initialBottomScrolledThreadRef.current = "";
-    fetch(`/api/shipments/${encodeURIComponent(shipmentId)}/chat-thread`)
-      .then(async (response) => {
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok || !payload.ok) throw new Error(payload.error?.message || "Could not open shipment chat.");
-        if (cancelled) return null;
-        setThread(payload.data);
-        await loadMessages(payload.data.id);
-        if (!cancelled) {
-          window.setTimeout(() => scrollMessageListToBottom("auto"), 0);
-          window.setTimeout(() => scrollMessageListToBottom("auto"), 150);
-        }
-        return payload.data;
-      })
-      .catch((nextError) => {
-        if (!cancelled) setError(nextError instanceof Error ? nextError.message : "Could not open shipment chat.");
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [canUseChat, loadMessages, shipmentId]);
+  const customsAmountCurrency = draft.customsAmountCurrency || data.customsAmountCurrency || "IRR";
+  const customsDifferenceCurrency = draft.customsDifferenceCurrency || data.customsDifferenceCurrency || "IRR";
+  const customsTaxCurrency = draft.customsTaxCurrency || data.customsTaxCurrency || "IRR";
+  const taxStatus = draft.customsTaxStatus || null;
+  const taxStatusLabel = data.customsTaxStatus ? customsTaxStatusLabels[data.customsTaxStatus] : "";
+  const taxDisplay =
+    data.customsTaxStatus === "GOOD_STANDING"
+      ? "—"
+      : displayMoneyValue(data.customsTaxAmount, data.customsTaxCurrency);
+  const paidStatusText = (isPaid?: boolean) => (isPaid ? "پرداخت شده" : "پرداخت نشده");
+  const PaymentSummaryRow = ({
+    label,
+    value,
+    status,
+    testId,
+  }: {
+    label: string;
+    value: React.ReactNode;
+    status: string;
+    testId: string;
+  }) => (
+    <div data-testid={testId} className="min-w-0 rounded-lg border border-border bg-muted/20 px-2.5 py-2 sm:px-3">
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[9px] font-black leading-4 text-muted-foreground sm:text-[10px]">{label}</p>
+          <p className="mt-0.5 text-[10px] font-bold leading-4 text-muted-foreground">{status}</p>
+        </div>
+        <div className="min-w-0 max-w-[58%] break-words text-left text-[11px] font-black leading-5 text-foreground sm:text-xs" dir="auto">
+          {value}
+        </div>
+      </div>
+    </div>
+  );
 
-  React.useEffect(() => {
-    if (!canUseChat || !thread?.id) return;
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/chat`);
-    wsRef.current = ws;
-    ws.onmessage = (event) => {
-      const incoming = JSON.parse(event.data);
-      if (incoming.type === "connection.ready") {
-        ws.send(JSON.stringify({ type: "thread.join", payload: { threadId: thread.id } }));
-        return;
-      }
-      if (incoming.type === "message.created" && incoming.payload?.threadId === thread.id) {
-        const message = incoming.payload as ShipmentChatMessage;
-        const shouldScrollToBottom = message.senderId === currentUser?.id || isMessageListNearBottom();
-        setMessages((items) => {
-          if (items.some((item) => item.id === message.id)) return items;
-          if (shouldScrollToBottom) pendingBottomScrollRef.current = "smooth";
-          return [...items, message];
-        });
-        return;
-      }
-      if (incoming.type === "message.ack") {
-        setIsSending(false);
-        setDraft("");
-        setError("");
-        return;
-      }
-      if (incoming.type === "error") {
-        setIsSending(false);
-        setError(incoming.error?.message || "Shipment chat action failed.");
-      }
-    };
-    ws.onclose = () => {
-      wsRef.current = null;
-      setIsSending(false);
-    };
-    return () => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "thread.leave", payload: { threadId: thread.id } }));
-      }
-      ws.close();
-      wsRef.current = null;
-    };
-  }, [canUseChat, currentUser?.id, thread?.id]);
-
-  React.useLayoutEffect(() => {
-    const list = messageListRef.current;
-    if (!list || messages.length === 0) return;
-    const restore = historyScrollRestoreRef.current;
-    if (restore) {
-      list.scrollTop = list.scrollHeight - restore.previousHeight + restore.previousTop;
-      historyScrollRestoreRef.current = null;
-    }
-  }, [messages]);
-
-  React.useEffect(() => {
-    if (!thread?.id || messages.length === 0) return;
-    if (initialBottomScrolledThreadRef.current !== thread.id) {
-      scrollMessageListToBottom("auto");
-      pendingBottomScrollRef.current = null;
-      initialBottomScrolledThreadRef.current = thread.id;
+  const handleSave = () => {
+    const customsTaxAmount = optionalNumber(draft.customsTaxAmount);
+    if (draft.customsTaxStatus === "PAYABLE" && customsTaxAmount === null) {
+      toast.error("مبلغ مالیات گمرکی را وارد کنید.");
       return;
     }
-    const behavior = pendingBottomScrollRef.current;
-    if (!behavior) return;
-    scrollMessageListToBottom(behavior);
-    pendingBottomScrollRef.current = null;
-  }, [messages, thread?.id]);
-
-  React.useEffect(() => {
-    const lastMessage = messages[messages.length - 1];
-    if (!thread?.id || !lastMessage) return;
-    fetch(`/api/chat/threads/${encodeURIComponent(thread.id)}/read`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messageId: lastMessage.id }),
-    }).catch(() => {});
-  }, [messages, thread?.id]);
-
-  if (!canUseChat) return null;
-
-  const sendMessage = async (event: React.FormEvent) => {
-    event.preventDefault();
-    const body = draft.trim();
-    if (!body || !thread?.id || isSending) return;
-    setIsSending(true);
-    setError("");
-    const clientMessageId = `shipment-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const socket = wsRef.current;
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({
-        type: "message.send",
-        requestId: clientMessageId,
-        payload: { threadId: thread.id, body, clientMessageId },
-      }));
-      return;
-    }
-    try {
-      const response = await fetch(`/api/chat/threads/${encodeURIComponent(thread.id)}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body, clientMessageId }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || !payload.ok) throw new Error(payload.error?.message || "Could not send shipment chat message.");
-      pendingBottomScrollRef.current = "smooth";
-      setMessages((items) => items.some((item) => item.id === payload.data.id) ? items : [...items, payload.data]);
-      setDraft("");
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Could not send shipment chat message.");
-    } finally {
-      setIsSending(false);
-    }
+    onSave({
+      ...draft,
+      customsPaymentPaid: Boolean(draft.customsPaymentPaid),
+      customsAmount: optionalNumber(draft.customsAmount),
+      customsAmountCurrency: draft.customsAmountCurrency || "IRR",
+      customsDifferenceAmount: optionalNumber(draft.customsDifferenceAmount),
+      customsDifferenceCurrency: draft.customsDifferenceCurrency || "IRR",
+      customsDifferencePaid: Boolean(draft.customsDifferencePaid),
+      customsTaxAmount: draft.customsTaxStatus === "GOOD_STANDING" ? 0 : customsTaxAmount,
+      customsTaxCurrency: draft.customsTaxCurrency || "IRR",
+      customsTaxPaid: draft.customsTaxStatus === "GOOD_STANDING" ? false : Boolean(draft.customsTaxPaid),
+    });
+    setIsEditing(false);
   };
 
   return (
-    <Card className="overflow-hidden rounded-2xl border-border/70 bg-card shadow-sm" data-testid="shipment-chat-panel">
-      <CardHeader className="border-b border-border/50 bg-muted/20 p-4">
-        <CardTitle className="flex items-center justify-between gap-3 text-sm font-black">
-          <span className="flex min-w-0 items-center gap-2">
-            <MessageSquare className="h-4 w-4 shrink-0 text-primary" />
-            <span className="truncate">گفتگوی محموله</span>
-          </span>
-          {thread?.id && (
-            <Button
-              type="button"
-              variant="outline"
-              className="h-8 shrink-0 rounded-lg px-3 text-[11px] font-black"
-              onClick={() => navigate(`/chat?threadId=${encodeURIComponent(thread.id)}`)}
-              data-testid="shipment-chat-full-link"
-            >
-              مشاهده گفتگوی کامل
-            </Button>
-          )}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3 p-4">
-        <div className="rounded-xl bg-muted/25 p-3">
-          <div className="mb-2 flex items-center justify-between gap-3 text-[11px] font-bold text-muted-foreground">
-            <span className="truncate">محموله {thread?.shipmentCode || shipmentCode}</span>
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+    <div className="space-y-2.5">
+      {isEditing ? (
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <label className="flex items-center justify-between gap-2 text-[10px] font-bold text-muted-foreground sm:text-xs">
+              <span>مبلغ گمرکی</span>
+              <span className="flex items-center gap-1.5 text-[10px] font-bold">
+                <span>{paidStatusText(draft.customsPaymentPaid)}</span>
+                <input
+                  data-testid="shipment-v2-payments-customs-paid"
+                  type="checkbox"
+                  className="h-3.5 w-3.5 rounded border-border accent-primary"
+                  checked={Boolean(draft.customsPaymentPaid)}
+                  onChange={(event) => updateDraft({ customsPaymentPaid: event.target.checked })}
+                />
+              </span>
+            </label>
+            <div className="grid grid-cols-[minmax(0,1fr)_104px] gap-1.5">
+              <Input
+                data-testid="shipment-v2-payments-customs-amount"
+                className="h-8 min-w-0 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+                inputMode="decimal"
+                value={draft.customsAmount}
+                onChange={(event) => updateDraft({ customsAmount: event.target.value })}
+              />
+              <select
+                data-testid="shipment-v2-payments-customs-amount-currency"
+                className={compactSelectClassName}
+                value={customsAmountCurrency}
+                onChange={(event) => updateDraft({ customsAmountCurrency: event.target.value as ShipmentV2CurrencyCode })}
+              >
+                {currencyOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {currencyLabels[option]}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-          <div
-            ref={messageListRef}
-            className="max-h-48 space-y-2 overflow-y-auto pr-1"
-            data-testid="shipment-chat-message-list"
-            onScroll={handleMessageListScroll}
-          >
-            {!isLoading && messages.length === 0 && (
-              <p className="py-6 text-center text-xs font-bold text-muted-foreground">هنوز پیامی ثبت نشده است.</p>
-            )}
-            {messages.map((message) => {
-              const isMine = message.senderId === currentUser?.id;
-              return (
-                <div key={message.id} className={cn("flex flex-col", isMine ? "items-start" : "items-end")}>
-                  {!isMine && <span className="mb-1 text-[10px] font-black text-muted-foreground">{message.senderName}</span>}
-                  <div
-                    className={cn(
-                      "max-w-[90%] whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-[11px] font-bold leading-5 [overflow-wrap:anywhere]",
-                      isMine ? "bg-primary text-primary-foreground" : "border border-border bg-background text-foreground"
-                    )}
-                    data-testid="shipment-chat-message-bubble"
-                  >
-                    {shipmentChatMessageText(message)}
-                  </div>
-                </div>
-              );
-            })}
-            <div ref={messagesEndRef} />
+
+          <div className="space-y-1.5">
+            <label className="flex items-center justify-between gap-2 text-[10px] font-bold text-muted-foreground sm:text-xs">
+              <span>تفاوت گمرکی</span>
+              <span className="flex items-center gap-1.5 text-[10px] font-bold">
+                <span>{paidStatusText(draft.customsDifferencePaid)}</span>
+                <input
+                  data-testid="shipment-v2-payments-customs-difference-paid"
+                  type="checkbox"
+                  className="h-3.5 w-3.5 rounded border-border accent-primary"
+                  checked={Boolean(draft.customsDifferencePaid)}
+                  onChange={(event) => updateDraft({ customsDifferencePaid: event.target.checked })}
+                />
+              </span>
+            </label>
+            <div className="grid grid-cols-[minmax(0,1fr)_104px] gap-1.5">
+              <Input
+                data-testid="shipment-v2-payments-customs-difference"
+                className="h-8 min-w-0 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+                inputMode="decimal"
+                value={draft.customsDifferenceAmount}
+                onChange={(event) => updateDraft({ customsDifferenceAmount: event.target.value })}
+              />
+              <select
+                data-testid="shipment-v2-payments-customs-difference-currency"
+                className={compactSelectClassName}
+                value={customsDifferenceCurrency}
+                onChange={(event) => updateDraft({ customsDifferenceCurrency: event.target.value as ShipmentV2CurrencyCode })}
+              >
+                {currencyOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {currencyLabels[option]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-bold text-muted-foreground sm:text-xs">وضعیت مالیات گمرکی</Label>
+            <select
+              data-testid="shipment-v2-payments-tax-status"
+              className={compactSelectClassName}
+              value={taxStatus || ""}
+              onChange={(event) => {
+                const nextStatus = (event.target.value || null) as ShipmentV2CustomsTaxStatus | null;
+                updateDraft({
+                  customsTaxStatus: nextStatus,
+                  customsTaxAmount: nextStatus === "GOOD_STANDING" ? "0" : draft.customsTaxAmount,
+                  customsTaxPaid: nextStatus === "GOOD_STANDING" ? false : draft.customsTaxPaid,
+                });
+              }}
+            >
+              <option value="">ثبت نشده</option>
+              {customsTaxStatusOptions.map((option) => (
+                <option key={option} value={option}>
+                  {customsTaxStatusLabels[option]}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="flex items-center justify-between gap-2 text-[10px] font-bold text-muted-foreground sm:text-xs">
+              <span>مبلغ مالیات گمرکی</span>
+              <span className="flex items-center gap-1.5 text-[10px] font-bold">
+                <span>{taxStatus === "GOOD_STANDING" ? "بدون پرداخت" : paidStatusText(draft.customsTaxPaid)}</span>
+                <input
+                  data-testid="shipment-v2-payments-tax-paid"
+                  type="checkbox"
+                  className="h-3.5 w-3.5 rounded border-border accent-primary disabled:opacity-50"
+                  disabled={taxStatus !== "PAYABLE"}
+                  checked={taxStatus === "PAYABLE" ? Boolean(draft.customsTaxPaid) : false}
+                  onChange={(event) => updateDraft({ customsTaxPaid: event.target.checked })}
+                />
+              </span>
+            </label>
+            <div className="grid grid-cols-[minmax(0,1fr)_104px] gap-1.5">
+              <Input
+                data-testid="shipment-v2-payments-tax-amount"
+                className="h-8 min-w-0 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+                inputMode="decimal"
+                disabled={taxStatus !== "PAYABLE"}
+                value={taxStatus === "GOOD_STANDING" ? "—" : taxStatus === "PAYABLE" ? draft.customsTaxAmount : ""}
+                onChange={(event) => updateDraft({ customsTaxAmount: event.target.value })}
+              />
+              <select
+                data-testid="shipment-v2-payments-tax-currency"
+                className={compactSelectClassName}
+                disabled={taxStatus !== "PAYABLE"}
+                value={customsTaxCurrency}
+                onChange={(event) => updateDraft({ customsTaxCurrency: event.target.value as ShipmentV2CurrencyCode })}
+              >
+                {currencyOptions.map((option) => (
+                  <option key={option} value={option}>
+                    {currencyLabels[option]}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
-        {error && (
-          <div className="rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[11px] font-bold text-destructive">
-            {error}
-          </div>
-        )}
-        <form onSubmit={sendMessage} className="flex items-center gap-2">
-          <Input
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            disabled={!thread?.id || isLoading}
-            maxLength={3000}
-            placeholder="پیام داخلی محموله..."
-            className="h-10 min-w-0 flex-1 rounded-lg text-xs font-bold"
-            data-testid="shipment-chat-message-input"
+      ) : (
+        <div className="space-y-2">
+          <PaymentSummaryRow
+            label="مبلغ گمرکی"
+            testId="shipment-v2-payments-customs-amount-value"
+            value={displayMoneyValue(data.customsAmount, data.customsAmountCurrency)}
+            status={paidStatusText(data.customsPaymentPaid)}
           />
-          <Button
-            type="submit"
-            size="icon"
-            className="h-10 w-10 shrink-0 rounded-lg"
-            disabled={!thread?.id || !draft.trim() || isSending || isLoading}
-            data-testid="shipment-chat-send-button"
-            aria-label="ارسال پیام محموله"
-          >
-            {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </Button>
-        </form>
-      </CardContent>
-    </Card>
+          <PaymentSummaryRow
+            label="تفاوت گمرکی"
+            testId="shipment-v2-payments-customs-difference-value"
+            value={displayMoneyValue(data.customsDifferenceAmount, data.customsDifferenceCurrency)}
+            status={paidStatusText(data.customsDifferencePaid)}
+          />
+          <PaymentSummaryRow
+            label={`مالیات گمرکی${taxStatusLabel ? ` - ${taxStatusLabel}` : ""}`}
+            testId="shipment-v2-payments-tax-amount-value"
+            value={taxDisplay}
+            status={data.customsTaxStatus === "GOOD_STANDING" ? "بدون پرداخت" : paidStatusText(data.customsTaxPaid)}
+          />
+          <span data-testid="shipment-v2-payments-tax-status-value" className="sr-only">
+            {displayValue(taxStatusLabel)}
+          </span>
+        </div>
+      )}
+      <SectionActions
+        canUpdate={canUpdate}
+        isSaving={isSaving}
+        isEditing={isEditing}
+        testIdPrefix="shipment-v2-payments"
+        onEdit={() => setIsEditing(true)}
+        onCancel={() => {
+          setDraft(paymentsDraftFromData(data || {}));
+          setIsEditing(false);
+        }}
+        onSave={handleSave}
+      />
+    </div>
   );
-};
+}
+
+function BankingSection({
+  data,
+  canUpdate,
+  isSaving,
+  onSave,
+}: {
+  data: ShipmentV2BankingSection;
+  canUpdate: boolean;
+  isSaving: boolean;
+  onSave: (payload: ShipmentV2BankingSection) => void;
+}) {
+  const [isEditing, setIsEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState<ShipmentV2BankingSection>(data || {});
+
+  React.useEffect(() => {
+    if (!isEditing) setDraft(data || {});
+  }, [data, isEditing]);
+
+  const updateDraft = (updates: Partial<ShipmentV2BankingSection>) => {
+    setDraft((current) => ({ ...current, ...updates }));
+  };
+
+  const updateNumericDraft = (key: keyof ShipmentV2BankingSection, value: string) => {
+    updateDraft({ [key]: value.replace(/\D/g, "") } as Partial<ShipmentV2BankingSection>);
+  };
+
+  return (
+    <div className="space-y-2.5">
+      {isEditing ? (
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-bold text-muted-foreground sm:text-xs">نام بانک</Label>
+            <Input
+              data-testid="shipment-v2-banking-bank-name"
+              className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+              value={draft.bankName || ""}
+              onChange={(event) => updateDraft({ bankName: event.target.value })}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-bold text-muted-foreground sm:text-xs">کد شعبه</Label>
+            <Input
+              data-testid="shipment-v2-banking-branch-code"
+              className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+              inputMode="numeric"
+              value={draft.branchCode || ""}
+              onChange={(event) => updateNumericDraft("branchCode", event.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-bold text-muted-foreground sm:text-xs">نام شعبه</Label>
+            <Input
+              data-testid="shipment-v2-banking-branch-name"
+              className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+              value={draft.branchName || ""}
+              onChange={(event) => updateDraft({ branchName: event.target.value })}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-bold text-muted-foreground sm:text-xs">کد ابزار پرداخت</Label>
+            <Input
+              data-testid="shipment-v2-banking-payment-instrument-code"
+              className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+              inputMode="numeric"
+              value={draft.paymentInstrumentCode || ""}
+              onChange={(event) => updateNumericDraft("paymentInstrumentCode", event.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label className="text-[10px] font-bold text-muted-foreground sm:text-xs">کد ساتا</Label>
+            <Input
+              data-testid="shipment-v2-banking-sata-code"
+              className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+              inputMode="numeric"
+              value={draft.sataCode || ""}
+              onChange={(event) => updateNumericDraft("sataCode", event.target.value)}
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
+          <BaseInfoCard label="نام بانک" testId="shipment-v2-banking-bank-name-value">
+            {displayValue(data.bankName)}
+          </BaseInfoCard>
+          <BaseInfoCard label="کد شعبه" testId="shipment-v2-banking-branch-code-value">
+            <span dir="ltr">{displayValue(data.branchCode)}</span>
+          </BaseInfoCard>
+          <BaseInfoCard label="نام شعبه" testId="shipment-v2-banking-branch-name-value">
+            {displayValue(data.branchName)}
+          </BaseInfoCard>
+          <BaseInfoCard label="کد ابزار پرداخت" testId="shipment-v2-banking-payment-instrument-code-value">
+            <span dir="ltr">{displayValue(data.paymentInstrumentCode)}</span>
+          </BaseInfoCard>
+          <BaseInfoCard label="کد ساتا" testId="shipment-v2-banking-sata-code-value" className="col-span-2 lg:col-span-1">
+            <span dir="ltr">{displayValue(data.sataCode)}</span>
+          </BaseInfoCard>
+        </div>
+      )}
+      <SectionActions
+        canUpdate={canUpdate}
+        isSaving={isSaving}
+        isEditing={isEditing}
+        testIdPrefix="shipment-v2-banking"
+        onEdit={() => setIsEditing(true)}
+        onCancel={() => {
+          setDraft(data || {});
+          setIsEditing(false);
+        }}
+        onSave={() => {
+          onSave({
+            bankName: draft.bankName || "",
+            branchCode: draft.branchCode || "",
+            branchName: draft.branchName || "",
+            paymentInstrumentCode: draft.paymentInstrumentCode || "",
+            sataCode: draft.sataCode || "",
+          });
+          setIsEditing(false);
+        }}
+      />
+    </div>
+  );
+}
+
+function NotesSection({
+  data,
+  canUpdate,
+  isSaving,
+  onSave,
+}: {
+  data: ShipmentV2NotesSection;
+  canUpdate: boolean;
+  isSaving: boolean;
+  onSave: (payload: ShipmentV2NotesSection) => void;
+}) {
+  const [isEditing, setIsEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState(data.internalNote || "");
+
+  React.useEffect(() => {
+    if (!isEditing) setDraft(data.internalNote || "");
+  }, [data.internalNote, isEditing]);
+
+  return (
+    <div className="space-y-2.5">
+      {isEditing ? (
+        <textarea
+          data-testid="shipment-v2-notes-input"
+          className="min-h-32 w-full resize-y rounded-md border border-border bg-background p-3 text-xs leading-6 outline-none focus:ring-1 focus:ring-primary/50"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+      ) : (
+        <div className="min-h-20 rounded-lg border border-border bg-muted/25 p-3 text-xs font-bold leading-6 text-foreground">
+          {draft.trim() || "یادداشتی ثبت نشده است."}
+        </div>
+      )}
+      <SectionActions
+        canUpdate={canUpdate}
+        isSaving={isSaving}
+        isEditing={isEditing}
+        testIdPrefix="shipment-v2-notes"
+        onEdit={() => setIsEditing(true)}
+        onCancel={() => {
+          setDraft(data.internalNote || "");
+          setIsEditing(false);
+        }}
+        onSave={() => {
+          onSave({ internalNote: draft });
+          setIsEditing(false);
+        }}
+      />
+    </div>
+  );
+}
+
+function EmptyDetailSection() {
+  return (
+    <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-center">
+      <FileCheck2 className="mx-auto h-5 w-5 text-muted-foreground" />
+      <p className="mt-2 text-xs font-bold text-muted-foreground">هنوز فیلدی برای این بخش در فعال نشده است.</p>
+    </div>
+  );
+}
 
 export default function ShipmentDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const shipments = useMockStore(state => state.shipments);
-  const shipmentSteps = useMockStore(state => state.shipmentSteps);
-  const tasks = useMockStore(state => state.tasks);
-  const users = useMockStore(state => state.users);
-  const loadCurrentUserRecords = useMockStore(state => state.loadCurrentUserRecords);
-  const documents = useMockStore(state => state.documents);
-  const customers = useMockStore(state => state.customers);
-  const currentUser = useMockStore(state => state.currentUser);
-  const shipmentProgress = useAppDataStore(state => id ? state.shipmentProgressById[id] : null);
-  const organizationMembers = useAppDataStore(state => state.organizationMembers);
-  const refreshShipmentProgress = useAppDataStore(state => state.refreshShipmentProgress);
-  const startShipmentWorkflow = useAppDataStore(state => state.startShipmentWorkflow);
-  const updateShipmentWorkflowCurrent = useAppDataStore(state => state.updateShipmentWorkflowCurrent);
-  const addShipmentWorkflowBlocker = useAppDataStore(state => state.addShipmentWorkflowBlocker);
-  const resolveShipmentWorkflowBlocker = useAppDataStore(state => state.resolveShipmentWorkflowBlocker);
-  const fetchOrganizationMembers = useAppDataStore(state => state.fetchOrganizationMembers);
-  const refreshTasks = useAppDataStore(state => state.refreshTasks);
-  const assignTask = useAppDataStore(state => state.assignTask);
-  const updateTaskStatusRemote = useAppDataStore(state => state.updateTaskStatusRemote);
-  
-  const storeShipment = React.useMemo(() => shipments.find(s => s.id === id), [shipments, id]);
-  const [remoteShipmentResult, setRemoteShipmentResult] = useState<{ routeId: string; shipment: Shipment | null } | null>(null);
-  const [isShipmentLoading, setIsShipmentLoading] = useState(false);
-  const [shipmentLoadError, setShipmentLoadError] = useState("");
-  const remoteShipment = remoteShipmentResult?.routeId === id ? remoteShipmentResult.shipment : null;
-  const shipment = storeShipment || remoteShipment;
-  const steps = React.useMemo(() => 
-    shipmentSteps.filter(s => s.shipmentId === id).sort((a, b) => a.order - b.order),
-    [shipmentSteps, id]
-  );
-  const shipmentTasks = React.useMemo(() => 
-    tasks.filter(t => t.shipmentId === id),
-    [tasks, id]
-  );
+  const currentUser = useAppDataStore((state) => state.currentUser);
+  const users = useAppDataStore((state) => state.users);
+  const customers = useAppDataStore((state) => state.customers);
+  const shipments = useAppDataStore((state) => state.shipments);
+  const commercialCards = useAppDataStore((state) => state.commercialCards);
+  const canUpdate = Boolean(currentUser?.permissions?.includes("shipments.update"));
+  const [data, setData] = React.useState<ShipmentV2ProfileResponse | null>(null);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [isInitializing, setIsInitializing] = React.useState(false);
+  const [savingSection, setSavingSection] = React.useState<ShipmentV2SectionKey | null>(null);
+  const [errorMessage, setErrorMessage] = React.useState("");
+  const [documentCount, setDocumentCount] = React.useState<number | null>(null);
+  const [isDocumentCountLoading, setIsDocumentCountLoading] = React.useState(false);
+  const [malvaniProfiles, setMalvaniProfiles] = React.useState<MalvaniProfile[]>([]);
+  const [isMalvaniLoading, setIsMalvaniLoading] = React.useState(false);
+  const profileFlowCode = data?.profile?.flowCode || "IMPORT_SHIP";
 
-  const [isAssignDialogOpen, setIsAssignDialogOpen] = useState(false);
-  const [selectedStep, setSelectedStep] = useState<any>(null);
-  const [isNoteDialogOpen, setIsNoteDialogOpen] = useState(false);
-  const [editingNote, setEditingNote] = useState("");
-  const [isProgressLoading, setIsProgressLoading] = useState(false);
-  const [progressDialogOpen, setProgressDialogOpen] = useState(false);
-  const [progressDialogMode, setProgressDialogMode] = useState<"current" | "complete" | "note">("current");
-  const [progressDialogStep, setProgressDialogStep] = useState<ShipmentWorkflowStep | null>(null);
-  const [blockerDialogOpen, setBlockerDialogOpen] = useState(false);
-  const [blockerDialogStep, setBlockerDialogStep] = useState<ShipmentWorkflowStep | null>(null);
-  const [workflowTaskDialogOpen, setWorkflowTaskDialogOpen] = useState(false);
-  const [workflowTaskContext, setWorkflowTaskContext] = useState<{
-    step?: ShipmentWorkflowStep;
-    blocker?: ShipmentWorkflowBlocker;
-    task?: Task;
-  }>({});
-  const [isWorkflowMembersLoading, setIsWorkflowMembersLoading] = useState(false);
-  const [workflowMembersError, setWorkflowMembersError] = useState("");
-  const [exitedArchiveDialogOpen, setExitedArchiveDialogOpen] = useState(false);
-  const [exitedArchiveReason, setExitedArchiveReason] = useState("");
-  const [restoreExitedDialogOpen, setRestoreExitedDialogOpen] = useState(false);
-  const [postExitDraft, setPostExitDraft] = useState<{
-    postExitStatus: PostExitStatus;
-    postExitNote: string;
-    postExitFollowUpAt: string;
-  }>({
-    postExitStatus: "needs_follow_up",
-    postExitNote: "",
-    postExitFollowUpAt: "",
-  });
-  const [isPostExitSaving, setIsPostExitSaving] = useState(false);
-  const [isExitedArchiveSaving, setIsExitedArchiveSaving] = useState(false);
-  const [assignForm, setAssignForm] = useState({
-    userId: users[0]?.id || "",
-    priority: "MEDIUM" as const,
-    dueDate: format(addDays(new Date(), 7), "yyyy/MM/dd"),
-    deadline: "09:00",
-    description: ""
-  });
+  React.useLayoutEffect(() => {
+    const scrollToHeader = () => {
+      document.querySelector<HTMLElement>(".app-main")?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    };
+    scrollToHeader();
+    const frame = window.requestAnimationFrame(scrollToHeader);
+    const timer = window.setTimeout(scrollToHeader, 80);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [id]);
 
-  const loadWorkflowMembers = React.useCallback(async () => {
-    setIsWorkflowMembersLoading(true);
-    setWorkflowMembersError("");
+  const loadProfile = React.useCallback(async () => {
+    if (!id) return;
+    setIsLoading(true);
+    setErrorMessage("");
     try {
-      await fetchOrganizationMembers();
+      const response = await shipmentV2Api.get(id);
+      setData(response);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not load organization members.";
-      setWorkflowMembersError(message);
-      throw error;
+      console.error("Load Shipment failed", error);
+      const message = error instanceof ApiError && error.status === 404
+        ? "محموله پیدا نشد."
+        : "بارگذاری پرونده ناموفق بود.";
+      setErrorMessage(message);
     } finally {
-      setIsWorkflowMembersLoading(false);
+      setIsLoading(false);
     }
-  }, [fetchOrganizationMembers]);
+  }, [id]);
+
+  React.useEffect(() => {
+    void loadProfile();
+  }, [loadProfile]);
+
+  const loadMalvaniProfiles = React.useCallback(async () => {
+    setIsMalvaniLoading(true);
+    try {
+      const profiles = await businessEntitiesApi.listMalvaniProfiles();
+      setMalvaniProfiles(profiles);
+    } catch (error) {
+      console.error("Load shipment Malvani profiles failed", error);
+      toast.error("بارگیری فهرست ملوانی ناموفق بود.");
+    } finally {
+      setIsMalvaniLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (profileFlowCode === "IMPORT_LANJ") void loadMalvaniProfiles();
+  }, [loadMalvaniProfiles, profileFlowCode]);
 
   React.useEffect(() => {
     if (!id) return;
-    refreshShipmentProgress(id).catch((error) => {
-      console.error("Could not load shipment workflow progress.", error);
-    });
-    refreshTasks().catch((error) => {
-      console.error("Could not refresh shipment tasks.", error);
-    });
-    loadWorkflowMembers().catch((error) => {
-      console.error("Could not load organization members.", error);
-    });
-  }, [id, refreshShipmentProgress, refreshTasks, loadWorkflowMembers]);
-
-  React.useEffect(() => {
-    if (!id) return;
-    if (storeShipment) {
-      setIsShipmentLoading(false);
-      setShipmentLoadError("");
-      return;
-    }
-
-    let isCancelled = false;
-    setIsShipmentLoading(true);
-    setShipmentLoadError("");
-
-    shipmentApi.get(id)
-      .then((record) => {
-        if (isCancelled) return;
-        setRemoteShipmentResult({ routeId: id, shipment: record });
+    let isActive = true;
+    setIsDocumentCountLoading(true);
+    setDocumentCount(null);
+    apiGet<ShipmentDocument[]>(`/api/shipments/${encodeURIComponent(id)}/documents`)
+      .then((documents) => {
+        if (!isActive) return;
+        setDocumentCount(documents.filter((document) => !document.isArchived).length);
       })
       .catch((error) => {
-        if (isCancelled) return;
-        setRemoteShipmentResult({ routeId: id, shipment: null });
-        setShipmentLoadError(error instanceof Error ? error.message : "Could not load shipment.");
+        if (!isActive) return;
+        if (!(error instanceof ApiError && error.status === 403)) {
+          console.error("Load shipment document count failed", error);
+        }
+        setDocumentCount(null);
       })
       .finally(() => {
-        if (!isCancelled) setIsShipmentLoading(false);
+        if (isActive) setIsDocumentCountLoading(false);
       });
-
     return () => {
-      isCancelled = true;
+      isActive = false;
     };
-  }, [id, storeShipment]);
+  }, [id]);
 
-  React.useEffect(() => {
-    if (!shipment) return;
-    setPostExitDraft({
-      postExitStatus: shipment.postExitStatus || "needs_follow_up",
-      postExitNote: shipment.postExitNote || "",
-      postExitFollowUpAt: displayDate(shipment.postExitFollowUpAt),
-    });
-  }, [shipment?.id, shipment?.postExitStatus, shipment?.postExitNote, shipment?.postExitFollowUpAt]);
+  const initializeProfile = async () => {
+    if (!id) return;
+    setIsInitializing(true);
+    try {
+      const response = await shipmentV2Api.initialize(id);
+      setData(response);
+      toast.success("پرونده برای این محموله ساخته شد.");
+    } catch (error) {
+      console.error("Initialize Shipment failed", error);
+      toast.error("ساخت پرونده ناموفق بود.");
+    } finally {
+      setIsInitializing(false);
+    }
+  };
 
-  const refreshCurrentShipment = React.useCallback(async () => {
-    if (!id) return null;
-    const updated = await shipmentApi.get(id);
-    setRemoteShipmentResult({ routeId: id, shipment: updated });
-    await loadCurrentUserRecords();
-    return updated;
-  }, [id, loadCurrentUserRecords]);
+  const saveSection = async (sectionKey: ShipmentV2SectionKey, payload: ShipmentV2SectionPayload) => {
+    if (!id) return;
+    setSavingSection(sectionKey);
+    try {
+      const response = await shipmentV2Api.updateSection(id, sectionKey, payload);
+      setData(response);
+      toast.success("بخش پرونده ذخیره شد.");
+    } catch (error) {
+      console.error("Update Shipment section failed", error);
+      toast.error("ذخیره بخش پرونده ناموفق بود.");
+    } finally {
+      setSavingSection(null);
+    }
+  };
 
-  const visibleShipments = React.useMemo(() => {
-    if (!shipment || shipments.some(s => s.id === shipment.id)) return shipments;
-    return [shipment, ...shipments];
-  }, [shipments, shipment]);
-  const customer = React.useMemo(() => customers.find(c => c.id === shipment?.customerId), [customers, shipment?.customerId]);
-  const customerIdentifier = customer?.customerCode || customer?.code || shipment?.customerCode || shipment?.customerId || shipment?.customerName || "";
-  const customerShipments = React.useMemo(
-    () => visibleShipments.filter(s => s.customerId === shipment?.customerId),
-    [visibleShipments, shipment?.customerId]
-  );
-  const [isCustomerSummaryOpen, setIsCustomerSummaryOpen] = useState(false);
+  const updateShipmentSummary = React.useCallback((updated: Partial<ShipmentV2ShipmentSummary>) => {
+    setData((current) => current ? {
+      ...current,
+      shipment: {
+        ...current.shipment,
+        ...updated,
+      },
+    } : current);
+  }, []);
 
-  if (!shipment && id && (isShipmentLoading || !shipmentLoadError)) {
+  if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center h-[600px] text-slate-500 font-sans">
-        <ActionSkeleton className="mb-4 h-12 w-12 rounded-full" />
-        <h2 className="text-xl font-bold">در حال بارگیری محموله...</h2>
+      <div className="app-page flex min-h-[50vh] items-center justify-center font-sans" dir="rtl">
+        <div className="flex items-center gap-2 text-sm font-bold text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          در حال بارگذاری پرونده
+        </div>
       </div>
     );
   }
 
-  if (!shipment) {
+  if (errorMessage || !data) {
     return (
-      <div className="flex flex-col items-center justify-center h-[600px] text-slate-500 font-sans">
-        <AlertCircle className="w-12 h-12 mb-4 opacity-20" />
-        <h2 className="text-xl font-bold">محموله مورد نظر یافت نشد.</h2>
-        <Button variant="link" onClick={() => navigate("/shipments")} className="text-primary mt-2">
-          بازگشت به لیست محموله‌ها
+      <div className="app-page space-y-4 font-sans" dir="rtl">
+        <Button type="button" variant="outline" className="h-9 rounded-lg text-xs font-black" onClick={() => navigate("/shipments")}>
+          بازگشت به محموله‌ها
         </Button>
+        <Card className="rounded-xl border-border bg-card">
+          <CardContent className="p-6 text-center text-sm font-bold text-muted-foreground">{errorMessage || "پرونده در دسترس نیست."}</CardContent>
+        </Card>
       </div>
     );
   }
 
-  const progress = getShipmentProgress(shipment, steps);
-  const completedSteps = progress.completedSteps;
-  const progressPercent = progress.percent;
-  const canArchiveShipments = Boolean(currentUser?.permissions?.includes("shipments.archive"));
-  const canUpdateShipments = Boolean(currentUser?.permissions?.includes("shipments.update"));
-  const canMoveToExitedArchive = canArchiveShipments && !shipment.isExitedArchived && shipment.status === "EXITED";
-
-  const handleMoveToExitedArchive = async () => {
-    setIsExitedArchiveSaving(true);
-    try {
-      const updated = await shipmentApi.moveToExitedArchive(shipment.id, {
-        reason: exitedArchiveReason.trim() || null,
-      });
-      setRemoteShipmentResult({ routeId: shipment.id, shipment: updated });
-      await loadCurrentUserRecords();
-      setExitedArchiveDialogOpen(false);
-      setExitedArchiveReason("");
-      toast.success("محموله به محموله‌های خروج‌شده منتقل شد.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "انتقال محموله ناموفق بود.");
-    } finally {
-      setIsExitedArchiveSaving(false);
-    }
-  };
-
-  const handleRestoreExitedShipment = async () => {
-    setIsExitedArchiveSaving(true);
-    try {
-      const updated = await shipmentApi.restoreFromExitedArchive(shipment.id);
-      setRemoteShipmentResult({ routeId: shipment.id, shipment: updated });
-      await loadCurrentUserRecords();
-      setRestoreExitedDialogOpen(false);
-      toast.success("محموله به لیست فعال برگشت.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "بازگردانی محموله ناموفق بود.");
-    } finally {
-      setIsExitedArchiveSaving(false);
-    }
-  };
-
-  const handleSavePostExit = async () => {
-    setIsPostExitSaving(true);
-    try {
-      const updated = await shipmentApi.updatePostExit(shipment.id, {
-        postExitStatus: postExitDraft.postExitStatus,
-        postExitNote: postExitDraft.postExitNote || null,
-        postExitFollowUpAt: postExitDraft.postExitFollowUpAt || null,
-      });
-      setRemoteShipmentResult({ routeId: shipment.id, shipment: updated });
-      await loadCurrentUserRecords();
-      await refreshCurrentShipment();
-      toast.success("پیگیری بعد از خروج ذخیره شد.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "ذخیره پیگیری ناموفق بود.");
-    } finally {
-      setIsPostExitSaving(false);
-    }
-  };
-
-  const runProgressMutation = async (action: () => Promise<any>, successMessage: string) => {
-    setIsProgressLoading(true);
-    try {
-      await action();
-      toast.success(successMessage);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Workflow update failed.");
-    } finally {
-      setIsProgressLoading(false);
-    }
-  };
-
-  const openProgressDialog = (step: ShipmentWorkflowStep, mode: "current" | "complete" | "note") => {
-    setProgressDialogStep(step);
-    setProgressDialogMode(mode);
-    setProgressDialogOpen(true);
-  };
-
-  const handleProgressDialogSubmit = async (body: Record<string, any>) => {
-    setIsProgressLoading(true);
-    try {
-      await updateShipmentWorkflowCurrent(shipment.id, body);
-      toast.success("گردش کار به‌روز شد.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Workflow update failed.");
-      throw error;
-    } finally {
-      setIsProgressLoading(false);
-    }
-  };
-
-  const handleStartWorkflow = () =>
-    runProgressMutation(
-      () => startShipmentWorkflow(shipment.id),
-      "گردش کار واردات شروع شد."
-    );
-
-  const handleRouteSelect = (route: ShipmentWorkflowRoute) =>
-    runProgressMutation(
-      () => updateShipmentWorkflowCurrent(shipment.id, { stepCode: "039", customsRoute: route }),
-      "مسیر گمرکی ثبت شد."
-    );
-
-  const handleRevealWorkflowStep = (step: ShipmentWorkflowStep) =>
-    runProgressMutation(
-      () => updateShipmentWorkflowCurrent(shipment.id, { stepCode: step.code, isVisible: true, isExceptional: true }),
-      "مرحله استثنایی نمایش داده شد."
-    );
-
-  const handleAddWorkflowBlocker = async (body: Record<string, any>) => {
-    setIsProgressLoading(true);
-    try {
-      await addShipmentWorkflowBlocker(shipment.id, body);
-      toast.success("مانع گردش کار ثبت شد.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not add workflow blocker.");
-      throw error;
-    } finally {
-      setIsProgressLoading(false);
-    }
-  };
-
-  const handleResolveWorkflowBlocker = (blocker: ShipmentWorkflowBlocker) =>
-    runProgressMutation(
-      () => resolveShipmentWorkflowBlocker(shipment.id, { blockerId: blocker.id, status: "resolved" }),
-      "مانع برطرف شد."
-    );
-
-  const openWorkflowTaskDialog = async (context: { step?: ShipmentWorkflowStep; blocker?: ShipmentWorkflowBlocker; task?: Task }) => {
-    let nextContext = context;
-    if (context.step || context.blocker) {
-      try {
-        const latestProgress = await refreshShipmentProgress(shipment.id);
-        const refreshedStep = context.step
-          ? latestProgress?.steps?.find((step) => step.code === context.step?.code) || context.step
-          : undefined;
-        const refreshedBlocker = context.blocker
-          ? latestProgress?.blockers?.find((blocker) => blocker.id === context.blocker?.id) ||
-            latestProgress?.blockers?.find(
-              (blocker) =>
-                blocker.status === "open" &&
-                blocker.blockerCode === context.blocker?.blockerCode &&
-                (!context.blocker?.stepCode || blocker.stepCode === context.blocker.stepCode)
-            ) ||
-            context.blocker
-          : undefined;
-        nextContext = { ...context, step: refreshedStep, blocker: refreshedBlocker };
-      } catch (error) {
-        console.error("Could not refresh workflow before task assignment.", error);
-      }
-    }
-    setWorkflowTaskContext(nextContext);
-    setWorkflowTaskDialogOpen(true);
-    if (!organizationMembers.length) {
-      loadWorkflowMembers().catch((error) => {
-        console.error("Could not load workflow assignees.", error);
-      });
-    }
-  };
-
-  const handleWorkflowTaskSubmit = async (body: Record<string, any>) => {
-    const context = workflowTaskContext;
-    try {
-      if (context.task) {
-        await assignTask(context.task.id, {
-          assignedToUserId: body.assignedToUserId,
-          dueDate: body.dueDate,
-          priority: body.priority,
-          assignmentNote: body.assignmentNote,
-          status: "assigned",
-        });
-      } else {
-        let workflowInstanceId = shipmentProgress?.workflow?.id || null;
-        if (context.step || context.blocker) {
-          const progressResponse = await fetch(`/api/shipments/${shipment.id}/progress`, { cache: "no-store" });
-          const progressPayload = await progressResponse.json().catch(() => ({}));
-          if (progressResponse.ok && progressPayload.ok) {
-            workflowInstanceId = progressPayload.data?.workflow?.id || workflowInstanceId;
-          }
-        }
-        const response = await fetch("/api/tasks", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title: body.title,
-            description: body.description,
-            assignedToUserId: body.assignedToUserId,
-            priority: body.priority,
-            dueDate: body.dueDate,
-            assignmentNote: body.assignmentNote,
-            status: "assigned",
-            shipmentId: shipment.id,
-            workflowInstanceId,
-            workflowStepCode: context.step?.code,
-            workflowBlockerId: context.blocker?.id,
-            blockerCode: context.blocker?.blockerCode,
-          }),
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok || !payload.ok) {
-          throw new Error(payload.error?.message || "Could not assign workflow task.");
-        }
-      }
-      await refreshTasks();
-      toast.success("وظیفه ارجاع شد.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not assign workflow task.");
-      throw error;
-    }
-  };
-
-  const handleRelatedTaskStatus = async (task: Task, status: TaskStatus) => {
-    try {
-      await updateTaskStatusRemote(task.id, { status });
-      await refreshTasks();
-      toast.success("وضعیت وظیفه به‌روز شد.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update task status.");
-    }
-  };
-
-  const EMPLOYEE_MANAGED_STEPS = [
-    "ثبت سفارش در سامانه جامع تجارت",
-    "دریافت مجوزهای لازم از سازمانهای مربوطه",
-    "عقد قرارداد حمل‌ونقل بین‌المللی",
-    "رزرو وسیله حمل",
-    "بارگیری کالا در مبدأ",
-    "ارسال اسناد حمل به واردکننده",
-    "اظهار کالا در سامانه گمرکی",
-    "ارائه و بررسی اسناد توسط کارشناس گمرک",
-    "ارزیابی و بازرسی فیزیکی کالا (در صورت نیاز)",
-    "پرداخت حقوق و عوارض گمرکی",
-    "دریافت پروانه سبز گمرکی",
-    "هماهنگی و انجام حمل داخلی",
-    "خروج کالا از گمرک و تحویل در مقصد"
+  const { shipment, profile } = data;
+  const flowCode = profile?.flowCode || profileFlowCode;
+  const customer = customers.find((item) => item.id === shipment.customerId) || null;
+  const baseSection = profile?.sections.base;
+  const headerCustomerIdentifier = customer?.customerCode || customer?.code || shipment.customerCode || shipment.customerId || shipment.customerName || "";
+  const updatedAt = profile?.updatedAt || shipment.updatedAt || shipment.createdAt;
+  const updatedByName = resolveUserName(profile?.updatedById || profile?.createdById, users, currentUser);
+  const routeSteps = [
+    { key: "origin", label: "مبدا", value: baseSection?.origin || shipment.origin },
+    { key: "dischargePort", label: "محل تخلیه", value: baseSection?.dischargePort },
+    { key: "deliveryPort", label: "بندر تحویل", value: baseSection?.deliveryPort || shipment.destination },
   ];
 
-  const patchShipmentStep = async (stepId: string, updates: any) => {
-    const response = await fetch(`/api/shipments/${shipment.id}/steps/${stepId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(updates),
-    });
-    const payload = await response.json();
-    if (!response.ok || !payload.ok) {
-      throw new Error(payload.error?.message || "Could not update shipment step.");
-    }
-    await loadCurrentUserRecords();
-    return payload.data;
-  };
-
-  const handleAssignTask = async () => {
-    const user = users.find(u => u.id === assignForm.userId);
-    try {
-      const response = await fetch(`/api/shipments/${shipment.id}/tasks`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          stepId: selectedStep.id,
-          stepName: selectedStep.name,
-          title: `پیگیری مرحله: ${selectedStep.name} - ${shipment.trackingNumber}`,
-          description: assignForm.description || `پیگیری انجام مرحله ${selectedStep.name} برای محموله ${shipment.trackingNumber}`,
-          assignedToUserId: assignForm.userId,
-          assignedToName: user?.name || "",
-          priority: assignForm.priority,
-          dueDate: assignForm.dueDate,
-          deadline: assignForm.deadline,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.error?.message || "Could not assign task.");
-      }
-      if (selectedStep.status === "PENDING") {
-        await patchShipmentStep(selectedStep.id, { status: "IN_PROGRESS" });
-      } else {
-        await loadCurrentUserRecords();
-      }
-      toast.success("وظیفه ثبت شد.");
-      setIsAssignDialogOpen(false);
-      setAssignForm({
-        userId: users[0]?.id || "",
-        priority: "MEDIUM",
-        dueDate: format(addDays(new Date(), 7), "yyyy/MM/dd"),
-        deadline: "09:00",
-        description: ""
-      });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not assign task.");
-    }
-  };
-
   return (
-    <div className="app-page space-y-6 font-sans text-right text-foreground" dir="rtl">
-      {/* Header */}
-      <div className="rounded-2xl border border-border/70 bg-card/95 p-4 shadow-sm md:p-5">
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex min-w-0 items-start gap-3 md:gap-4">
-          <Button 
-            variant="ghost" 
-            size="icon" 
-            className="h-10 w-10 shrink-0 rounded-xl bg-muted text-muted-foreground hover:text-foreground"
-            onClick={() => navigate("/shipments")}
-          >
-            <ArrowRight className="w-5 h-5" />
-          </Button>
-          <div className="min-w-0 flex-1">
-            <div className="mb-1.5 flex flex-wrap items-center gap-2">
-              <h1 className="truncate text-2xl font-black leading-tight text-foreground md:text-3xl">{shipment.trackingNumber}</h1>
-              <div className="shrink-0 scale-90 md:scale-100 origin-right">
-                <StatusBadge status={shipment.status} />
-              </div>
-              {shipment.isExitedArchived ? (
-                <Badge variant="outline" className="h-7 rounded-full border-amber-500/30 bg-amber-500/10 px-3 text-[11px] font-black text-amber-700" data-testid="shipment-exited-badge">
-                  خروج‌شده
+    <div className="app-page space-y-5 font-sans" dir="rtl" data-testid="shipment-v2-detail-page">
+      <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
+        <div className="space-y-3">
+          <div className="flex items-start gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-9 w-9 shrink-0 rounded-lg"
+              onClick={() => navigate("/shipments")}
+              aria-label="بازگشت"
+            >
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h1 data-testid="shipment-v2-header-shipment-id" className="font-mono text-sm font-black text-primary" dir="ltr">
+                  {shipment.trackingNumber}
+                </h1>
+                <Badge variant="outline" className="rounded-lg text-[11px] font-black">
+                  {flowLabels[flowCode]}
                 </Badge>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold text-muted-foreground md:gap-3 md:text-xs">
-              <span className="flex items-center gap-1 truncate"><UserPlus className="w-3.5 h-3.5" /> {shipment.customerName}</span>
-              <span className="w-1 h-1 rounded-full bg-border shrink-0" />
-              <span className="flex items-center gap-1 font-mono tracking-wider truncate">{shipment.containerNumber}</span>
-            </div>
-            <div className="mt-4 max-w-xl rounded-xl bg-muted/35 p-3 ring-1 ring-border/40">
-              <div className="mb-2 flex items-center justify-between gap-3 text-[11px] font-black text-muted-foreground">
-                <span>پیشرفت پرونده</span>
-                <span dir="ltr">{progressPercent}%</span>
+                <Badge variant="outline" className="rounded-lg text-[11px] font-black">
+                  {shipmentStatusLabel(shipment.status)}
+                </Badge>
               </div>
-              <Progress value={progressPercent} className="h-2" />
-              <div className="mt-2 flex items-center justify-between gap-3 text-[10px] font-bold text-muted-foreground">
-                <span className="truncate">{shipment.origin}</span>
-                <span className="truncate text-primary">{completedSteps} مرحله تکمیل شده</span>
-                <span className="truncate">{shipment.destination}</span>
-              </div>
+              <p data-testid="shipment-v2-header-customer" className="mt-1 truncate text-xs font-black text-foreground">
+                {headerCustomerIdentifier || "بدون مشتری"}
+              </p>
             </div>
           </div>
-        </div>
-        <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center xl:justify-end">
-          <Dialog open={isCustomerSummaryOpen} onOpenChange={setIsCustomerSummaryOpen}>
-            <DialogTrigger
-              render={
-                <Button variant="outline" className="border-border bg-muted/50 text-muted-foreground gap-2 font-bold h-10 px-4 md:px-6 rounded-xl hover:bg-primary hover:text-primary-foreground transition-all text-xs">
-                  <Users className="w-4 h-4" />
-                  خلاصه مشتری
-                </Button>
-              }
-            />
-            <DialogContent className="bg-card border-border text-foreground text-right sm:max-w-2xl p-0 overflow-hidden" dir="rtl">
-              <div className="p-6">
-                <DialogHeader className="relative pr-0">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-4">
-                       <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary">
-                          <Users className="w-6 h-6" />
-                       </div>
-                       <div>
-                          <DialogTitle className="text-xl font-black">{customerIdentifier}</DialogTitle>
-                          <DialogDescription className="text-muted-foreground text-xs">شناسه مشتری</DialogDescription>
-                       </div>
-                    </div>
-                    <DialogClose render={
-                      <Button variant="ghost" size="icon" className="h-10 w-10 text-muted-foreground hover:text-foreground hover:bg-muted rounded-xl">
-                        <X className="w-5 h-5" />
-                      </Button>
-                    } />
-                  </div>
-                </DialogHeader>
-                
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 py-6">
-                <div className="bg-muted/50 p-4 rounded-2xl border border-border/30">
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-widest mb-1">کل محموله‌ها</p>
-                  <p className="text-2xl font-black text-primary">{customerShipments.length}</p>
-                </div>
-                <div className="bg-card/50 p-4 rounded-2xl border border-border/30">
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-widest mb-1">در جریان</p>
-                  <p className="text-2xl font-black text-amber-400">
-                    {customerShipments.filter(s => !isShipmentTerminalStatus(s.status)).length}
-                  </p>
-                </div>
-                <div className="bg-card/50 p-4 rounded-2xl border border-border/30">
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-widest mb-1">تکمیل شده</p>
-                  <p className="text-2xl font-black text-emerald-400">
-                    {customerShipments.filter(s => s.status === 'EXITED').length}
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                 <h4 className="text-sm font-bold text-foreground/80 flex items-center gap-2">
-                    <Ship className="w-4 h-4 text-primary" />
-                    محموله فعلی: {shipment.trackingNumber}
-                 </h4>
-                 <div className="bg-muted/20 p-4 rounded-2xl border border-border/20">
-                    <div className="flex items-center justify-between mb-4">
-                       <span className="text-xs text-muted-foreground">وضعیت فرآیند</span>
-                       <StatusBadge status={shipment.status} />
-                    </div>
-                    <Progress value={progressPercent} className="h-2 bg-muted" />
-                    <div className="flex justify-between mt-2 text-[10px] text-muted-foreground font-bold">
-                       <span>{shipment.origin}</span>
-                       <span>{progressPercent}% تکمیل شده</span>
-                       <span>{shipment.destination}</span>
-                    </div>
-                 </div>
-              </div>
-
-              <div className="mt-6 pt-6 border-t border-border">
-                <h4 className="text-xs font-bold text-muted-foreground mb-4">سایر محموله‌های اخیر</h4>
-                <div className="space-y-2">
-                   {customerShipments.filter(s => s.id !== shipment.id).slice(0, 3).map(s => (
-                     <div key={s.id} className="flex items-center justify-between p-3 bg-muted/10 rounded-xl hover:bg-muted/30 transition-colors">
-                        <div className="flex items-center gap-3">
-                           <div className="w-8 h-8 rounded-lg bg-background/50 flex items-center justify-center text-muted-foreground">
-                              <Package className="w-4 h-4" />
-                           </div>
-                           <span className="text-xs font-mono font-bold text-foreground/80">{s.trackingNumber}</span>
-                        </div>
-                        <StatusBadge status={s.status} />
-                     </div>
-                   ))}
-                   {customerShipments.length <= 1 && (
-                     <p className="text-xs text-muted-foreground text-center py-4 italic">مورد دیگری یافت نشد.</p>
-                   )}
-                </div>
-              </div>
-
-              <DialogFooter className="mt-6 flex flex-col sm:flex-row gap-3">
-                <DialogClose render={
-                  <Button 
-                    variant="outline" 
-                    className="w-full sm:w-auto h-12 border-border bg-transparent text-muted-foreground hover:bg-muted hover:text-foreground rounded-xl font-bold order-2 sm:order-1 px-8"
-                  >
-                     بستن
-                  </Button>
-                } />
-                <Button className="flex-1 bg-primary hover:bg-primary/90 text-primary-foreground font-extrabold h-12 rounded-xl order-1 sm:order-2 shadow-lg shadow-primary/10" onClick={() => navigate(`/customers`)}>
-                   مشاهده پرونده کامل مشتری
-                </Button>
-              </DialogFooter>
-              </div>
-            </DialogContent>
-          </Dialog>
-          <Button 
-            className="bg-primary hover:bg-primary/90 text-primary-foreground font-extrabold h-10 px-6 md:px-8 rounded-xl shadow-lg shadow-primary/10 text-xs"
-            onClick={() => navigate(`/shipments/${shipment.id}/edit`)}
-          >
-            <Edit className="w-4 h-4 ml-2" />
-            ویرایش بار
-          </Button>
-          {canMoveToExitedArchive ? (
-            <Button
-              variant="outline"
-              className="h-10 rounded-xl border-primary/30 bg-primary/5 px-4 text-xs font-black text-primary"
-              onClick={() => setExitedArchiveDialogOpen(true)}
-              data-testid="shipment-move-to-exited"
-            >
-              <Archive className="ml-2 h-4 w-4" />
-              انتقال به محموله‌های خروج‌شده
-            </Button>
-          ) : null}
-          {shipment.isExitedArchived && canArchiveShipments ? (
-            <Button
-              variant="outline"
-              className="h-10 rounded-xl px-4 text-xs font-black"
-              onClick={() => setRestoreExitedDialogOpen(true)}
-              data-testid="shipment-restore-exited"
-            >
-              <ArchiveRestore className="ml-2 h-4 w-4" />
-              بازگردانی به محموله‌های فعال
-            </Button>
-          ) : null}
-        </div>
+          <HeaderRouteProgress steps={routeSteps} />
         </div>
       </div>
 
-      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1fr)_20rem] xl:grid-cols-[minmax(0,1fr)_22rem]">
-        {/* Left Column - Details */}
-        <div className="order-2 min-w-0 space-y-4 md:space-y-6 lg:order-1">
-          {shipment.isExitedArchived ? (
-            <Card className="overflow-hidden rounded-2xl border-amber-500/20 bg-amber-500/5 shadow-sm" data-testid="shipment-post-exit-panel">
-              <CardHeader className="border-b border-amber-500/15 bg-amber-500/10 p-4">
-                <CardTitle className="flex items-center gap-2 text-sm font-black text-foreground">
-                  <Archive className="h-4 w-4 text-amber-700" />
-                  وضعیت پیگیری بعد از خروج
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-4 p-4 md:grid-cols-[12rem_minmax(0,1fr)_12rem_auto] md:items-end">
-                <div>
-                  <Label className="text-[11px] font-black text-muted-foreground">وضعیت پیگیری بعد از خروج</Label>
-                  <select
-                    value={postExitDraft.postExitStatus}
-                    onChange={(event) => setPostExitDraft((current) => ({ ...current, postExitStatus: event.target.value as PostExitStatus }))}
-                    disabled={!canUpdateShipments || isPostExitSaving}
-                    className="mt-1 h-10 w-full rounded-lg border border-border bg-background px-3 text-xs font-bold"
-                  >
-                    {Object.entries(POST_EXIT_STATUS_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>{label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <Label className="text-[11px] font-black text-muted-foreground">یادداشت پیگیری</Label>
-                  <Input
-                    value={postExitDraft.postExitNote}
-                    onChange={(event) => setPostExitDraft((current) => ({ ...current, postExitNote: event.target.value }))}
-                    disabled={!canUpdateShipments || isPostExitSaving}
-                    placeholder="یادداشت داخلی پیگیری بعد از خروج"
-                    className="mt-1 h-10 rounded-lg text-xs"
-                    data-testid="shipment-post-exit-note"
-                  />
-                </div>
-                <div>
-                  <Label className="text-[11px] font-black text-muted-foreground">تاریخ پیگیری بعدی</Label>
-                  <Input
-                    type="date"
-                    value={postExitDraft.postExitFollowUpAt}
-                    onChange={(event) => setPostExitDraft((current) => ({ ...current, postExitFollowUpAt: event.target.value }))}
-                    disabled={!canUpdateShipments || isPostExitSaving}
-                    className="mt-1 h-10 rounded-lg text-xs"
-                    data-testid="shipment-post-exit-follow-up-at"
-                  />
-                </div>
-                <div className="flex gap-2">
-                  {canUpdateShipments ? (
-                    <Button type="button" className="h-10 rounded-lg text-xs font-black" onClick={() => void handleSavePostExit()} disabled={isPostExitSaving} data-testid="shipment-post-exit-save">
-                      {isPostExitSaving ? <Loader2 className="ml-1 h-4 w-4 animate-spin" /> : <Save className="ml-1 h-4 w-4" />}
-                      ذخیره
-                    </Button>
-                  ) : null}
-                  {canArchiveShipments ? (
-                    <Button type="button" variant="outline" className="h-10 rounded-lg text-xs font-black" onClick={() => setRestoreExitedDialogOpen(true)} disabled={isExitedArchiveSaving} data-testid="shipment-post-exit-restore">
-                      <ArchiveRestore className="ml-1 h-4 w-4" />
-                      بازگردانی به محموله‌های فعال
-                    </Button>
-                  ) : null}
-                </div>
-              </CardContent>
-            </Card>
-          ) : null}
-
-          <ShipmentChatPanel shipmentId={shipment.id} shipmentCode={shipment.trackingNumber} />
-
-          <Card className="overflow-hidden rounded-2xl border-border/70 bg-card shadow-sm" data-testid="shipment-documents-panel">
-            <CardContent className="p-4 md:p-6">
-              <DocumentView shipmentId={shipment.id} />
-            </CardContent>
-          </Card>
-
-          <ShipmentWorkflowTimeline
-            progress={shipmentProgress}
-            isLoading={isProgressLoading}
-            onStart={handleStartWorkflow}
-            onMarkComplete={(step) => openProgressDialog(step, "complete")}
-            onSetCurrent={(step) => openProgressDialog(step, "current")}
-            onRouteSelect={handleRouteSelect}
-            onRevealStep={handleRevealWorkflowStep}
-            onAddBlocker={(step) => {
-              setBlockerDialogStep(step || null);
-              setBlockerDialogOpen(true);
-            }}
-            onResolveBlocker={handleResolveWorkflowBlocker}
-            onAssignTask={openWorkflowTaskDialog}
-          />
-
-          <RelatedShipmentTasksPanel
-            tasks={shipmentTasks}
-            onCreateTask={() => openWorkflowTaskDialog({})}
-            onAssignTask={(task) => openWorkflowTaskDialog({ task })}
-            onStatusChange={handleRelatedTaskStatus}
-          />
-
-          <ShipmentDailyStatusPanel
-            shipmentId={shipment.id}
-            shipmentCode={shipment.trackingNumber}
-            shipmentStatus={shipment.status}
-            customerName={shipment.customerName}
-            origin={shipment.origin}
-            destination={shipment.destination}
-          />
+      {!profile ? (
+        <Card className="rounded-xl border-border bg-card shadow-sm">
+          <CardContent className="space-y-4 p-6 text-center">
+            <Anchor className="mx-auto h-8 w-8 text-primary" />
+            <div>
+              <h2 className="text-base font-black text-foreground">پرونده هنوز برای این محموله ساخته نشده است.</h2>
+              <p className="mt-2 text-xs font-bold leading-6 text-muted-foreground">
+                ساخت پرونده یک پروفایل خالی و تمیز ایجاد می‌کند و داده‌های قدیمی جزئیات یا کوتاژ را کپی نمی‌کند.
+              </p>
+            </div>
+            {canUpdate ? (
+              <Button type="button" className="h-10 rounded-lg text-xs font-black" onClick={() => void initializeProfile()} disabled={isInitializing}>
+                {isInitializing ? <Loader2 className="ml-1 h-4 w-4 animate-spin" /> : <RotateCw className="ml-1 h-4 w-4" />}
+                شروع پرونده
+              </Button>
+            ) : (
+              <p className="text-xs font-bold text-muted-foreground">برای ساخت پرونده به دسترسی ویرایش محموله نیاز است.</p>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-4">
+          <ShipmentTimerPanel shipment={shipment} canUpdate={canUpdate} onShipmentUpdate={updateShipmentSummary} />
+          {sectionDefinitions.map((section) => {
+            const Icon = section.icon;
+            if (section.key === "base") {
+              return (
+                <React.Fragment key={section.key}>
+                  <SectionCard sectionKey={section.key} title={section.title} icon={Icon}>
+                    <BaseSection
+                      data={profile.sections.base}
+                      goodsData={profile.sections.goods}
+                      shipment={shipment}
+                      flowCode={profile.flowCode}
+                      customer={customer}
+                      shipments={shipments}
+                      commercialCards={commercialCards}
+                      malvaniProfiles={malvaniProfiles}
+                      isMalvaniLoading={isMalvaniLoading}
+                      documentCount={documentCount}
+                      isDocumentCountLoading={isDocumentCountLoading}
+                      updatedAt={updatedAt}
+                      updatedByName={updatedByName}
+                      canUpdate={canUpdate}
+                      isSaving={savingSection === "base"}
+                      onSave={(payload) => void saveSection("base", payload)}
+                    />
+                  </SectionCard>
+                </React.Fragment>
+              );
+            }
+            if (section.key === "goods") {
+              return (
+                <React.Fragment key={section.key}>
+                  <SectionCard sectionKey={section.key} title={section.title} icon={Icon}>
+                    <GoodsSection
+                      data={profile.sections.goods}
+                      flowCode={profile.flowCode}
+                      canUpdate={canUpdate}
+                      isSaving={savingSection === "goods"}
+                      onSave={(payload) => void saveSection("goods", payload)}
+                    />
+                  </SectionCard>
+                  <div className="grid gap-4" data-testid="shipment-v2-collaboration-panels">
+                    <ShipmentDocumentsPanel shipmentId={shipment.id} />
+                    <ShipmentChatPanel shipmentId={shipment.id} shipmentCode={shipment.trackingNumber} />
+                  </div>
+                </React.Fragment>
+              );
+            }
+            if (section.key === "declarationKootaj") {
+              return (
+                <React.Fragment key={section.key}>
+                  <SectionCard sectionKey={section.key} title={section.title} icon={Icon}>
+                    <DeclarationKootajSection
+                      data={profile.sections.declarationKootaj}
+                      canUpdate={canUpdate}
+                      isSaving={savingSection === "declarationKootaj"}
+                      onSave={(payload) => void saveSection("declarationKootaj", payload)}
+                    />
+                  </SectionCard>
+                </React.Fragment>
+              );
+            }
+            if (section.key === "permits") {
+              return (
+                <React.Fragment key={section.key}>
+                  <SectionCard sectionKey={section.key} title={section.title} icon={Icon}>
+                    <PermitsSection
+                      data={profile.sections.permits}
+                      canUpdate={canUpdate}
+                      isSaving={savingSection === "permits"}
+                      onSave={(payload) => void saveSection("permits", payload)}
+                    />
+                  </SectionCard>
+                </React.Fragment>
+              );
+            }
+            if (section.key === "payments") {
+              return (
+                <React.Fragment key={section.key}>
+                  <SectionCard sectionKey={section.key} title={section.title} icon={Icon}>
+                    <PaymentsSection
+                      data={profile.sections.payments}
+                      canUpdate={canUpdate}
+                      isSaving={savingSection === "payments"}
+                      onSave={(payload) => void saveSection("payments", payload)}
+                    />
+                  </SectionCard>
+                </React.Fragment>
+              );
+            }
+            if (section.key === "banking") {
+              return (
+                <React.Fragment key={section.key}>
+                  <SectionCard sectionKey={section.key} title={section.title} icon={Icon}>
+                    <BankingSection
+                      data={profile.sections.banking}
+                      canUpdate={canUpdate}
+                      isSaving={savingSection === "banking"}
+                      onSave={(payload) => void saveSection("banking", payload)}
+                    />
+                  </SectionCard>
+                </React.Fragment>
+              );
+            }
+            if (section.key === "notes") {
+              return (
+                <React.Fragment key={section.key}>
+                  <SectionCard sectionKey={section.key} title={section.title} icon={Icon}>
+                    <NotesSection
+                      data={profile.sections.notes}
+                      canUpdate={canUpdate}
+                      isSaving={savingSection === "notes"}
+                      onSave={(payload) => void saveSection("notes", payload)}
+                    />
+                  </SectionCard>
+                </React.Fragment>
+              );
+            }
+            return (
+              <React.Fragment key={section.key}>
+                <SectionCard sectionKey={section.key} title={section.title} icon={Icon}>
+                  <EmptyDetailSection />
+                </SectionCard>
+              </React.Fragment>
+            );
+          })}
         </div>
-
-        {/* Summary Column */}
-        <aside className="order-1 space-y-4 lg:sticky lg:top-24 lg:order-2">
-          <Card className="overflow-hidden rounded-2xl border-border/70 bg-card shadow-sm">
-            <CardHeader className="border-b border-border/50 bg-muted/20 p-4">
-              <CardTitle className="flex items-center justify-between gap-3 text-sm font-black">
-                <span className="flex items-center gap-2">
-                  <Info className="h-4 w-4 text-primary" />
-                  خلاصه پرونده
-                </span>
-                <StatusBadge status={shipment.status} />
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4 p-4">
-              <div className="rounded-xl bg-primary/5 p-3 ring-1 ring-primary/10">
-                <div className="mb-2 flex items-center justify-between text-[11px] font-black text-muted-foreground">
-                  <span>پیشرفت</span>
-                  <span dir="ltr">{progressPercent}%</span>
-                </div>
-                <Progress value={progressPercent} className="h-2" />
-              </div>
-
-              <div className="space-y-2">
-                {[
-                  { icon: UserPlus, label: "مشتری", value: shipment.customerName },
-                  { icon: Package, label: "کانتینر", value: shipment.containerNumber },
-                  { icon: Calendar, label: "زمان تحویل", value: shipment.estimatedDelivery },
-                ].map((item) => (
-                  <div key={item.label} className="flex items-start gap-3 rounded-xl bg-muted/30 p-3">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground ring-1 ring-border/50">
-                      <item.icon className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-[10px] font-bold text-muted-foreground">{item.label}</p>
-                      <p className="mt-0.5 truncate text-xs font-black text-foreground">{item.value || "ثبت نشده"}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          <CustomerAccessPanel shipmentId={shipment.id} trackingNumber={shipment.trackingNumber} />
-
-          <Card className="overflow-hidden rounded-2xl border-border/70 bg-card shadow-sm">
-             <div className="relative overflow-hidden border-b border-border/50 bg-muted/20 p-4">
-                <Ship className="absolute -bottom-5 -left-5 h-24 w-24 text-primary/10" />
-                <h3 className="font-black text-base md:text-lg">اطلاعات حمل</h3>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground" dir="ltr">Logistic Core Info</p>
-             </div>
-             <CardContent className="space-y-4 p-4">
-                <div className="space-y-2">
-                   <div className="flex items-start gap-3 rounded-xl bg-muted/30 p-3">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground ring-1 ring-border/50">
-                         <Anchor className="w-3.5 h-3.5 md:w-4 md:h-4" />
-                      </div>
-                      <div className="min-w-0">
-                         <p className="text-[9px] md:text-[10px] text-muted-foreground mb-0.5">بندر بارگیری (POL)</p>
-                         <p className="text-[11px] md:text-xs font-bold text-foreground truncate">{shipment.origin}</p>
-                      </div>
-                   </div>
-                   <div className="flex items-start gap-3 rounded-xl bg-muted/30 p-3">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground ring-1 ring-border/50">
-                         <MapPin className="w-3.5 h-3.5 md:w-4 md:h-4" />
-                      </div>
-                      <div className="min-w-0">
-                         <p className="text-[9px] md:text-[10px] text-muted-foreground mb-0.5">محل تخلیه (POD)</p>
-                         <p className="text-[11px] md:text-xs font-bold text-foreground truncate">{shipment.destination}</p>
-                      </div>
-                   </div>
-                   <div className="flex items-start gap-3 rounded-xl bg-muted/30 p-3">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background text-muted-foreground ring-1 ring-border/50">
-                         <Clock className="w-3.5 h-3.5 md:w-4 md:h-4" />
-                      </div>
-                      <div className="min-w-0">
-                         <p className="text-[9px] md:text-[10px] text-muted-foreground mb-0.5">فری تایم مقصد</p>
-                         <p className="text-[11px] md:text-xs font-bold text-emerald-500">{shipment.freeTimeDays} روز کانتینری</p>
-                      </div>
-                   </div>
-                </div>
-
-                <div className="border-t border-border/60 pt-4">
-                  <h4 className="text-[9px] md:text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-3 md:mb-4">تیم عملیاتی</h4>
-                  <div className="space-y-2">
-                     {users.slice(0, 3).map(user => (
-                       <div key={user.id} className="flex items-center gap-3 rounded-xl bg-muted/25 p-2.5">
-                          <Avatar className="h-8 w-8 shrink-0 border border-border">
-                            <AvatarImage src={user.avatar} />
-                            <AvatarFallback className="bg-background text-[10px] font-black">{user.name[0]}</AvatarFallback>
-                          </Avatar>
-                          <div className="flex-1 min-w-0">
-                            <p className="truncate text-xs font-black text-foreground">{user.name}</p>
-                            <p className="truncate text-[10px] font-bold text-muted-foreground">{user.role}</p>
-                          </div>
-                          <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-                       </div>
-                     ))}
-                  </div>
-                </div>
-
-                <Button
-                  variant="outline"
-                  className="h-10 w-full gap-2 rounded-xl border-border text-xs font-bold text-muted-foreground hover:bg-muted"
-                  disabled={!shipment.customerId}
-                  onClick={() => shipment.customerId && navigate(`/customers/${shipment.customerId}`)}
-                >
-                  <Info className="h-4 w-4" />
-                  مشاهده پروفایل مشتری
-                </Button>
-             </CardContent>
-          </Card>
-        </aside>
-      </div>
-
-      <Dialog open={exitedArchiveDialogOpen} onOpenChange={(open) => {
-        if (!open && !isExitedArchiveSaving) {
-          setExitedArchiveDialogOpen(false);
-          setExitedArchiveReason("");
-        }
-      }}>
-        <DialogContent className="max-w-md text-right" dir="rtl">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-black">انتقال به محموله‌های خروج‌شده</DialogTitle>
-            <DialogDescription className="text-sm leading-7 text-muted-foreground">
-              این محموله از لیست محموله‌های فعال خارج می‌شود اما حذف نخواهد شد. اطلاعات، اسناد، گفتگوها و سوابق آن برای پیگیری‌های بعد از خروج باقی می‌ماند.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label className="text-xs font-black">دلیل انتقال</Label>
-            <Input
-              value={exitedArchiveReason}
-              onChange={(event) => setExitedArchiveReason(event.target.value)}
-              placeholder="مثلاً: خروج از گمرک و شروع پیگیری تسویه"
-              className="h-10 rounded-lg text-xs"
-              data-testid="shipment-exited-archive-reason"
-            />
-          </div>
-          <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-start">
-            <Button type="button" variant="outline" onClick={() => setExitedArchiveDialogOpen(false)} disabled={isExitedArchiveSaving} data-testid="shipment-exited-archive-cancel">
-              انصراف
-            </Button>
-            <Button type="button" onClick={() => void handleMoveToExitedArchive()} disabled={isExitedArchiveSaving} data-testid="shipment-exited-archive-confirm">
-              {isExitedArchiveSaving ? <Loader2 className="ml-1 h-4 w-4 animate-spin" /> : <Archive className="ml-1 h-4 w-4" />}
-              انتقال
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={restoreExitedDialogOpen} onOpenChange={(open) => {
-        if (!open && !isExitedArchiveSaving) setRestoreExitedDialogOpen(false);
-      }}>
-        <DialogContent className="max-w-md text-right" dir="rtl">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-black">بازگردانی به محموله‌های فعال</DialogTitle>
-            <DialogDescription className="text-sm leading-7 text-muted-foreground">
-              این محموله دوباره در لیست محموله‌های فعال و صفحات عملیاتی نمایش داده می‌شود.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-start">
-            <Button type="button" variant="outline" onClick={() => setRestoreExitedDialogOpen(false)} disabled={isExitedArchiveSaving} data-testid="shipment-exited-restore-cancel">
-              انصراف
-            </Button>
-            <Button type="button" onClick={() => void handleRestoreExitedShipment()} disabled={isExitedArchiveSaving} data-testid="shipment-exited-restore-confirm">
-              {isExitedArchiveSaving ? <Loader2 className="ml-1 h-4 w-4 animate-spin" /> : <ArchiveRestore className="ml-1 h-4 w-4" />}
-              بازگردانی
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <ShipmentProgressUpdateDialog
-        open={progressDialogOpen}
-        onOpenChange={setProgressDialogOpen}
-        step={progressDialogStep}
-        mode={progressDialogMode}
-        onSubmit={handleProgressDialogSubmit}
-      />
-
-      <ShipmentProgressBlockerDialog
-        open={blockerDialogOpen}
-        onOpenChange={setBlockerDialogOpen}
-        progress={shipmentProgress}
-        step={blockerDialogStep}
-        onSubmit={handleAddWorkflowBlocker}
-      />
-
-      <TaskAssignDialog
-        open={workflowTaskDialogOpen}
-        onOpenChange={setWorkflowTaskDialogOpen}
-        members={organizationMembers}
-        title={workflowTaskContext.task ? "ارجاع مجدد وظیفه" : "ارجاع وظیفه از گردش کار"}
-        defaultTitle={
-          workflowTaskContext.task?.title ||
-          (workflowTaskContext.blocker
-            ? `${workflowTaskContext.blocker.blockerCode} - ${workflowTaskContext.blocker.labelFa}`
-            : workflowTaskContext.step
-              ? `${workflowTaskContext.step.code} - ${workflowTaskContext.step.labelFa}`
-              : `پیگیری محموله ${shipment.trackingNumber}`)
-        }
-        defaultDescription={
-          workflowTaskContext.task?.description ||
-          workflowTaskContext.blocker?.internalNote ||
-          (workflowTaskContext.step ? `پیگیری مرحله ${workflowTaskContext.step.labelFa}` : "")
-        }
-        defaultAssignmentNote={workflowTaskContext.task?.assignmentNote || ""}
-        defaultPriority={workflowTaskContext.task?.priority || "MEDIUM"}
-        defaultDueDate={workflowTaskContext.task?.dueDate || ""}
-        isMembersLoading={isWorkflowMembersLoading}
-        membersError={workflowMembersError}
-        onRetryMembers={loadWorkflowMembers}
-        onSubmit={handleWorkflowTaskSubmit}
-      />
-
-      {/* Assign Task Dialog */}
-      <Dialog open={isAssignDialogOpen} onOpenChange={setIsAssignDialogOpen}>
-        <DialogContent className="bg-card border-border text-foreground text-right sm:max-w-md" dir="rtl">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-bold flex items-center gap-2">
-              <UserPlus className="w-5 h-5 text-primary" />
-              ارجاع وظیفه عملیاتی
-            </DialogTitle>
-            <DialogDescription className="text-muted-foreground text-xs text-right">
-              تعریف تسک برای مدیریت مرحله <span className="text-primary font-bold">{selectedStep?.name}</span>
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">کارمند مسئول</Label>
-                <select 
-                  className="w-full bg-muted border-border rounded-xl h-10 text-xs px-3 outline-none focus:ring-1 focus:ring-primary"
-                  value={assignForm.userId}
-                  onChange={e => setAssignForm({...assignForm, userId: e.target.value})}
-                >
-                  {users.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
-                </select>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground">اولویت</Label>
-                <select 
-                   className="w-full bg-muted border-border rounded-xl h-10 text-xs px-3 outline-none focus:ring-1 focus:ring-primary"
-                  value={assignForm.priority}
-                  onChange={e => setAssignForm({...assignForm, priority: e.target.value as any})}
-                >
-                  <option value="LOW">پایین</option>
-                  <option value="MEDIUM">متوسط</option>
-                  <option value="HIGH">بالا</option>
-                  <option value="URGENT">فوری</option>
-                </select>
-              </div>
-            </div>
-
-            <ShamsiDateTimeField
-              label="تاریخ و ساعت ددلاین"
-              date={assignForm.dueDate}
-              time={assignForm.deadline}
-              onDateChange={(dueDate) => setAssignForm((current) => ({ ...current, dueDate }))}
-              onTimeChange={(deadline) => setAssignForm((current) => ({ ...current, deadline }))}
-              triggerClassName="bg-muted border-border h-10 text-xs"
-            />
-
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">توضیحات تکمیلی</Label>
-              <textarea 
-                className="w-full bg-muted border-border rounded-xl p-3 text-xs min-h-[100px] outline-none focus:ring-1 focus:ring-primary"
-                placeholder="جزئیات تسک را اینجا بنویسید..."
-                value={assignForm.description}
-                onChange={e => setAssignForm({...assignForm, description: e.target.value})}
-              />
-            </div>
-          </div>
-
-          <DialogFooter className="gap-2">
-            <Button variant="outline" className="flex-1 border-border hover:bg-muted rounded-xl h-11" onClick={() => setIsAssignDialogOpen(false)}>
-              انصراف
-            </Button>
-            <Button className="flex-1 bg-primary text-primary-foreground font-extrabold rounded-xl h-11" onClick={handleAssignTask}>
-              ثبت و ارجاع وظیفه
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Edit Note Dialog */}
-      <Dialog open={isNoteDialogOpen} onOpenChange={setIsNoteDialogOpen}>
-        <DialogContent className="bg-card border-border text-foreground text-right sm:max-w-md" dir="rtl">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-bold flex items-center gap-2">
-              <FileText className="w-5 h-5 text-primary" />
-              ثبت گزارش مرحله
-            </DialogTitle>
-            <DialogDescription className="text-muted-foreground text-xs text-right">
-              یادداشت یا گزارش عملیاتی برای مرحله <span className="text-primary font-bold">{selectedStep?.name}</span>
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-4">
-            <Label className="text-[11px] font-bold text-muted-foreground pr-1 mb-2 block">متن یادداشت</Label>
-            <textarea 
-              className="w-full bg-muted border border-border rounded-xl p-4 text-xs min-h-[120px] outline-none focus:ring-1 focus:ring-primary text-foreground"
-              placeholder="شرح عملیات، مشکلات یا توضیحات تکمیلی را اینجا وارد کنید..."
-              value={editingNote}
-              onChange={(e) => setEditingNote(e.target.value)}
-            />
-          </div>
-          <DialogFooter className="gap-2">
-            <Button variant="outline" className="flex-1 border-border hover:bg-muted text-xs h-11" onClick={() => setIsNoteDialogOpen(false)}>انصراف</Button>
-            <Button 
-              className="flex-1 bg-primary text-primary-foreground font-extrabold text-xs h-11"
-              onClick={() => {
-                if (selectedStep) {
-                  patchShipmentStep(selectedStep.id, { notes: editingNote }).catch(error => toast.error(error instanceof Error ? error.message : "Could not update step."));
-                }
-                setIsNoteDialogOpen(false);
-              }}
-            >
-              ثبت و بروزرسانی
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      )}
     </div>
   );
 }

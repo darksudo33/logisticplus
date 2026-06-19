@@ -51,6 +51,6 @@ test.describe.serial("mobile layout smoke", () => {
 
     await page.goto("/shipments/s1");
     await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
-    await expectNoHorizontalOverflow(page, "shipment V2 detail mobile dashboard");
+    await expectNoHorizontalOverflow(page, "shipment detail mobile dashboard");
   });
 });

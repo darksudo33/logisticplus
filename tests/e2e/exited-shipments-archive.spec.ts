@@ -344,30 +344,35 @@ test.describe.serial("exited shipments archive", () => {
     const shipmentId = fixture.shipment.id;
     await disposeContexts(owner);
 
+    const uiPostExitNote = `ui post-exit note ${suffix}`;
+    const archiveApi = await loginApi();
+    try {
+      const archived = await readOk<any>(
+        await archiveApi.post(`/api/shipments/${encodeURIComponent(shipmentId)}/exited-archive`, {
+          data: { reason: "UI regression fixture archive through canonical API." },
+        })
+      );
+      expect(archived.isExitedArchived).toBe(true);
+
+      const postExit = await readOk<any>(
+        await archiveApi.patch(`/api/shipments/${encodeURIComponent(shipmentId)}/post-exit`, {
+          data: {
+            postExitStatus: "in_progress",
+            postExitNote: uiPostExitNote,
+            postExitFollowUpAt: "2026-06-11",
+          },
+        })
+      );
+      expect(postExit.postExitNote).toBe(uiPostExitNote);
+    } finally {
+      await disposeContexts(archiveApi);
+    }
+
     await loginViaUi(page);
     await page.goto(`/shipments/${encodeURIComponent(shipmentId)}/legacy`);
-    await expect(page.getByTestId("shipment-move-to-exited")).toBeVisible();
-    await page.getByTestId("shipment-move-to-exited").click();
-    await expect(page.getByRole("dialog")).toBeVisible();
-    await page.getByTestId("shipment-exited-archive-reason").fill("UI archive cancelled once.");
-    await page.getByTestId("shipment-exited-archive-cancel").click();
-    await expect(page.getByTestId("shipment-exited-badge")).toHaveCount(0);
-
-    await page.getByTestId("shipment-move-to-exited").click();
-    await page.getByTestId("shipment-exited-archive-reason").fill("UI confirmed customs exit.");
-    await page.getByTestId("shipment-exited-archive-confirm").click();
-    await expect(page.getByTestId("shipment-exited-badge")).toBeVisible();
-    await expect(page.getByTestId("shipment-post-exit-panel")).toBeVisible();
-
-    const uiPostExitNote = `ui post-exit note ${suffix}`;
-    await page.getByTestId("shipment-post-exit-note").fill(uiPostExitNote);
-    await page.getByTestId("shipment-post-exit-follow-up-at").fill("2026-06-11");
-    await page.getByTestId("shipment-post-exit-save").click();
-    await expect.poll(async () => {
-      const response = await page.request.get(`${BASE_URL}/api/shipments/${encodeURIComponent(shipmentId)}`);
-      const payload = await response.json();
-      return payload.data?.postExitNote || "";
-    }).toBe(uiPostExitNote);
+    await expect(page).toHaveURL(new RegExp(`/shipments/${shipmentId}$`));
+    await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
+    await expect(page.getByTestId("shipment-move-to-exited")).toHaveCount(0);
 
     await page.goto("/shipments/exited");
     await expect(page.getByTestId("exited-shipments-page")).toBeVisible();
@@ -385,7 +390,11 @@ test.describe.serial("exited shipments archive", () => {
     await page.getByTestId("exited-shipment-restore-confirm").click();
     await expect(card).toHaveCount(0);
     await page.goto(`/shipments/${encodeURIComponent(shipmentId)}/legacy`);
+    await expect(page).toHaveURL(new RegExp(`/shipments/${shipmentId}$`));
+    await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
+    const restoredDetail = await readOk<any>(await page.request.get(`${BASE_URL}/api/shipments/${encodeURIComponent(shipmentId)}`));
+    expect(restoredDetail.isExitedArchived).toBe(false);
     await expect(page.getByTestId("shipment-exited-badge")).toHaveCount(0);
-    await expect(page.getByTestId("shipment-move-to-exited")).toBeVisible();
+    await expect(page.getByTestId("shipment-move-to-exited")).toHaveCount(0);
   });
 });

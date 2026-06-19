@@ -35,7 +35,7 @@ function validManualShipmentCode(sequence = (Date.now() % 899) + 100) {
   return `${year}${month}${day}${String(sequence).padStart(3, "0")}`;
 }
 
-async function seedLegacyShipmentWithoutSteps(id: string) {
+async function seedLegacyShipmentWithoutSteps(id: string, options: { organizationId?: string | null } = {}) {
   const client = await dbClient();
   const shipment = {
     id,
@@ -59,7 +59,7 @@ async function seedLegacyShipmentWithoutSteps(id: string) {
          id, organization_id, owner_user_id, shipment_code, customer_id, customer_name, status,
          origin, destination, estimated_delivery_at, free_time_ends_at, legacy_data, created_by_id, updated_at
        )
-       VALUES ($1, NULL, 'u1', $2, 'c1', $3, 'LOADING', $4, $5, $6, $6, $7::jsonb, 'u1', NOW())`,
+       VALUES ($1, $8, 'u1', $2, 'c1', $3, 'LOADING', $4, $5, $6, $6, $7::jsonb, 'u1', NOW())`,
       [
         shipment.id,
         shipment.trackingNumber,
@@ -68,12 +68,13 @@ async function seedLegacyShipmentWithoutSteps(id: string) {
         shipment.destination,
         shipment.estimatedDelivery,
         JSON.stringify(shipment),
+        options.organizationId || null,
       ]
     );
     await client.query(
       `INSERT INTO user_records (owner_user_id, organization_id, collection, item_id, data, updated_at)
-       VALUES ('u1', NULL, 'shipments', $1, $2::jsonb, NOW())`,
-      [id, JSON.stringify(shipment)]
+       VALUES ('u1', $3, 'shipments', $1, $2::jsonb, NOW())`,
+      [id, JSON.stringify(shipment), options.organizationId || null]
     );
     await client.query("COMMIT");
   } catch (error) {
@@ -143,7 +144,7 @@ test.describe.serial("UX/UI regression sweep", () => {
     await expect(page.getByTestId("open-shipment-dialog")).toHaveCount(0);
     await createShipmentFromV2(page);
 
-    await expect(page).toHaveURL(/\/shipments\/[^/]+\/v2$/);
+    await expect(page).toHaveURL(/\/shipments\/(?!new-v2$)[^/]+$/);
     await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
     await expect(page.getByTestId("shipment-v2-header-shipment-id")).toHaveText(/^\d{11}$/);
     await expect(page.getByText("NaN%")).toHaveCount(0);
@@ -205,12 +206,13 @@ test.describe.serial("UX/UI regression sweep", () => {
 
   test("pre-existing shipments without steps do not render NaN progress", async ({ page }) => {
     const id = `nosteps-${Date.now()}`;
-    await seedLegacyShipmentWithoutSteps(id);
+    await seedLegacyShipmentWithoutSteps(id, { organizationId: await ownerOrganizationId() });
     await loginViaUi(page);
-    await page.goto(`/shipments/${id}/legacy`);
-    await expect(page.getByRole("heading", { name: id.toUpperCase() })).toBeVisible();
+    await page.goto(`/shipments/${id}`);
+    await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
+    await expect(page.locator("body")).toContainText(id.toUpperCase());
     await expect(page.getByText("NaN%")).toHaveCount(0);
-    expect(await page.locator('[data-slot="progress"]').count()).toBeGreaterThan(0);
+    await expect(page.getByTestId("shipment-v2-route-progress")).toBeVisible();
   });
 
   test("customer tracking renders safe portal timeline, route, and documents without the removed support CTA", async ({ page }) => {
@@ -324,10 +326,12 @@ test.describe.serial("UX/UI regression sweep", () => {
     await expect(page.getByTestId("public-support-cta")).toHaveCount(0);
   });
 
-  test("legacy shipment detail fallback hides the legacy logistics progress card but keeps replacement panels", async ({ page }) => {
+  test("legacy shipment detail route redirects to canonical detail page", async ({ page }) => {
     await loginViaUi(page);
     await page.goto("/shipments/s1/legacy");
-    await expect(page.getByRole("heading", { name: "LS-9801", exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/\/shipments\/s1$/);
+    await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
+    await expect(page.locator("body")).toContainText("LS-9801");
 
     await expect(page.getByText("پیشرفت لجستیک")).toHaveCount(0);
     await expect(page.getByText("درصد تکمیل فرآیند")).toHaveCount(0);
@@ -335,8 +339,8 @@ test.describe.serial("UX/UI regression sweep", () => {
     await expect(page.getByText("40ft High Cube")).toHaveCount(0);
     await expect(page.getByText("8471.30.00")).toHaveCount(0);
 
-    await expect(page.locator('[data-testid="workflow-start"], [data-testid="workflow-expand-all"]').first()).toBeVisible();
-    await expect(page.getByTestId("shipment-daily-status-panel")).toBeVisible();
+    await expect(page.locator('[data-testid="workflow-start"], [data-testid="workflow-expand-all"]').first()).toHaveCount(0);
+    await expect(page.getByTestId("shipment-daily-status-panel")).toHaveCount(0);
   });
 
   test("dashboard setup checklist disappears after customer tracking is enabled", async ({ page }) => {

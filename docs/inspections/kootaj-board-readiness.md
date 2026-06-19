@@ -14,9 +14,9 @@ The repository is ready for a low-risk read-only Phase 1 because it already has:
 - a normalized one-to-one `shipment_kootaj_details` profile;
 - grouped Daily Status DTOs and `/api/kootaj-board` read/write aliases;
 - strict request validation, shipment permissions, relationship ownership checks, and audit logging;
-- responsive Daily Status and Shipment V2 UI patterns with Playwright coverage.
+- responsive Daily Status and canonical Shipment Detail UI patterns with Playwright coverage.
 
-It is not ready for broad Kootaj Board editing without a field-ownership decision. `shipment_v2_profiles.sections_json` and `shipment_kootaj_details` currently contain overlapping declaration, payment, banking, notes, and base concepts. Daily Status writes kootaj columns and synchronizes only selected base values into the V2 profile, while ShipmentDetailV2 writes most non-base sections only into V2 JSON. A second editor would increase drift unless both surfaces call one canonical write service.
+It is not ready for broad Kootaj Board editing without a field-ownership decision. `shipment_v2_profiles.sections_json` and `shipment_kootaj_details` currently contain overlapping declaration, payment, banking, notes, and base concepts. Daily Status writes kootaj columns and synchronizes only selected base values into the V2 profile, while the canonical `ShipmentDetail` UI writes most non-base sections only into V2 JSON. A second editor would increase drift unless both surfaces call one canonical write service.
 
 Recommended sequence:
 
@@ -92,8 +92,8 @@ These are aliases of the Daily Status handlers. The frontend route `/kootaj-boar
 | Canonical shipment repository | `server/src/modules/shipments/shipment.repository.js` | Shipment DTO and tenant-scoped list/detail queries. |
 | Canonical shipment updates | `server/src/modules/shipments/update-operational-fields/shipment-operational.routes.js` | Existing shipment update permission, validation, and audit pattern. |
 | V2 repository/routes | `server/src/modules/shipments/shipment-v2.repository.js`, `shipment-v2.routes.js` | V2 profile ownership, section writes, reference validation, and audit behavior. |
-| V2 detail | `src/app/ShipmentDetailV2.tsx` | Canonical `/shipments/:id` UI and an overlapping editor. High-risk integration point. |
-| Legacy detail integration | `src/app/ShipmentDetail.tsx`, `src/components/shipments/ShipmentDailyStatusPanel.tsx` | Existing detail-to-board integration through Daily Status APIs. Do not refactor in the first Kootaj phase. |
+| Canonical shipment detail | `src/app/ShipmentDetail.tsx` | Canonical `/shipments/:id` UI backed by the former V2 profile sections and an overlapping editor. High-risk integration point. |
+| Historical detail integration | Removed with the legacy detail page | Former embedded detail-to-board integration through Daily Status APIs; no longer the canonical shipment detail page. |
 | Form field registry | `src/shared/shipment-form-fields.js` | Canonical/custom field definitions and shipment-type templates. |
 | Import profile registry | `src/components/shipments/iranImportProfileFields.ts` | Existing labels, editor types, search aliases, and section definitions. |
 | Customer privacy mapper | `server/src/modules/customers/customer.mapper.js` | CEO-only private detail policy and code-only DTO behavior for other users. |
@@ -360,7 +360,7 @@ Create one domain service that:
 - returns the recomposed row;
 - records a sanitized audit event with source `kootaj-board` and changed field names.
 
-Daily Status and ShipmentDetailV2 should call the same service for overlapping fields. Route aliases should remain thin.
+Daily Status and canonical `ShipmentDetail` should call the same service for overlapping fields. Route aliases should remain thin.
 
 Bulk update/import endpoints should be deferred. If later added, each row must be independently tenant-scoped, validated, version-checked, audited, and reported as success/failure; never trust a workbook-supplied organization ID.
 
@@ -426,18 +426,18 @@ Recommended relationship:
 
 The existing `docs/features/daily-status-board-mvp.md` contract should be treated as the baseline: board rows are live shipment projections and linked-module values are derived rather than copied.
 
-## Relationship to ShipmentDetailV2
+## Relationship to ShipmentDetail
 
-`/shipments/:id` currently renders `ShipmentDetailV2`. The legacy detail route alone embeds `ShipmentDailyStatusPanel`; therefore the main detail experience does not currently expose the same Daily Status write path.
+`/shipments/:id` now renders the canonical `ShipmentDetail` page backed by the former V2 profile sections. Compatibility routes such as `/shipments/:id/legacy` and `/shipments/:id/v2` should redirect to the canonical URL instead of rendering separate detail pages.
 
-ShipmentDetailV2 already edits overlapping base, declaration, permit, payment, banking, and note sections. Its base updates synchronize selected canonical shipment fields, but its non-base updates remain V2 JSON-only. Kootaj Board cannot safely become another full editor until this drift is resolved.
+`ShipmentDetail` already edits overlapping base, declaration, permit, payment, banking, and note sections. Its base updates synchronize selected canonical shipment fields, but its non-base updates remain V2 JSON-only. Kootaj Board cannot safely become another full editor until this drift is resolved.
 
 Recommended integration:
 
-1. Do not refactor `ShipmentDetailV2.tsx` during read-only Phase 1.
+1. Do not broadly refactor `src/app/ShipmentDetail.tsx` during read-only Phase 1.
 2. Link every board row to `/shipments/:id`.
-3. After the canonical write service exists, add a compact Kootaj summary/open-board action to V2 rather than embedding another large form.
-4. Move overlapping V2 section writes behind the shared service one section at a time, with bidirectional E2E assertions.
+3. After the canonical write service exists, add a compact Kootaj summary/open-board action to Shipment Detail rather than embedding another large form.
+4. Move overlapping detail section writes behind the shared service one section at a time, with bidirectional E2E assertions.
 5. Keep goods rows and genuinely V2-only fields in V2 until a deliberate normalization migration exists.
 
 ## Tenant, security, validation, permission, and audit requirements
@@ -515,7 +515,7 @@ Copy patterns from `daily-status-board.spec.ts`, `shipment-v2.spec.ts`, `shipmen
 
 - strict unknown-key, enum, impossible date, negative amount, missing currency, and relationship validation;
 - board-to-Daily Status and Daily Status-to-board synchronization;
-- board-to-ShipmentDetailV2 and ShipmentDetailV2-to-board synchronization for every overlapping canonical field;
+- board-to-ShipmentDetail and ShipmentDetail-to-board synchronization for every overlapping canonical field;
 - canonical shipment status/origin/destination updates flow through shipment APIs and timer behavior remains correct;
 - workflow route updates use the workflow service;
 - stale `expectedVersion` returns 409 and does not overwrite the newer row;
@@ -532,8 +532,7 @@ Copy patterns from `daily-status-board.spec.ts`, `shipment-v2.spec.ts`, `shipmen
 - `src/server/db.js`: large legacy aggregate and shared audit/permission compatibility layer.
 - `server/src/server.js`: large composition root; only add narrow dependency wiring.
 - `src/app/DailyStatus.tsx`: large working board with merged customer changes and extensive UI coverage.
-- `src/app/ShipmentDetail.tsx`: large legacy workflow/detail page; explicitly out of scope.
-- `src/app/ShipmentDetailV2.tsx`: canonical detail page with many section editors; integrate incrementally.
+- `src/app/ShipmentDetail.tsx`: canonical detail page with many section editors; integrate incrementally.
 - `src/store/useAppStore.ts` and `src/store/useMockStore.ts`: large state/compatibility surfaces; do not make Kootaj Board dependent on bootstrap state.
 - `src/server/request-schemas.js`: central compatibility export; prefer a modular schema with a narrow re-export if architecture permits.
 - `src/shared/shipment-form-fields.js`: broad canonical registry used by templates and multiple shipment types.
@@ -553,7 +552,7 @@ Copy patterns from `daily-status-board.spec.ts`, `shipment-v2.spec.ts`, `shipmen
 | Navigation or route instability | Feature flag the new page and preserve `/daily-status`. | Restore `/kootaj-board` redirect in one frontend change. |
 | Excel columns are misunderstood | Obtain a sanitized workbook/column dictionary before board-specific schema. | Keep Phase 1 read-only and make no data migration. |
 
-No destructive rollback should be required. New database structures must be additive, and old V2/kootaj data should remain readable until production verification is complete.
+No destructive rollback should be required. New database structures must be additive, and existing V2-profile/kootaj data should remain readable until production verification is complete.
 
 ## Recommended implementation phases
 
@@ -569,7 +568,7 @@ No destructive rollback should be required. New database structures must be addi
 ### Phase 2 — Canonical ownership and write service
 
 - Produce an explicit field ownership map from the approved Excel columns.
-- Create one shipment/kootaj write service used by Kootaj Board, Daily Status, and overlapping V2 section mutations.
+- Create one shipment/kootaj write service used by Kootaj Board, Daily Status, and overlapping Shipment Detail section mutations.
 - Resolve `customsRoute`, payment status, monetary currency, notes, and date ownership.
 - Keep legacy API aliases but make routes thin.
 - Add bidirectional synchronization and audit tests.
@@ -585,7 +584,7 @@ No destructive rollback should be required. New database structures must be addi
 
 - Enable changed-field-only editing for a small allowlist.
 - Add shared Shamsi/currency editors, save/cancel/error/conflict states, and permission checks.
-- Add a compact V2 summary/open-board integration without refactoring ShipmentDetailV2.
+- Add a compact Shipment Detail summary/open-board integration without broadly refactoring the page.
 
 ### Phase 5 — Scale and operational reporting
 
@@ -611,7 +610,7 @@ Read first:
 
 Rules:
 1. Keep /daily-status behavior unchanged.
-2. Do not refactor ShipmentDetail or ShipmentDetailV2.
+2. Do not broadly refactor ShipmentDetail.
 3. Do not edit historical migrations or legacy compatibility files.
 4. Reuse GET /api/kootaj-board and the existing grouped Daily Status DTO; do not create duplicate storage or a second backend projection.
 5. Do not add Kootaj Board write endpoints or enable PATCH from the new page.
@@ -640,10 +639,10 @@ Validation:
 Deliver:
 - files changed
 - checks and exact results
-- confirmation that no migrations, edits, or runtime changes to Daily Status/ShipmentDetail/ShipmentDetailV2 were introduced
+- confirmation that no migrations, edits, or runtime changes to Daily Status/ShipmentDetail were introduced
 - migration/deployment notes
 ```
 
 ## Inspection conclusion
 
-The repository already contains most of the backend foundation for Kootaj Board. The safest product move is to expose that foundation through a dedicated read-only route first, validate the real staff workflow and workbook columns, then unify overlapping writers before adding edits. A new spreadsheet clone or broad ShipmentDetailV2 refactor would create avoidable data drift and should not be the starting point.
+The repository already contains most of the backend foundation for Kootaj Board. The safest product move is to expose that foundation through a dedicated read-only route first, validate the real staff workflow and workbook columns, then unify overlapping writers before adding edits. A new spreadsheet clone or broad ShipmentDetail refactor would create avoidable data drift and should not be the starting point.
