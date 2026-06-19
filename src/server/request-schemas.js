@@ -451,6 +451,16 @@ export const dailyStatusPatchBodySchema = z.object({
   { message: "At least one daily status field is required." }
 );
 
+export const kootajBoardPatchBodySchema = z.object({
+  cotageNumber: optionalNullableTrimmedText(120),
+  customsStatus: z.preprocess(blankToNull, dailyStatusCustomsStatus.nullable().optional()),
+  customsRoute: z.preprocess(blankToNull, dailyStatusCustomsRoute.nullable().optional()),
+  releaseStatus: z.preprocess(blankToNull, dailyStatusReleaseStatus.nullable().optional()),
+}).strict().refine(
+  (value) => Object.values(value).some((item) => item !== undefined),
+  { message: "At least one Kootaj operation field is required." }
+);
+
 export const shipmentPublicStatusBodySchema = z.object({
   publicLabel: z.string().trim().min(1, "Public status label is required.").max(180),
   publicDescription: optionalTrimmedText(1000),

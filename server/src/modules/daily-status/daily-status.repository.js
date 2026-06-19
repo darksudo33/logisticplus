@@ -25,6 +25,8 @@ import {
   BASE_INFO_PATCH_FIELDS,
   BASE_SECTION_DEFAULTS,
   KOOTAJ_COLUMN_BY_FIELD,
+  KOOTAJ_OPERATION_UPDATE_FIELDS,
+  applyKootajOperationUpdates,
   baseSectionPatchFromUpdates,
   defaultV2SectionsForShipment,
 } from "../shipments/kootaj/index.js";
@@ -808,11 +810,22 @@ export async function updateDailyStatusRow(pool, {
       [crypto.randomUUID(), scopedOrganizationId, shipmentId, actorUserId || null]
     );
 
+    await applyKootajOperationUpdates(client, {
+      organizationId: scopedOrganizationId,
+      shipmentId,
+      actorUserId,
+      shipmentRow,
+      updates: kootajUpdates,
+      syncShipmentV2Profile: true,
+    });
+
     const columns = [];
     const values = [scopedOrganizationId, shipmentId];
     const writtenColumns = new Set();
+    const operationUpdateFields = new Set(KOOTAJ_OPERATION_UPDATE_FIELDS);
     for (const [field, column] of Object.entries(KOOTAJ_COLUMN_BY_FIELD)) {
       if (kootajUpdates[field] === undefined) continue;
+      if (operationUpdateFields.has(field)) continue;
       if (writtenColumns.has(column)) continue;
       values.push(kootajUpdates[field]);
       columns.push(`${column} = $${values.length}`);

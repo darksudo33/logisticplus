@@ -2,6 +2,7 @@ import {
   dailyStatusListQuerySchema,
   dailyStatusParamsSchema,
   dailyStatusPatchBodySchema,
+  kootajBoardPatchBodySchema,
 } from "./daily-status.validation.js";
 import { parseRequestValue } from "../../shared/middleware/validate.middleware.js";
 import {
@@ -89,7 +90,7 @@ export function registerDailyStatusRoutes(
     }
   }
 
-  function createPatchHandler(auditSource, summary) {
+  function createPatchHandler(auditSource, summary, bodySchema = dailyStatusPatchBodySchema) {
     return async function handlePatch(req, res) {
       try {
         const tenantRequest = await requireAuthenticatedTenantUser(req, res, "daily status update API");
@@ -98,7 +99,7 @@ export function registerDailyStatusRoutes(
         await requirePermission(user, "shipments.update");
         const params = parseRequestValue(res, dailyStatusParamsSchema, req.params);
         if (!params) return;
-        const body = parseRequestValue(res, dailyStatusPatchBodySchema, req.body || {});
+        const body = parseRequestValue(res, bodySchema, req.body || {});
         if (!body) return;
 
         const result = await updateDailyStatusRow(pool, {
@@ -154,11 +155,16 @@ export function registerDailyStatusRoutes(
     "shipment-detail-daily-status",
     "Shipment detail daily status fields were updated."
   );
+  const handleKootajBoardPatch = createPatchHandler(
+    "kootaj-board",
+    "Kootaj board operation fields were updated.",
+    kootajBoardPatchBodySchema
+  );
 
   app.get("/api/daily-status", handleList);
   app.get("/api/kootaj-board", handleList);
   app.get("/api/shipments/:shipmentId/daily-status", handleShipmentDetailGet);
   app.patch("/api/daily-status/:shipmentId", handleDailyStatusPatch);
-  app.patch("/api/kootaj-board/:shipmentId", handleDailyStatusPatch);
+  app.patch("/api/kootaj-board/:shipmentId", handleKootajBoardPatch);
   app.patch("/api/shipments/:shipmentId/daily-status", handleShipmentDetailPatch);
 }

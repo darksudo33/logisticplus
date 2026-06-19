@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import crypto from "node:crypto";
+import pg from "pg";
 import {
   BASE_URL,
   OWNER_EMAIL,
@@ -7,10 +9,24 @@ import {
   apiContext,
   disposeContexts,
   expectForbidden,
+  expectUnavailable,
   loginApi,
   readOk,
   uniqueEmail,
 } from "./helpers";
+
+const { Client } = pg;
+const testDatabaseUrl = process.env.TEST_DATABASE_URL || "postgres://postgres@localhost:5432/logisticplus_test";
+
+async function dbQuery(sql: string, params: any[] = []) {
+  const client = new Client({ connectionString: testDatabaseUrl });
+  await client.connect();
+  try {
+    return await client.query(sql, params);
+  } finally {
+    await client.end();
+  }
+}
 
 async function loginPageByApi(page: Page, email = OWNER_EMAIL, password = OWNER_PASSWORD) {
   const response = await page.context().request.post(`${BASE_URL}/api/auth/login`, {
@@ -26,6 +42,20 @@ async function expectNoHorizontalPageOverflow(page: Page) {
   }));
   expect(overflow.body).toBeLessThanOrEqual(1);
   expect(overflow.document).toBeLessThanOrEqual(1);
+}
+
+async function createCustomer(context: Awaited<ReturnType<typeof loginApi>>, marker: string) {
+  return readOk<any>(
+    await context.post("/api/customers", {
+      data: {
+        name: `${marker} Customer`,
+        company: `${marker} Company`,
+        email: `${marker.toLowerCase()}@example.test`,
+        phone: "09120000000",
+        address: `${marker} Address`,
+      },
+    })
+  );
 }
 
 async function createCompanyUser(owner: Awaited<ReturnType<typeof loginApi>>, role = "OPERATIONS") {
@@ -97,6 +127,141 @@ test.describe.serial("read-only kootaj board", () => {
       contexts.push(tenant);
       const tenantRows = await readOk<any[]>(await tenant.get("/api/kootaj-board?shipmentId=s1"));
       expect(tenantRows).toEqual([]);
+    } finally {
+      await disposeContexts(...contexts);
+    }
+  });
+
+  test("updates safe Kootaj fields through the shared backend path only", async () => {
+    const owner = await loginApi();
+    const anonymous = await apiContext();
+    const contexts = [owner, anonymous];
+    const suffix = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    try {
+      const ownerAuth = await readOk<any>(await owner.get("/api/auth/me"));
+      const customer = await createCustomer(owner, `KootajPhase2A${suffix}`);
+      const created = await readOk<any>(
+        await owner.post("/api/shipments/v2", {
+          data: {
+            flowCode: "IMPORT_SHIP",
+            customerId: customer.id,
+            origin: "Jebel Ali",
+            dischargePort: "Bandar Abbas",
+            deliveryPort: "Tehran",
+            consigneeName: "Kootaj consignee",
+          },
+        })
+      );
+      const shipmentId = created.shipment.id;
+      const cotageNumber = `KB-COTAGE-${suffix}`;
+      const startedAt = new Date(Date.now() - 1000).toISOString();
+
+      const unauthorized = await anonymous.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
+        data: { cotageNumber },
+      });
+      await expectForbidden(unauthorized);
+
+      const invalidRelationship = await owner.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
+        data: { commercialCardId: `card-${suffix}` },
+      });
+      expect(invalidRelationship.status(), await invalidRelationship.text()).toBe(400);
+
+      const invalidRoute = await owner.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
+        data: { customsRoute: "blue" },
+      });
+      expect(invalidRoute.status(), await invalidRoute.text()).toBe(400);
+
+      const updated = await readOk<any>(
+        await owner.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
+          data: {
+            cotageNumber,
+            customsRoute: "yellow",
+            customsStatus: "inspection",
+            releaseStatus: "ready",
+          },
+        })
+      );
+      expect(updated.kootaj.cotageNumber).toBe(cotageNumber);
+      expect(updated.kootaj.customsRoute).toBe("yellow");
+      expect(updated.kootaj.customsStatus).toBe("inspection");
+      expect(updated.kootaj.releaseStatus).toBe("ready");
+
+      const kootajRows = await readOk<any[]>(await owner.get(`/api/kootaj-board?shipmentId=${encodeURIComponent(shipmentId)}`));
+      expect(kootajRows).toHaveLength(1);
+      expect(kootajRows[0].kootaj).toMatchObject({
+        cotageNumber,
+        customsRoute: "yellow",
+        customsStatus: "inspection",
+        releaseStatus: "ready",
+      });
+
+      const dailyRows = await readOk<any[]>(await owner.get(`/api/daily-status?shipmentId=${encodeURIComponent(shipmentId)}`));
+      expect(dailyRows[0].kootaj).toMatchObject(kootajRows[0].kootaj);
+
+      const detailAlias = await readOk<any>(await owner.get(`/api/shipments/${encodeURIComponent(shipmentId)}/daily-status`));
+      expect(detailAlias.kootaj).toMatchObject(kootajRows[0].kootaj);
+
+      const v2Profile = await readOk<any>(await owner.get(`/api/shipments/${encodeURIComponent(shipmentId)}/v2-profile`));
+      expect(v2Profile.profile.sections.declarationKootaj.cotageNumber).toBe(cotageNumber);
+      expect(v2Profile.profile.sections.declarationKootaj.customsRoute).toBe("YELLOW");
+
+      const audit = await dbQuery(
+        `SELECT organization_id, actor_user_id, resource_id, after_json, metadata_json
+         FROM audit_logs
+         WHERE event_type = 'daily_status.update'
+           AND resource_id = $1
+           AND metadata_json->>'source' = 'kootaj-board'
+           AND created_at >= $2
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [shipmentId, startedAt]
+      );
+      expect(audit.rows[0]?.organization_id).toBe(ownerAuth.user.organizationId);
+      expect(audit.rows[0]?.actor_user_id).toBe(ownerAuth.user.id);
+      expect(audit.rows[0]?.metadata_json?.shipmentId).toBe(shipmentId);
+      expect(audit.rows[0]?.metadata_json?.changedFields).toEqual(
+        expect.arrayContaining(["cotageNumber", "customsRoute", "customsStatus", "releaseStatus"])
+      );
+      expect(audit.rows[0]?.after_json).toEqual(expect.objectContaining({
+        cotageNumber,
+        customsRoute: "yellow",
+        customsStatus: "inspection",
+        releaseStatus: "ready",
+      }));
+
+      const tenantInfo = await createTenantOwner(owner);
+      const tenant = await loginApi(tenantInfo.tenantEmail, USER_PASSWORD);
+      contexts.push(tenant);
+      await expectUnavailable(
+        await tenant.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
+          data: { cotageNumber: `CROSS-${suffix}` },
+        })
+      );
+
+      const detailCotageNumber = `DETAIL-COTAGE-${suffix}`;
+      const detailUpdated = await readOk<any>(
+        await owner.patch(`/api/shipments/${encodeURIComponent(shipmentId)}/v2-profile/sections/declarationKootaj`, {
+          data: {
+            cotageNumber: detailCotageNumber,
+            customsRoute: "RED",
+            cotageRegistrationDate: "",
+            totalValueAmount: null,
+            totalValueCurrency: "IRR",
+            finalPaidAmount: null,
+            finalPaidCurrency: "IRR",
+          },
+        })
+      );
+      expect(detailUpdated.profile.sections.declarationKootaj.cotageNumber).toBe(detailCotageNumber);
+      expect(detailUpdated.profile.sections.declarationKootaj.customsRoute).toBe("RED");
+
+      const afterDetailRows = await readOk<any[]>(
+        await owner.get(`/api/kootaj-board?shipmentId=${encodeURIComponent(shipmentId)}`)
+      );
+      expect(afterDetailRows[0].kootaj.cotageNumber).toBe(detailCotageNumber);
+      expect(afterDetailRows[0].kootaj.customsRoute).toBe("red");
+      expect(afterDetailRows[0].kootaj.customsStatus).toBe("inspection");
+      expect(afterDetailRows[0].kootaj.releaseStatus).toBe("ready");
     } finally {
       await disposeContexts(...contexts);
     }
