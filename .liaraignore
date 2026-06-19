@@ -5,7 +5,11 @@ coverage/
 playwright-report/
 test-results/
 .codex-qa-screenshots/
+.agents/
+.continue/
 graphify-out/
+playwright-report/
+reports/
 storage/test-documents/
 storage/documents/
 backups/

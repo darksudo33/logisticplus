@@ -5,17 +5,13 @@ import {
   AlertTriangle,
   ArrowRight,
   Building2,
-  CreditCard,
   FileWarning,
   HeartPulse,
   LayoutDashboard,
   LogOut,
   Menu,
-  MessageSquareText,
   ReceiptText,
-  Send,
   ShieldCheck,
-  UserPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -28,10 +24,7 @@ import { useAppDataStore } from "@/src/store/useMockStore";
 export type AdminSectionKey =
   | "overview"
   | "organizations"
-  | "contacts"
-  | "requests"
   | "subscriptions"
-  | "sms"
   | "billing"
   | "errors";
 
@@ -45,10 +38,7 @@ export type AdminNavItem = {
 const iconBySection: Record<AdminSectionKey, React.ElementType> = {
   overview: LayoutDashboard,
   organizations: Building2,
-  contacts: MessageSquareText,
-  requests: UserPlus,
   subscriptions: ShieldCheck,
-  sms: Send,
   billing: ReceiptText,
   errors: FileWarning,
 };

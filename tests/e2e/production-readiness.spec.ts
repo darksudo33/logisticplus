@@ -8,6 +8,7 @@ import {
   loginApi,
   loginViaUi,
   readOk,
+  expectUnavailable,
 } from "./helpers";
 
 const protectedApiRoutes = [
@@ -91,14 +92,10 @@ test.describe.serial("production readiness regression checks", () => {
     await context.close();
   });
 
-  test("SMS login request cooldown works without sending to unknown phones", async () => {
+  test("retired SMS phone-login APIs stay unavailable", async () => {
     const context = await apiContext();
-    const phone = `091${String(Date.now()).slice(-8)}`;
-    const first = await readOk<any>(await context.post("/api/auth/phone/request-code", { data: { phone } }));
-    expect(first.codeSent).toBe(false);
-    const limited = await context.post("/api/auth/phone/request-code", { data: { phone } });
-    expect(limited.status(), await limited.text()).toBe(429);
-    expect(limited.headers()["retry-after"]).toBeTruthy();
+    await expectUnavailable(await context.post("/api/auth/phone/request-code", { data: { phone: "09120000000" } }));
+    await expectUnavailable(await context.post("/api/auth/phone/verify", { data: { phone: "09120000000", code: "000000" } }));
     await disposeContexts(context);
   });
 

@@ -82,11 +82,18 @@ npm install
 npm run lint
 npm run build
 npm run safety:check
+npm run smoke:production-config
 npm run db:migrate:fresh:test
 npm run db:migrate:current:test
 npm run seed:production-core:test
 npm run seed:production-admin:test
 npm run test:e2e:setup
+npm run test:e2e
+```
+
+For a faster staging sanity pass after the full suite is already green, these focused Playwright specs cover the highest-risk release surfaces:
+
+```bash
 npx playwright test tests/e2e/security.spec.ts
 npx playwright test tests/e2e/document-download-print.spec.ts
 npx playwright test tests/e2e/audit-logging.spec.ts

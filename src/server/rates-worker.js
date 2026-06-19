@@ -1,4 +1,4 @@
-import { syncBrsApiProCurrencyRates } from "./rates/brsapi.js";
+import { syncBrsApiProCurrencyRates } from "../../server/src/modules/rates/brsapi.js";
 
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000;
 

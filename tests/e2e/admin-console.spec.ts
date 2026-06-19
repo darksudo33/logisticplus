@@ -78,43 +78,34 @@ test.describe.serial("separate platform admin console", () => {
     await expect(page.getByTestId("admin-section-overview")).toBeVisible();
   });
 
-  test("renders all admin modules in the separate console shell", async ({ page }) => {
+  test("renders the active admin modules in the separate console shell", async ({ page }) => {
     await loginViaUi(page);
     await page.goto("/platform-admin");
     await expect(page.getByTestId("admin-shell")).toBeVisible();
     await expect(page.getByTestId("admin-billing-panel")).toBeVisible();
     await expect(page.getByTestId("admin-organizations-panel")).toBeVisible();
-    await expect(page.getByTestId("admin-signups-panel")).toBeVisible();
-    await expect(page.getByTestId("admin-contacts-panel")).toBeVisible();
-    await expect(page.getByTestId("admin-sms-health-panel")).toBeVisible();
     await expect(page.getByTestId("admin-errors-panel")).toBeVisible();
     await expect(page.getByTestId("admin-health-panel")).toBeVisible();
 
-    for (const section of ["overview", "organizations", "requests", "contacts", "subscriptions", "billing", "sms", "errors"]) {
+    for (const section of ["overview", "organizations", "subscriptions", "billing", "errors"]) {
       await page.getByTestId(`admin-nav-${section}`).first().click();
       await expect(page.getByTestId(`admin-section-${section}`)).toBeVisible();
       await expectNoHorizontalOverflow(page);
     }
   });
 
-  test("guards the manual SMS worker action before any API call", async ({ page }) => {
-    const runWorkerRequests: string[] = [];
-    page.on("request", (request) => {
-      if (request.url().includes("/api/admin/sms-deliveries/run-worker")) {
-        runWorkerRequests.push(request.url());
-      }
-    });
-    page.on("dialog", async (dialog) => {
-      expect(dialog.message()).toContain("SMS worker");
-      await dialog.dismiss();
-    });
-
+  test("does not expose retired signup request, contact, or SMS modules", async ({ page }) => {
     await loginViaUi(page);
     await page.goto("/platform-admin");
-    await page.getByTestId("admin-nav-sms").first().click();
-    await expect(page.getByTestId("admin-section-sms")).toBeVisible();
-    await page.locator("button", { hasText: /worker/i }).first().click();
-    expect(runWorkerRequests).toEqual([]);
+    await expect(page.getByTestId("admin-nav-requests")).toHaveCount(0);
+    await expect(page.getByTestId("admin-nav-contacts")).toHaveCount(0);
+    await expect(page.getByTestId("admin-nav-sms")).toHaveCount(0);
+    await expect(page.getByTestId("admin-signups-panel")).toHaveCount(0);
+    await expect(page.getByTestId("admin-contacts-panel")).toHaveCount(0);
+    await expect(page.getByTestId("admin-sms-health-panel")).toHaveCount(0);
+    await expect(page.getByTestId("admin-section-requests")).toHaveCount(0);
+    await expect(page.getByTestId("admin-section-contacts")).toHaveCount(0);
+    await expect(page.getByTestId("admin-section-sms")).toHaveCount(0);
   });
 
   test("is responsive on mobile without console errors or horizontal overflow", async ({ browser }) => {

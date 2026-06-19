@@ -11,6 +11,7 @@ import {
   expectForbidden,
   expectPublicTrackingPayloadIsSafe,
   loginApi,
+  nextValidShipmentCode,
   readOk,
   uniqueEmail,
 } from "./helpers";
@@ -19,12 +20,6 @@ const { Client } = pg;
 const testDatabaseUrl = process.env.TEST_DATABASE_URL || "postgres://postgres@localhost:5432/logisticplus_test";
 const ownerOrganizationId = "org-logisticplus-default";
 const ownerUserId = "u1";
-let shipmentCodeSequence = 600 + (Date.now() % 300);
-
-function validShipmentCode() {
-  shipmentCodeSequence = shipmentCodeSequence >= 998 ? 600 : shipmentCodeSequence + 1;
-  return `14050316${String(shipmentCodeSequence).padStart(3, "0")}`;
-}
 
 async function dbQuery(sql: string, params: any[] = []) {
   const client = new Client({ connectionString: testDatabaseUrl });
@@ -145,7 +140,7 @@ test.describe.serial("daily status board", () => {
         holderName: "Cross tenant daily status card",
       });
 
-      const rows = await readOk<any[]>(await owner.get("/api/daily-status"));
+      const rows = await readOk<any[]>(await owner.get("/api/daily-status?shipmentId=s1"));
       expect(rows.length).toBeGreaterThan(0);
       const seedRow = rows.find((row) => row.shipment.id === "s1");
       expect(seedRow).toBeTruthy();
@@ -396,7 +391,7 @@ test.describe.serial("daily status board", () => {
       const noTimer = await readOk<any>(
         await owner.post("/api/shipments", {
           data: {
-            trackingNumber: validShipmentCode(),
+            trackingNumber: await nextValidShipmentCode(),
             origin: "Daily no timer origin",
             destination: "Daily no timer destination",
             status: "LOADING",
@@ -406,7 +401,7 @@ test.describe.serial("daily status board", () => {
       const laterTimer = await readOk<any>(
         await owner.post("/api/shipments", {
           data: {
-            trackingNumber: validShipmentCode(),
+            trackingNumber: await nextValidShipmentCode(),
             origin: "Daily later timer origin",
             destination: "Daily later timer destination",
             status: "LOADING",
@@ -416,7 +411,7 @@ test.describe.serial("daily status board", () => {
       const closestTimer = await readOk<any>(
         await owner.post("/api/shipments", {
           data: {
-            trackingNumber: validShipmentCode(),
+            trackingNumber: await nextValidShipmentCode(),
             origin: "Daily closest timer origin",
             destination: "Daily closest timer destination",
             status: "LOADING",
@@ -486,6 +481,11 @@ test.describe.serial("daily status board", () => {
             customsOffice: "UI Test Customs Office",
             internalNote: `daily-status-ui-private-${suffix}`,
           },
+        })
+      );
+      await readOk<any>(
+        await owner.patch("/api/shipments/s1/operational-fields", {
+          data: { timerDeadlineAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() },
         })
       );
       const uiRows = await readOk<any[]>(await owner.get("/api/daily-status"));
@@ -678,6 +678,7 @@ test.describe.serial("daily status board", () => {
         [ownerOrganizationId, originalCotageNumber, editedCotageNumber, detailCotageNumber]
       ).catch(() => null);
       await dbQuery("DELETE FROM user_records WHERE item_id IN ($1, $2)", [ownerCardId, detailCardId]).catch(() => null);
+      await owner.patch("/api/shipments/s1/operational-fields", { data: { timerDeadlineAt: null } }).catch(() => null);
       await disposeContexts(owner);
     }
   });

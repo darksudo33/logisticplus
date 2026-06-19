@@ -5,7 +5,10 @@ coverage/
 playwright-report/
 test-results/
 .codex-qa-screenshots/
+.agents/
+.continue/
 graphify-out/
+skills-lock.json
 storage/test-documents/
 storage/test-object-documents/
 storage/documents/

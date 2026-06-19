@@ -7,6 +7,7 @@ import {
   Bot,
   CheckCircle2,
   ClipboardList,
+  FileSearch,
   FileText,
   Loader2,
   PackageSearch,
@@ -349,6 +350,73 @@ function ShipmentQuickSearch() {
   );
 }
 
+function DocumentShipmentQuickSearch() {
+  const navigate = useNavigate();
+  const [query, setQuery] = React.useState("");
+  const [error, setError] = React.useState("");
+
+  const handleSearch = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const searchTerm = query.trim();
+    setError("");
+    if (searchTerm.length < 2) {
+      setError("برای جستجو حداقل دو کاراکتر وارد کنید.");
+      return;
+    }
+    navigate(`/documents/management-center?shipment=${encodeURIComponent(searchTerm)}`);
+  };
+
+  return (
+    <Card data-testid="dashboard-document-shipment-search-section">
+      <CardHeader className="pb-0">
+        <div className="flex items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600">
+            <FileSearch className="h-5 w-5" />
+          </span>
+          <div className="min-w-0">
+            <CardTitle className="text-base font-black">جستجوی پرونده اسناد</CardTitle>
+            <CardDescription className="mt-1 text-xs font-bold">
+              شماره محموله یا رهگیری را وارد کنید تا مرکز مدیریت اسناد همان پرونده باز شود.
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-4">
+        <form className="flex flex-col gap-2 sm:flex-row" onSubmit={handleSearch}>
+          <div className="relative min-w-0 flex-1">
+            <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                if (error) setError("");
+              }}
+              placeholder="جستجوی شماره محموله برای اسناد..."
+              className="h-10 rounded-lg bg-background pr-9 text-sm font-bold"
+              data-testid="dashboard-document-shipment-search-input"
+            />
+          </div>
+          <Button
+            type="submit"
+            className="h-10 px-4 text-xs font-black"
+            data-testid="dashboard-document-shipment-search-submit"
+          >
+            <Search className="h-4 w-4" />
+            جستجو
+          </Button>
+        </form>
+
+        {error ? (
+          <p className="mt-2 flex items-center gap-1 text-xs font-bold text-destructive" data-testid="dashboard-document-shipment-search-error">
+            <AlertCircle className="h-3.5 w-3.5" />
+            {error}
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 function AiAssistantCard({ assistant }: { assistant: DashboardHomeData["aiAssistant"] }) {
   const navigate = useNavigate();
   const [draft, setDraft] = React.useState("");
@@ -595,7 +663,7 @@ function MyTasksPanel({ tasks }: { tasks: DashboardTask[] }) {
       </CardHeader>
       <CardContent className="pt-4">
         {tasks.length === 0 ? (
-          <div className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-muted/25 p-4" data-testid="dashboard-my-tasks-empty">
+          <div className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-muted/25 p-4" data-empty-state data-testid="dashboard-my-tasks-empty">
             <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" />
             <p className="text-sm font-bold text-muted-foreground">وظیفه فعالی برای شما ثبت نشده است.</p>
           </div>
@@ -643,7 +711,7 @@ function LastShipmentsPanel({ shipments }: { shipments: DashboardShipment[] }) {
       </CardHeader>
       <CardContent className="pt-4">
         {shipments.length === 0 ? (
-          <div className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-muted/25 p-4">
+          <div className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-muted/25 p-4" data-empty-state data-testid="dashboard-last-shipments-empty">
             <Ship className="h-5 w-5 shrink-0 text-primary" />
             <p className="text-sm font-bold text-muted-foreground">هنوز محموله‌ای برای نمایش وجود ندارد.</p>
           </div>
@@ -755,6 +823,8 @@ export default function Dashboard() {
       </section>
 
       <ShipmentQuickSearch />
+
+      <DocumentShipmentQuickSearch />
 
       <AiAssistantCard assistant={data.aiAssistant} />
 

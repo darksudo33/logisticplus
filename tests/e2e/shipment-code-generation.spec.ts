@@ -3,8 +3,10 @@ import pg from "pg";
 import {
   USER_PASSWORD,
   apiContext,
+  currentTehranShamsiParts,
   disposeContexts,
   loginApi,
+  nextValidShipmentCode,
   readOk,
   uniqueEmail,
 } from "./helpers";
@@ -20,26 +22,6 @@ async function dbQuery(sql: string, params: any[] = []) {
   } finally {
     await client.end();
   }
-}
-
-function currentTehranShamsiParts() {
-  const parts = new Intl.DateTimeFormat("en-US-u-ca-persian", {
-    timeZone: "Asia/Tehran",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const valueByType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  const year = String(valueByType.year || "").padStart(4, "0");
-  const month = String(valueByType.month || "").padStart(2, "0");
-  const day = String(valueByType.day || "").padStart(2, "0");
-  return {
-    year,
-    month,
-    day,
-    compactDate: `${year}${month}${day}`,
-    slashDate: `${year}/${month}/${day}`,
-  };
 }
 
 async function createCustomer(context: Awaited<ReturnType<typeof loginApi>>, marker: string) {
@@ -106,7 +88,7 @@ test.describe.serial("strict Shamsi shipment code generation", () => {
     const marker = `ShipmentCodeExisting${Date.now()}`;
     const customer = await createCustomer(owner, marker);
     const today = currentTehranShamsiParts();
-    const existingCode = `${today.compactDate}020`;
+    const existingCode = await nextValidShipmentCode();
 
     for (const [payloadCode, expectedMessage] of [
       ["BAD-CODE", "فرمت کد محموله معتبر نیست. مثال صحیح: 14050316020"],
@@ -148,7 +130,8 @@ test.describe.serial("strict Shamsi shipment code generation", () => {
         data: shipmentBody(customer.id),
       })
     );
-    expect(nextAuto.shipment.trackingNumber).toBe(`${today.compactDate}021`);
+    const nextSequence = Number(existingCode.slice(8, 11)) + 1;
+    expect(nextAuto.shipment.trackingNumber).toBe(`${today.compactDate}${String(nextSequence).padStart(3, "0")}`);
 
     await disposeContexts(owner);
   });
@@ -156,8 +139,7 @@ test.describe.serial("strict Shamsi shipment code generation", () => {
   test("keeps shipment-code uniqueness tenant-scoped and blocks non-CEO onboarding mode", async () => {
     const owner = await loginApi();
     const publicContext = await apiContext();
-    const today = currentTehranShamsiParts();
-    const sharedCode = `${today.compactDate}101`;
+    const sharedCode = await nextValidShipmentCode();
 
     const ownerCustomer = await createCustomer(owner, `ShipmentCodeTenantOwner${Date.now()}`);
     await readOk<any>(
@@ -211,7 +193,7 @@ test.describe.serial("strict Shamsi shipment code generation", () => {
     const unauthorized = await normalUser.post("/api/shipments/v2", {
       data: shipmentBody(ownerCustomer.id, {
         codeMode: "existing",
-        trackingNumber: `${today.compactDate}102`,
+        trackingNumber: await nextValidShipmentCode(),
       }),
     });
     expect([403]).toContain(unauthorized.status());

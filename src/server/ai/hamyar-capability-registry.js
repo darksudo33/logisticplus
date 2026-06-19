@@ -212,7 +212,7 @@ export const HAMYAR_CAPABILITY_REGISTRY = deepFreeze({
           missingTemplate: "برای این محموله وضعیت ثبت نشده است.",
         }),
         goods: field({
-          aliases: ["کالا", "شرح کالا", "بارنامه", "goods", "commodity"],
+          aliases: ["کالا", "کالای", "کالای محموله", "شرح کالا", "بارنامه", "goods", "commodity"],
           source: "shipment_v2_profiles.sections_json.goods.goodsRows + shipment_kootaj_details.goods_summary",
           sourceTool: "getShipmentGoods",
           freshness: FRESHNESS.LIVE_REQUIRED,

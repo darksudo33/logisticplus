@@ -1,5 +1,5 @@
 import React from "react";
-import { Activity, AlertTriangle, ArrowUpLeft, BellRing, Building2, CheckCircle2, ChevronDown, ChevronUp, CircleDollarSign, Clock3, CreditCard, Database, FileWarning, Globe2, HardDrive, HeartPulse, KeyRound, LayoutDashboard, Mail, MessageSquareText, PhoneCall, ReceiptText, Send, Server, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, UserCheck, UserPlus, Users, UserX, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, ArrowUpLeft, BellRing, Building2, CheckCircle2, ChevronDown, ChevronUp, CircleDollarSign, ClipboardList, Clock3, CreditCard, Database, FileWarning, Globe2, HardDrive, HeartPulse, KeyRound, LayoutDashboard, Mail, MessageSquareText, PhoneCall, ReceiptText, Send, Server, ShieldCheck, SlidersHorizontal, Sparkles, Trash2, UserCheck, UserPlus, Users, UserX, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ import { AdminPanelSkeleton } from "@/src/components/SkeletonStates";
 import { ActionSkeleton } from "@/components/ui/skeleton";
 import { useAppDataStore } from "@/src/store/useMockStore";
 
-export type AdminTabKey = "overview" | "organizations" | "contacts" | "requests" | "subscriptions" | "sms" | "billing" | "errors";
+export type AdminTabKey = "overview" | "organizations" | "subscriptions" | "billing" | "errors";
 type Organization = {
   id: string;
   name: string;
@@ -27,61 +27,6 @@ type Organization = {
 type Plan = {
   id: string;
   name: string;
-};
-type ContactRequest = {
-  id: string;
-  companyName: string;
-  contactName: string;
-  contactEmail?: string;
-  contactPhone?: string;
-  preferredContactMethod?: string;
-  message?: string;
-  status: string;
-  createdAt?: string;
-};
-type SmsDelivery = {
-  id: string;
-  organizationId: string;
-  organizationName?: string;
-  userName?: string;
-  recipientType?: string;
-  recipientName?: string;
-  recipientPhone?: string;
-  status: string;
-  provider?: string;
-  sourceType?: string;
-  providerResponse?: Record<string, any>;
-  skipReason?: string;
-  errorMessage?: string;
-  createdAt?: string;
-  sentAt?: string;
-};
-type SmsTemplate = {
-  key: string;
-  label: string;
-  body: string;
-  enabled: boolean;
-  updatedAt?: string;
-};
-type SmsAnalytics = {
-  summary: {
-    totalSent: number;
-    sentThisMonth: number;
-    failed: number;
-    skipped: number;
-    queued: number;
-  };
-  recipients: Array<{
-    organizationName?: string;
-    recipientType?: string;
-    recipientName?: string;
-    recipientPhone?: string;
-    sentCount: number;
-    failedCount: number;
-    skippedCount: number;
-    lastStatus?: string;
-    lastActivityAt?: string;
-  }>;
 };
 type AdminOrgUser = {
   id: string;
@@ -342,12 +287,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
   const [orgBilling, setOrgBilling] = React.useState<any>(null);
   const [orgUsers, setOrgUsers] = React.useState<AdminOrgUser[]>([]);
   const [orgUserSaving, setOrgUserSaving] = React.useState("");
-  const [requests, setRequests] = React.useState<any[]>([]);
-  const [contactRequests, setContactRequests] = React.useState<ContactRequest[]>([]);
-  const [smsDeliveries, setSmsDeliveries] = React.useState<SmsDelivery[]>([]);
-  const [smsAnalytics, setSmsAnalytics] = React.useState<SmsAnalytics | null>(null);
-  const [smsTemplates, setSmsTemplates] = React.useState<SmsTemplate[]>([]);
-  const [smsRunning, setSmsRunning] = React.useState(false);
   const [payments, setPayments] = React.useState<any[]>([]);
   const [invoices, setInvoices] = React.useState<any[]>([]);
   const [selectedInvoice, setSelectedInvoice] = React.useState<any>(null);
@@ -405,12 +344,10 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
   const refresh = React.useCallback(async () => {
     setLoading(true);
     try {
-      const [overviewData, orgData, planData, requestData, contactData, paymentData, invoiceData, errorData] = await Promise.all([
+      const [overviewData, orgData, planData, paymentData, invoiceData, errorData] = await Promise.all([
         api<any>("/api/admin/overview"),
         api<Organization[]>("/api/admin/organizations"),
         api<Plan[]>("/api/plans"),
-        api<any[]>("/api/admin/signup-requests"),
-        api<ContactRequest[]>("/api/admin/contact-requests"),
         api<any[]>("/api/admin/payments"),
         api<any[]>("/api/admin/billing/invoices"),
         api<any[]>(`/api/admin/error-logs?resolved=${errorFilter}`),
@@ -419,11 +356,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
       setOrganizations(orgData);
       setPlans(planData);
       setManualSignup((current) => ({ ...current, planId: current.planId || planData[0]?.id || "" }));
-      setRequests(requestData);
-      setContactRequests(contactData);
-      setSmsDeliveries([]);
-      setSmsAnalytics(null);
-      setSmsTemplates([]);
       setPayments(paymentData);
       setInvoices(invoiceData);
       setErrors(errorData);
@@ -439,40 +371,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
   React.useEffect(() => {
     refresh();
   }, [refresh]);
-
-  const reviewSignup = async (id: string, action: "approve" | "reject") => {
-    try {
-      await api(`/api/admin/signup-requests/${id}/${action}`, { method: "POST" });
-      toast.success(action === "approve" ? "درخواست تایید شد" : "درخواست رد شد");
-      refresh();
-    } catch (error: any) {
-      toast.error(error.message || "بررسی درخواست انجام نشد");
-    }
-  };
-
-  const deleteAbandonedSignup = async (request: any) => {
-    const confirmed = window.confirm(
-      "این ثبت‌نام پرداخت نشده حذف شود و ایمیل مالک برای ثبت‌نام دوباره آزاد شود؟"
-    );
-    if (!confirmed) return;
-    try {
-      await api(`/api/admin/signup-requests/${request.id}/abandoned`, { method: "DELETE" });
-      toast.success("ثبت‌نام ناقص حذف شد و ایمیل آزاد شد.");
-      await refresh();
-    } catch (error: any) {
-      toast.error(error.message || "حذف ثبت‌نام ناقص انجام نشد.");
-    }
-  };
-
-  const resolveContact = async (id: string) => {
-    try {
-      await api(`/api/admin/contact-requests/${id}/resolve`, { method: "POST" });
-      toast.success("درخواست تماس حل‌شده علامت خورد");
-      await refresh();
-    } catch (error: any) {
-      toast.error(error.message || "درخواست تماس به‌روزرسانی نشد");
-    }
-  };
 
   const createCompanyManually = async () => {
     const planId = manualSignup.planId || plans[0]?.id || "";
@@ -519,20 +417,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
     setLimits(data.limitsOverride || {});
     toast.success("محدودیت‌های اختصاصی ذخیره شد");
     await loadOrganization(selectedOrgId);
-  };
-
-  const enableSmsAddonAndPrepareInvoice = async () => {
-    toast.info("SMS در نسخه انتشار عمومی فعال نیست.");
-  };
-
-  const runSmsWorker = async () => {
-    setSmsRunning(false);
-    toast.info("SMS worker در نسخه انتشار عمومی فعال نیست.");
-  };
-
-  const saveSmsTemplate = async (template: SmsTemplate) => {
-    setSmsTemplates((items) => items.map((item) => (item.key === template.key ? template : item)));
-    toast.info("SMS در نسخه انتشار عمومی فعال نیست.");
   };
 
   const changeOrgStatus = async (action: "activate" | "suspend") => {
@@ -674,40 +558,21 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
 
   const cards = [
     ["مشتریان فعال", overview?.activeTenants, Building2],
-    ["در انتظار تایید", overview?.pendingApprovals, ShieldCheck],
-    ["درخواست تماس", overview?.pendingContactRequests, MessageSquareText],
-    ["پرداخت‌شده و منتظر بررسی", overview?.paidPendingReview, CreditCard],
     ["خطاهای باز", overview?.unresolvedErrors, AlertTriangle],
   ];
 
   const tabItems: { key: AdminTabKey; label: string; count?: number }[] = [
     { key: "overview", label: "نمای کلی" },
     { key: "organizations", label: "مشتریان", count: organizations.length },
-    { key: "contacts", label: "تماس‌ها", count: overview?.pendingContactRequests },
-    { key: "requests", label: "ثبت‌نام‌ها", count: overview?.pendingApprovals },
     { key: "subscriptions", label: "اشتراک و محدودیت" },
     { key: "billing", label: "صورتحساب و پرداخت" },
     { key: "errors", label: "خطاها", count: overview?.unresolvedErrors },
   ];
-  const selectedSmsDeliveries = smsDeliveries
-    .filter((item) => !selectedOrgId || item.organizationId === selectedOrgId)
-    .slice(0, 10);
-
   const activeOrganizations = organizations.filter((org) => org.status === "active");
-  const pendingSignupRequests = requests.filter((request) => !["approved", "rejected"].includes(String(request.status || "")));
-  const pendingContacts = contactRequests.filter((request) => request.status !== "resolved");
   const paidPayments = payments.filter((payment) => payment.status === "paid");
   const paidRevenue = Number(overview?.paidRevenueIrr || paidPayments.reduce((sum, payment) => sum + Number(payment.amountIrr || 0), 0));
-  const paidPendingReview = Number(overview?.paidPendingReview || requests.filter((request) => request.paymentStatus === "paid" && request.status !== "approved").length);
-  const smsSummary = smsAnalytics?.summary || {
-    totalSent: smsDeliveries.filter((delivery) => delivery.status === "sent").length,
-    sentThisMonth: 0,
-    failed: smsDeliveries.filter((delivery) => delivery.status === "failed").length,
-    skipped: smsDeliveries.filter((delivery) => delivery.status === "skipped").length,
-    queued: smsDeliveries.filter((delivery) => delivery.status === "queued").length,
-  };
   const openErrors = Number(overview?.unresolvedErrors ?? errors.filter((error) => !error.resolvedAt).length);
-  const pendingActionsCount = pendingSignupRequests.length + pendingContacts.length + paidPendingReview + openErrors;
+  const pendingActionsCount = openErrors;
   const recentOrganizations = [...organizations]
     .sort((a: any, b: any) => safeDateValue(b.createdAt) - safeDateValue(a.createdAt))
     .slice(0, 6);
@@ -718,8 +583,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
     .sort((a: any, b: any) => safeDateValue(b.createdAt || b.paidAt || b.updatedAt) - safeDateValue(a.createdAt || a.paidAt || a.updatedAt))
     .slice(0, 5);
   const recentActivity = [
-    ...requests.map((item) => ({ type: "ثبت‌نام", title: item.companyName, status: item.status, at: item.createdAt })),
-    ...contactRequests.map((item) => ({ type: "تماس", title: item.companyName, status: item.status, at: item.createdAt })),
     ...payments.map((item) => ({ type: "پرداخت", title: item.organizationName || item.provider, status: item.status, at: item.createdAt || item.paidAt })),
     ...errors.map((item) => ({ type: "خطا", title: item.message, status: item.resolvedAt ? "resolved" : item.source, at: item.createdAt })),
   ].sort((a, b) => safeDateValue(b.at) - safeDateValue(a.at)).slice(0, 8);
@@ -741,25 +604,10 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
       subtitle: "ایجاد دستی شرکت، وضعیت سازمان‌ها، پلن‌ها و دسترسی‌ها",
       icon: Building2,
     },
-    requests: {
-      title: "درخواست‌های ثبت‌نام",
-      subtitle: "بررسی ثبت‌نام‌ها، وضعیت پرداخت و آزادسازی درخواست‌های ناقص",
-      icon: UserPlus,
-    },
-    contacts: {
-      title: "درخواست‌های تماس",
-      subtitle: "پیگیری لیدهای ورودی سایت و علامت‌گذاری درخواست‌های حل‌شده",
-      icon: MessageSquareText,
-    },
     subscriptions: {
       title: "اشتراک، محدودیت و کاربران سازمان",
       subtitle: "مدیریت پلن، محدودیت‌ها و کاربران شرکت‌ها",
       icon: ShieldCheck,
-    },
-    sms: {
-      title: "مرکز کنترل SMS",
-      subtitle: "تحویل پیامک، تحلیل گیرنده‌ها، قالب‌ها و اجرای worker با تایید",
-      icon: Send,
     },
     billing: {
       title: "مالی، پرداخت‌ها و فاکتورها",
@@ -874,7 +722,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
                       <UserPlus className="ml-2 h-4 w-4" />
                       شرکت جدید
                     </Button>
-                    <Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("requests")}>بررسی درخواست‌ها</Button>
                     <Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("errors")}>مشاهده خطاها</Button>
                     <Button asChild variant="outline" className="rounded-xl text-xs font-bold">
                       <a href="/dashboard">بازگشت به اپ</a>
@@ -896,7 +743,7 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
                     درخواست‌های ثبت‌نام، تماس، پرداخت‌های نیازمند بررسی و خطاهای باز از همین‌جا قابل پایش هستند.
                   </p>
                   <div className="mt-5 flex flex-wrap gap-2">
-                    <Button className="rounded-xl font-bold" onClick={() => setTab(pendingSignupRequests.length ? "requests" : "organizations")}>
+                    <Button className="rounded-xl font-bold" onClick={() => setTab("organizations")}>
                       شروع بررسی
                       <ArrowUpLeft className="mr-2 h-4 w-4" />
                     </Button>
@@ -928,9 +775,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
 
             <section data-testid="admin-kpi-grid" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <DashboardKpiCard icon={Building2} label="مشتریان فعال" value={numberFa(activeOrganizations.length)} description={`از ${numberFa(organizations.length)} سازمان ثبت‌شده`} accent="bg-blue-50 text-blue-700" statusText="SaaS" />
-              <DashboardKpiCard icon={UserPlus} label="در انتظار تایید" value={numberFa(pendingSignupRequests.length)} description="ثبت‌نام‌ها و حساب‌های نیازمند بررسی" accent="bg-amber-50 text-amber-700" statusText="Review" />
-              <DashboardKpiCard icon={MessageSquareText} label="درخواست تماس" value={numberFa(pendingContacts.length)} description="لیدهای باز از فرم عمومی" accent="bg-cyan-50 text-cyan-700" statusText="Lead" />
-              <DashboardKpiCard icon={CreditCard} label="پرداخت‌های منتظر بررسی" value={numberFa(paidPendingReview)} description="پرداخت‌شده یا نیازمند اقدام مالی" accent="bg-violet-50 text-violet-700" statusText="Billing" />
               <DashboardKpiCard icon={CircleDollarSign} label="درآمد تاییدشده" value={money(paidRevenue)} description={`${numberFa(paidPayments.length)} پرداخت تاییدشده`} accent="bg-emerald-50 text-emerald-700" statusText="Paid" />
               <DashboardKpiCard icon={FileWarning} label="خطاهای باز" value={numberFa(openErrors)} description="موارد حل‌نشده یا اخیر" accent="bg-rose-50 text-rose-700" statusText={openErrors ? "Alert" : "OK"} />
               <DashboardKpiCard icon={Users} label="سازمان‌های فعال" value={numberFa(activeOrganizations.length)} description="وضعیت active در لیست سازمان‌ها" accent="bg-slate-100 text-slate-700" statusText="Org" />
@@ -981,28 +825,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
                     )}
                   </div>
                 </DashboardPanel>
-
-                <div className="grid gap-5 lg:grid-cols-2">
-                  <DashboardPanel testId="admin-signups-panel" title="ثبت‌نام‌های باز" description="درخواست‌هایی که هنوز نیازمند پیگیری هستند" icon={UserPlus} action={<Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("requests")}>رفتن به ثبت‌نام‌ها</Button>}>
-                    <div className="space-y-2">
-                      {pendingSignupRequests.slice(0, 4).length ? pendingSignupRequests.slice(0, 4).map((request) => (
-                        <CompactListItem key={request.id} title={request.companyName} meta={`${request.contactName || "بدون نام"} · ${formatDate(request.createdAt)}`} badge={<StatusBadge status={request.status} />} />
-                      )) : (
-                        <EmptyDashboardState icon={CheckCircle2} title="درخواستی برای بررسی وجود ندارد" description="همه چیز مرتب است." />
-                      )}
-                    </div>
-                  </DashboardPanel>
-
-                  <DashboardPanel testId="admin-contacts-panel" title="درخواست‌های تماس" description="آخرین پیام‌های دریافتی از سایت" icon={MessageSquareText} action={<Button variant="outline" className="rounded-xl text-xs font-bold" onClick={() => setTab("contacts")}>بررسی تماس‌ها</Button>}>
-                    <div className="space-y-2">
-                      {pendingContacts.slice(0, 4).length ? pendingContacts.slice(0, 4).map((request) => (
-                        <CompactListItem key={request.id} title={request.companyName} meta={`${request.contactName || "بدون نام"} · ${preferredContactMethodLabel(request.preferredContactMethod)}`} badge={<StatusBadge status={request.status} />} />
-                      )) : (
-                        <EmptyDashboardState icon={CheckCircle2} title="درخواست تماس باز وجود ندارد" description="لیدهای جدید سایت بعد از ثبت فرم اینجا می‌آیند." />
-                      )}
-                    </div>
-                  </DashboardPanel>
-                </div>
               </div>
 
               <aside className="space-y-5">
@@ -1015,6 +837,7 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
                     )}
                   </div>
                 </DashboardPanel>
+
 
                 <DashboardPanel testId="admin-health-panel" title="چک‌لیست سلامت پلتفرم" description="مواردی که از داده موجود قابل نمایش هستند" icon={HeartPulse}>
                   <div className="space-y-2">
@@ -1186,140 +1009,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
         </div>
       )}
 
-      {tab === "requests" && !loading && (
-        <Card data-testid="admin-section-requests" className="rounded-xl border-border shadow-sm">
-          <CardHeader><CardTitle className="text-base font-black">درخواست‌های ثبت‌نام</CardTitle></CardHeader>
-          <CardContent className="overflow-x-auto p-0">
-            <table className="w-full text-right text-xs">
-              <thead className="bg-muted/50 text-muted-foreground"><tr><th className="px-4 py-3">شرکت</th><th className="px-4 py-3">مالک</th><th className="px-4 py-3">پلن</th><th className="px-4 py-3">پرداخت</th><th className="px-4 py-3">وضعیت</th><th className="px-4 py-3">عملیات</th></tr></thead>
-              <tbody className="divide-y divide-border">
-                {requests.length === 0 ? (
-                  <EmptyTableRow colSpan={6}>
-                    <EmptyState
-                      icon={UserPlus}
-                      title="درخواست ثبت‌نامی در انتظار بررسی نیست"
-                      description="وقتی شرکت واقعی ثبت‌نام کند یا پرداختی نیاز به بررسی داشته باشد، همین‌جا نمایش داده می‌شود."
-                      compact
-                    />
-                  </EmptyTableRow>
-                ) : (
-                  requests.map((request) => {
-                    const incompleteUnpaid = isIncompleteUnpaidSignup(request);
-                    return (
-                  <tr key={request.id}>
-                    <td className="px-4 py-3 font-bold">
-                      <div>{request.companyName}</div>
-                      {incompleteUnpaid && (
-                        <div className="mt-1 text-[11px] font-normal text-amber-700">ثبت‌نام ناقص و بدون پرداخت</div>
-                      )}
-                      {request.abandonedCleanupEligible && (
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          className="mt-2 rounded-lg text-xs"
-                          title="حذف ثبت‌نام ناقص و آزادسازی ایمیل"
-                          onClick={() => deleteAbandonedSignup(request)}
-                        >
-                          <Trash2 className="ml-1 h-3.5 w-3.5" />
-                          آزادسازی ایمیل
-                        </Button>
-                      )}
-                    </td>
-                    <td className="px-4 py-3"><div>{request.contactName}</div><div className="text-muted-foreground" dir="ltr">{request.contactEmail}</div></td>
-                    <td className="px-4 py-3">{request.planName}</td>
-                    <td className="px-4 py-3"><StatusBadge status={request.paymentStatus} /></td>
-                    <td className="px-4 py-3"><StatusBadge status={request.status} /></td>
-                    <td className="px-4 py-3"><div className="flex gap-2"><Button size="sm" className="rounded-lg text-xs" disabled={request.status === "approved" || request.paymentStatus !== "paid"} title={request.paymentStatus !== "paid" ? "ابتدا پرداخت را تایید کنید" : undefined} onClick={() => reviewSignup(request.id, "approve")}>تایید</Button><Button size="sm" variant="outline" className="rounded-lg text-xs" disabled={request.status === "rejected"} onClick={() => reviewSignup(request.id, "reject")}>رد</Button></div></td>
-                  </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
-      )}
-
-      {tab === "contacts" && !loading && (
-        <Card data-testid="admin-section-contacts" className="rounded-xl border-border shadow-sm">
-          <CardHeader>
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <CardTitle className="flex items-center gap-2 text-base font-black">
-                <MessageSquareText className="h-5 w-5 text-primary" />
-                درخواست‌های تماس
-              </CardTitle>
-              <div className="text-xs font-bold text-muted-foreground">
-                {Number(contactRequests.filter((item) => item.status === "new").length).toLocaleString("fa-IR")} درخواست باز
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="overflow-x-auto p-0">
-            <table className="w-full text-right text-xs">
-              <thead className="bg-muted/50 text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3">شرکت</th>
-                  <th className="px-4 py-3">مخاطب</th>
-                  <th className="px-4 py-3">راه ارتباطی</th>
-                  <th className="px-4 py-3">درخواست</th>
-                  <th className="px-4 py-3">وضعیت</th>
-                  <th className="px-4 py-3">عملیات</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {contactRequests.length === 0 ? (
-                  <EmptyTableRow colSpan={6}>
-                    <EmptyState
-                      icon={MessageSquareText}
-                      title="هنوز درخواست تماسی ثبت نشده"
-                      description="فرم صفحه تماس فقط درخواست‌های واقعی کاربران عمومی را اینجا نمایش می‌دهد."
-                      compact
-                    />
-                  </EmptyTableRow>
-                ) : (
-                  contactRequests.map((request) => (
-                    <tr key={request.id} className="align-top hover:bg-muted/30">
-                      <td className="px-4 py-3">
-                        <div className="font-black">{request.companyName}</div>
-                        <div className="mt-1 text-[11px] text-muted-foreground">{formatDate(request.createdAt)}</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="font-bold">{request.contactName}</div>
-                        {request.contactEmail ? (
-                          <div className="mt-1 flex items-center gap-1 text-muted-foreground" dir="ltr">
-                            <Mail className="h-3.5 w-3.5" />
-                            {request.contactEmail}
-                          </div>
-                        ) : null}
-                        {request.contactPhone ? (
-                          <div className="mt-1 flex items-center gap-1 text-muted-foreground" dir="ltr">
-                            <PhoneCall className="h-3.5 w-3.5" />
-                            {request.contactPhone}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-3 font-bold">{preferredContactMethodLabel(request.preferredContactMethod)}</td>
-                      <td className="max-w-xs px-4 py-3 leading-6 text-muted-foreground">{request.message || "بدون توضیحات"}</td>
-                      <td className="px-4 py-3"><StatusBadge status={request.status} /></td>
-                      <td className="px-4 py-3">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="rounded-lg text-xs font-bold"
-                          disabled={request.status === "resolved"}
-                          onClick={() => resolveContact(request.id)}
-                        >
-                          حل شد
-                        </Button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
-      )}
-
       {tab === "subscriptions" && !loading && (
         <div data-testid="admin-section-subscriptions" className="grid gap-4 lg:grid-cols-[280px_1fr]">
           <Card className="rounded-xl border-border shadow-sm">
@@ -1443,141 +1132,6 @@ export default function AdminPanel({ activeTab, onTabChange, embedded = false }:
                   </table>
                 </div>
               </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {tab === "sms" && !loading && (
-        <div data-testid="admin-section-sms" className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-            {[
-              ["ارسال موفق", smsAnalytics?.summary.totalSent, Send],
-              ["ارسال ماه جاری", smsAnalytics?.summary.sentThisMonth, BellRing],
-              ["ناموفق", smsAnalytics?.summary.failed, AlertTriangle],
-              ["Skip", smsAnalytics?.summary.skipped, XCircle],
-              ["در صف", smsAnalytics?.summary.queued, BellRing],
-            ].map(([label, value, Icon]: any) => (
-              <Card key={label} className="rounded-xl border-border shadow-sm">
-                <CardContent className="flex items-center justify-between p-4">
-                  <div>
-                    <p className="text-xs font-bold text-muted-foreground">{label}</p>
-                    <p className="mt-1 text-2xl font-black">{Number(value || 0).toLocaleString("fa-IR")}</p>
-                  </div>
-                  <Icon className="h-6 w-6 text-primary" />
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-
-          <Card className="rounded-xl border-border shadow-sm">
-            <CardHeader>
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <CardTitle className="flex items-center gap-2 text-base font-black">
-                  <Send className="h-5 w-5 text-primary" />
-                  گزارش ارسال بر اساس گیرنده
-                </CardTitle>
-                <Button type="button" variant="outline" className="h-9 rounded-xl text-xs font-bold" onClick={runSmsWorker} disabled={smsRunning}>
-                  {smsRunning ? (
-                    <ActionSkeleton className="w-24" />
-                  ) : (
-                    <>
-                      <Send className="ml-2 h-4 w-4" />
-                      اجرای worker
-                    </>
-                  )}
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="overflow-x-auto p-0">
-              <table className="w-full text-right text-xs">
-                <thead className="bg-muted/50 text-muted-foreground">
-                  <tr><th className="px-4 py-3">گیرنده</th><th className="px-4 py-3">شرکت</th><th className="px-4 py-3">شماره</th><th className="px-4 py-3">موفق</th><th className="px-4 py-3">ناموفق</th><th className="px-4 py-3">Skip</th><th className="px-4 py-3">آخرین وضعیت</th><th className="px-4 py-3">آخرین فعالیت</th></tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {smsAnalytics?.recipients?.length ? (
-                    smsAnalytics.recipients.map((recipient) => (
-                      <tr key={`${recipient.organizationName}-${recipient.recipientType}-${recipient.recipientPhone}-${recipient.recipientName}`} className="hover:bg-muted/30">
-                        <td className="px-4 py-3"><div className="font-black">{recipient.recipientName || "نامشخص"}</div><div className="text-muted-foreground">{recipient.recipientType === "customer" ? "مشتری" : "کاربر"}</div></td>
-                        <td className="px-4 py-3">{recipient.organizationName || "-"}</td>
-                        <td className="px-4 py-3" dir="ltr">{recipient.recipientPhone || "بدون شماره"}</td>
-                        <td className="px-4 py-3 font-black text-emerald-700">{Number(recipient.sentCount || 0).toLocaleString("fa-IR")}</td>
-                        <td className="px-4 py-3 font-black text-red-700">{Number(recipient.failedCount || 0).toLocaleString("fa-IR")}</td>
-                        <td className="px-4 py-3 font-black text-amber-700">{Number(recipient.skippedCount || 0).toLocaleString("fa-IR")}</td>
-                        <td className="px-4 py-3"><StatusBadge status={recipient.lastStatus} /></td>
-                        <td className="px-4 py-3">{formatDate(recipient.lastActivityAt)}</td>
-                      </tr>
-                    ))
-                  ) : (
-                    <EmptyTableRow colSpan={8}>
-                      <EmptyState
-                        icon={BellRing}
-                        title="هنوز پیامکی ثبت نشده"
-                        description="پس از ساخت اولین پیامک، تعداد ارسال‌ها بر اساس گیرنده اینجا دیده می‌شود."
-                        compact
-                      />
-                    </EmptyTableRow>
-                  )}
-                </tbody>
-              </table>
-            </CardContent>
-          </Card>
-
-          <Card className="rounded-xl border-border shadow-sm">
-            <CardHeader><CardTitle className="flex items-center gap-2 text-base font-black"><BellRing className="h-5 w-5 text-primary" />قالب‌های پیامک</CardTitle></CardHeader>
-            <CardContent className="grid gap-3 lg:grid-cols-2">
-              {smsTemplates.map((template) => (
-                <div key={template.key} className="rounded-xl border border-border p-4">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-black">{template.label}</div>
-                      <div className="text-[11px] text-muted-foreground" dir="ltr">{template.key}</div>
-                    </div>
-                    <label className="flex items-center gap-2 text-xs font-bold">
-                      <Checkbox checked={template.enabled} onCheckedChange={(checked: any) => setSmsTemplates((items) => items.map((item) => item.key === template.key ? { ...item, enabled: Boolean(checked) } : item))} />
-                      فعال
-                    </label>
-                  </div>
-                  <textarea
-                    dir="rtl"
-                    className="min-h-28 w-full resize-y rounded-xl border border-input bg-background px-3 py-2 text-sm leading-7 outline-none transition focus-visible:ring-2 focus-visible:ring-ring"
-                    value={template.body}
-                    onChange={(event) => setSmsTemplates((items) => items.map((item) => item.key === template.key ? { ...item, body: event.target.value } : item))}
-                  />
-                  <div className="mt-3 flex items-center justify-between gap-3">
-                    <span className="text-[11px] text-muted-foreground">#mtg# #time# #ship# #task# #status#</span>
-                    <Button type="button" size="sm" className="rounded-lg text-xs font-bold" onClick={() => saveSmsTemplate(template)}>
-                      ذخیره
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-
-          <Card className="rounded-xl border-border shadow-sm">
-            <CardHeader><CardTitle className="flex items-center gap-2 text-base font-black"><Activity className="h-5 w-5 text-primary" />آخرین پیامک‌ها و پاسخ Provider</CardTitle></CardHeader>
-            <CardContent className="overflow-x-auto p-0">
-              <table className="w-full text-right text-xs">
-                <thead className="bg-muted/50 text-muted-foreground">
-                  <tr><th className="px-4 py-3">وضعیت</th><th className="px-4 py-3">گیرنده</th><th className="px-4 py-3">منبع</th><th className="px-4 py-3">پیام</th><th className="px-4 py-3">نتیجه</th></tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {smsDeliveries.length ? smsDeliveries.slice(0, 25).map((delivery) => (
-                    <tr key={delivery.id} className="align-top hover:bg-muted/30">
-                      <td className="px-4 py-3"><StatusBadge status={delivery.status} /></td>
-                      <td className="px-4 py-3"><div className="font-bold">{delivery.recipientName || delivery.userName || "نامشخص"}</div><div className="text-muted-foreground" dir="ltr">{delivery.recipientPhone || "بدون شماره"}</div></td>
-                      <td className="px-4 py-3 font-bold">{delivery.sourceType || "-"}</td>
-                      <td className="max-w-sm px-4 py-3 leading-6 text-muted-foreground">{delivery.message}</td>
-                      <td className="max-w-xs px-4 py-3 text-muted-foreground">{delivery.errorMessage || delivery.skipReason || (delivery.providerResponse?.dryRun ? "dry-run" : delivery.sentAt ? "sent" : formatDate(delivery.createdAt))}</td>
-                    </tr>
-                  )) : (
-                    <EmptyTableRow colSpan={5}>
-                      <EmptyState icon={Activity} title="هنوز لاگ پیامکی وجود ندارد" description="جزئیات ارسال و خطاهای SMS.ir پس از اولین تلاش ارسال اینجا ثبت می‌شود." compact />
-                    </EmptyTableRow>
-                  )}
-                </tbody>
-              </table>
             </CardContent>
           </Card>
         </div>

@@ -32,7 +32,7 @@ function signPublicDocumentAccess({ documentId, shipmentCode, shipmentUpdatedAt,
   return crypto
     .createHmac("sha256", publicDocumentAccessSecret())
     .update(payload)
-    .digest("base64url");
+    .digest("hex");
 }
 
 function safeEqual(a, b) {

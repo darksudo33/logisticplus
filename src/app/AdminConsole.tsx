@@ -14,16 +14,6 @@ const adminSections: AdminNavItem[] = [
     description: "ایجاد دستی، وضعیت و نمای شرکت‌ها",
   },
   {
-    key: "requests",
-    label: "ثبت‌نام‌ها",
-    description: "بررسی درخواست‌های SaaS و پرداخت‌ها",
-  },
-  {
-    key: "contacts",
-    label: "درخواست تماس",
-    description: "پیگیری فرم‌های ورودی سایت",
-  },
-  {
     key: "subscriptions",
     label: "اشتراک‌ها",
     description: "پلن، محدودیت‌ها، کاربران و وضعیت سازمان",

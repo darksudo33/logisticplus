@@ -5,6 +5,7 @@ import {
   expectForbidden,
   expectUnavailable,
   loginApi,
+  nextValidShipmentCode,
   readOk,
   uniqueEmail,
 } from "./helpers";
@@ -27,12 +28,6 @@ async function createTenantOwner(owner: Awaited<ReturnType<typeof loginApi>>) {
   return { tenantEmail, organizationId: data.organizationId };
 }
 
-let shipmentCodeSequence = 100 + (Date.now() % 500);
-function validShipmentCode() {
-  shipmentCodeSequence = shipmentCodeSequence >= 998 ? 100 : shipmentCodeSequence + 1;
-  return `14050316${String(shipmentCodeSequence).padStart(3, "0")}`;
-}
-
 test.describe("shipment canonical data foundation", () => {
   test("creates and updates shipments through canonical APIs with audit history", async () => {
     const owner = await loginApi();
@@ -40,7 +35,7 @@ test.describe("shipment canonical data foundation", () => {
       const shipment = await readOk<any>(
         await owner.post("/api/shipments", {
           data: {
-            trackingNumber: validShipmentCode(),
+            trackingNumber: await nextValidShipmentCode(),
             containerNumber: "TLLU1234567",
             origin: "Shanghai",
             destination: "Bandar Abbas",
@@ -84,7 +79,7 @@ test.describe("shipment canonical data foundation", () => {
       const ownerShipment = await readOk<any>(
         await owner.post("/api/shipments", {
           data: {
-            trackingNumber: validShipmentCode(),
+            trackingNumber: await nextValidShipmentCode(),
             origin: "Dubai",
             destination: "Tehran",
             status: "LOADING",
@@ -118,7 +113,7 @@ test.describe("shipment canonical data foundation", () => {
       const shipment = await readOk<any>(
         await owner.post("/api/shipments", {
           data: {
-            trackingNumber: validShipmentCode(),
+            trackingNumber: await nextValidShipmentCode(),
             origin: "Hamburg",
             destination: "Bushehr",
             status: "LOADING",
@@ -146,7 +141,7 @@ test.describe("shipment canonical data foundation", () => {
       const shipment = await readOk<any>(
         await owner.post("/api/shipments", {
           data: {
-            trackingNumber: validShipmentCode(),
+            trackingNumber: await nextValidShipmentCode(),
             origin: "Shanghai",
             destination: "Tehran",
             status: "LOADING",
@@ -206,7 +201,7 @@ test.describe("shipment canonical data foundation", () => {
       const noTimer = await readOk<any>(
         await owner.post("/api/shipments", {
           data: {
-            trackingNumber: validShipmentCode(),
+            trackingNumber: await nextValidShipmentCode(),
             origin: "No timer origin",
             destination: "No timer destination",
             status: "LOADING",
@@ -216,7 +211,7 @@ test.describe("shipment canonical data foundation", () => {
       const laterTimer = await readOk<any>(
         await owner.post("/api/shipments", {
           data: {
-            trackingNumber: validShipmentCode(),
+            trackingNumber: await nextValidShipmentCode(),
             origin: "Later timer origin",
             destination: "Later timer destination",
             status: "LOADING",
@@ -226,7 +221,7 @@ test.describe("shipment canonical data foundation", () => {
       const closestTimer = await readOk<any>(
         await owner.post("/api/shipments", {
           data: {
-            trackingNumber: validShipmentCode(),
+            trackingNumber: await nextValidShipmentCode(),
             origin: "Closest timer origin",
             destination: "Closest timer destination",
             status: "LOADING",

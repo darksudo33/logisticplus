@@ -250,7 +250,6 @@ interface MockStore {
   fetchTaskEvents: (taskId: string) => Promise<TaskEvent[]>;
   refreshNotifications: () => Promise<void>;
   loginWithPassword: (email: string, password: string, remember?: boolean) => Promise<User>;
-  loginWithPhoneCode: (phone: string, code: string, remember?: boolean) => Promise<User>;
 
   setCurrentUser: (user: User | null) => void;
   addShipment: (shipment: Omit<Shipment, "id">) => Promise<void>;
@@ -707,28 +706,6 @@ export const useMockStore = create<MockStore>((set) => ({
     if (!response.ok) {
       useMockStore.setState({ isHydratingFromDatabase: false });
       throw await createApiRequestError(response, "Invalid email or password.");
-    }
-
-    const payload = await response.json();
-    const user = normalizeUser(payload.user);
-    persistCurrentUser(user);
-    set({ currentUser: user });
-    useMockStore.getState().hydrateFromRecords(payload.records || {});
-    useMockStore.getState().refreshNotifications().catch(logBackgroundNotificationRefreshError);
-    return user as User;
-  },
-
-  loginWithPhoneCode: async (phone, code, remember = false) => {
-    useMockStore.setState({ isHydratingFromDatabase: true });
-    const response = await fetch("/api/auth/phone/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone, code, remember }),
-    });
-
-    if (!response.ok) {
-      useMockStore.setState({ isHydratingFromDatabase: false });
-      throw await createApiRequestError(response, "Invalid or expired SMS code.");
     }
 
     const payload = await response.json();

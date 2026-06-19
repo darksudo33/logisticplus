@@ -86,13 +86,6 @@ export const RBAC_TENANT_POLICY: RoutePolicy[] = [
   { family: "chat", method: "DELETE", path: "/api/chat/threads/:id/participants/:userId", auth: "required", permission: "chat.manage_groups", tenantScope: "own-organization" },
   { family: "platform-admin", method: "GET", path: "/api/admin/overview", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
   { family: "platform-admin", method: "GET", path: "/api/admin/audit-logs", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
-  { family: "platform-admin", method: "GET", path: "/api/admin/contact-requests", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
-  { family: "platform-admin", method: "GET", path: "/api/admin/sms-deliveries", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
-  { family: "platform-admin", method: "GET", path: "/api/admin/sms-analytics", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
-  { family: "platform-admin", method: "GET", path: "/api/admin/sms-templates", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
-  { family: "platform-admin", method: "PATCH", path: "/api/admin/sms-templates/:key", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
-  { family: "platform-admin", method: "POST", path: "/api/admin/sms-deliveries/run-worker", auth: "required", permission: "platform.admin", tenantScope: "platform-global" },
-  { family: "public-contact", method: "POST", path: "/api/contact-requests", auth: "public", permission: null, tenantScope: "public-safe" },
   { family: "public-tracking", method: "GET", path: "/api/public/track/:token", auth: "public", permission: null, tenantScope: "public-safe" },
 ];
 

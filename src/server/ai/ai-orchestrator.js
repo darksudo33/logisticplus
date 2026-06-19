@@ -344,9 +344,17 @@ function isIgnorableCodeCandidate(value = "") {
   return !text || ENTITY_CLUE_STOP_WORDS.has(text);
 }
 
+function stripEntityClueRequestPhrases(value = "") {
+  return normalizeQueryText(value)
+    .replace(/(^|\s)شماره\s+(?:تماس\s+)?(?:ناخدا(?:ی)?|کاپیتان|ایجنت|نماینده|مخاطب|ملوانی)(?=\s|$)/g, " ")
+    .replace(/(^|\s)(?:شماره|تماس|تلفن|موبایل)(?:\s+(?:ناخدا(?:ی)?|کاپیتان|ایجنت|ملوانی))?(?=\s|$)/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function extractEntityClue(message = "", codeCandidates = []) {
   const codeSet = new Set(codeCandidates.map((item) => normalizeQueryText(item)).filter(Boolean));
-  const normalized = normalizeQueryText(message).replace(/[^\p{L}\p{N}\s_-]/gu, " ");
+  const normalized = stripEntityClueRequestPhrases(message).replace(/[^\p{L}\p{N}\s_-]/gu, " ");
   const tokens = normalized
     .split(/\s+/)
     .map((token) => token.trim())
@@ -613,8 +621,12 @@ function shipmentStatusText(shipment, workflow) {
     cleanText(workflow?.currentStep?.label) ||
     cleanText(shipment.currentStep) ||
     cleanText(shipment.currentStatus);
-  const status = labelOrMissing(shipment.currentStatus || shipment.status);
-  return currentStep && currentStep !== status ? `${status} / ${currentStep}` : status;
+  const statusParts = [
+    cleanText(shipment.currentStatus || shipment.status),
+    cleanText(shipment.statusText),
+  ].filter((value, index, values) => value && values.indexOf(value) === index);
+  const status = labelOrMissing(statusParts.join(" - "));
+  return currentStep && !statusParts.includes(currentStep) ? `${status} / ${currentStep}` : status;
 }
 
 function activeShipmentEntity(shipment) {
@@ -1887,10 +1899,10 @@ export function renderBusinessAmbiguityMessage({ plan = {}, query = "", candidat
       ...candidates.slice(0, 5).map((candidate, index) => businessOptionBlock(candidate, index, language)),
     ].join("\n\n");
   }
-  return toPersianDigits([
-    `چند مورد برای «${terms || "این عبارت"}» پیدا شد. لطفا شماره گزینه یا کد مورد درست را بفرستید؛ مثلا «گزینه 1» یا «به 214».`,
+  return [
+    `چند مورد مرتبط با «${terms || "این عبارت"}» پیدا شد. لطفا شماره گزینه یا کد مورد درست را بفرستید؛ مثلا «گزینه 1» یا «به 214».`,
     ...candidates.slice(0, 5).map((candidate, index) => businessOptionBlock(candidate, index, language)),
-  ].join("\n\n"));
+  ].join("\n\n");
 }
 
 export function businessQueryDisplay(plan = {}) {
@@ -1996,10 +2008,14 @@ function businessShipmentAnswer(plan, detail) {
   const customer = detail.customer || {};
   const field = plan.requestedField;
   if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.STATUS)) {
+    const statusLine = [
+      cleanText(shipment.currentStatus || shipment.status),
+      cleanText(shipment.statusText),
+    ].filter((value, index, values) => value && values.indexOf(value) === index).join(" - ");
     return relationText(
       plan,
-      `وضعیت محموله ${shipment.shipmentCode}: ${labelOrMissing(shipment.currentStatus || shipment.status)}`,
-      `Shipment ${shipment.shipmentCode} status: ${labelOrMissing(shipment.currentStatus || shipment.status)}`
+      `وضعیت محموله ${shipment.shipmentCode}: ${labelOrMissing(statusLine)}`,
+      `Shipment ${shipment.shipmentCode} status: ${labelOrMissing(statusLine)}`
     );
   }
   if (planHasRequestedField(plan, BUSINESS_REQUESTED_FIELDS.ADDRESS)) return null;
@@ -2430,19 +2446,31 @@ function shipmentSummaryFromContext(plan, detail) {
     cleanText(shipment.route?.dischargePort),
     cleanText(shipment.route?.deliveryPort) || cleanText(shipment.route?.destination),
   ].filter(Boolean).join(" → ");
+  const statusBase = cleanText(shipment.currentStatus || shipment.status);
+  const statusDetail = cleanText(shipment.statusText) || cleanText(shipment.publicTrackingStatus?.description);
+  const statusLine = [statusBase, statusDetail].filter((value, index, values) => value && values.indexOf(value) === index).join(" - ");
+  const captain = detail.captain || {};
+  const captainFa = captain.captainPhone
+    ? `ناخدا: ${captain.captainPhone}${captain.captainName ? ` (${captain.captainName})` : ""}`
+    : "";
+  const captainEn = captain.captainPhone
+    ? `Captain: ${captain.captainPhone}${captain.captainName ? ` (${captain.captainName})` : ""}`
+    : "";
+  const movementFa = [captainFa, route ? `مسیر: ${route}` : ""].filter(Boolean).join(" · ");
+  const movementEn = [captainEn, route ? `Route: ${route}` : ""].filter(Boolean).join(" · ");
   return relationText(
     plan,
     joinLines([
       `خلاصه بار ${shipment.shipmentCode}:`,
-      `وضعیت: ${labelOrMissing(shipment.currentStatus || shipment.status)}`,
+      `وضعیت: ${labelOrMissing(statusLine)}`,
       customer?.name ? `مشتری: ${customer.name}${customer.customerCode ? ` (${customer.customerCode})` : ""}` : "",
-      route ? `مسیر: ${route}` : "",
+      movementFa,
     ]),
     joinLines([
       `Shipment ${shipment.shipmentCode} summary:`,
-      `Status: ${labelOrMissing(shipment.currentStatus || shipment.status)}`,
+      `Status: ${labelOrMissing(statusLine)}`,
       customer?.name ? `Customer: ${customer.name}${customer.customerCode ? ` (${customer.customerCode})` : ""}` : "",
-      route ? `Route: ${route}` : "",
+      movementEn,
     ])
   );
 }
@@ -2667,6 +2695,42 @@ async function resolveSingleCustomerForPlan(pool, context, plan, toolsCalled) {
   return { state, customer: matches[0] };
 }
 
+const DIRECT_SHIPMENT_BUSINESS_TOOLS = new Set([
+  "getShipmentMalvaniAgentInfo",
+  "getShipmentDocuments",
+  "getMissingShipmentDocuments",
+  "getTasksByShipment",
+  "getShipmentCustomerAccessStatus",
+  "getCustomerVisibleTrackingSummary",
+  "getShipmentDailyStatus",
+  "getShipmentKootajDetails",
+  "getShipmentRoute",
+  "getShipmentGoods",
+]);
+
+function shipmentRefFromBusinessPlan(plan = {}) {
+  return cleanText(
+    plan.entities?.shipmentRef ||
+    plan.hamyarPlan?.entities?.shipmentRef ||
+    (plan.hamyarPlan?.primaryEntity?.type === "shipment" ? plan.hamyarPlan.primaryEntity.ref : "")
+  );
+}
+
+async function answerDirectShipmentBusinessPlan(pool, context, plan, message, toolsCalled = []) {
+  const liveTool = cleanText(plan.liveTool || plan.hamyarPlan?.liveTool);
+  const shipmentRef = shipmentRefFromBusinessPlan(plan);
+  if (!shipmentRef || !DIRECT_SHIPMENT_BUSINESS_TOOLS.has(liveTool)) return null;
+
+  toolsCalled.push("resolveShipmentRef");
+  const matches = await resolveShipmentRef(pool, context, {
+    shipmentRef,
+    text: message,
+    limit: 5,
+  });
+  if (classifyResolutionState(matches) !== "resolved") return null;
+  return answerResolvedShipmentReference(pool, context, shipmentEntityCandidate(matches[0]), message, toolsCalled, plan.registryIntent || plan.intent);
+}
+
 async function answerBusinessCandidate(pool, context, plan, candidate, toolsCalled) {
   if (candidate.type === "shipment") {
     if (isShipmentFieldLookupPlan(plan)) {
@@ -2887,7 +2951,7 @@ async function answerBusinessCandidate(pool, context, plan, candidate, toolsCall
 
 function companyBrainMemoryLabel(memory = {}) {
   if (memory.memoryType === "daily_summary") return "خلاصه امروز";
-  if (memory.memoryType === "operational_snapshot") return "نمای عملیاتی";
+  if (memory.memoryType === "operational_snapshot") return "نمای کلی عملیات";
   if (memory.memoryType === "company_summary") return "حافظه کلی";
   return memory.title || "حافظه همیار";
 }
@@ -2925,7 +2989,7 @@ function companyBrainSnapshotAnswer(plan = {}, snapshot = {}) {
     lines.push("آخرین مواردی که در حافظه همیار برای این شرکت ثبت شده:");
     lines.push(itemList(recentItems.slice(0, 6), companyBrainItemLine, "هنوز موردی در حافظه شرکت ثبت نشده است."));
   } else {
-    lines.push("خلاصه حافظه همیار از وضعیت شرکت:");
+    lines.push("نمای کلی عملیات:");
     for (const memory of memories) {
       lines.push(`- ${companyBrainMemoryLabel(memory)}: ${memory.summary}`);
     }
@@ -3415,7 +3479,11 @@ async function runBoundedContextAgent(pool, context, message, { recentMessages =
     const memorySearchResult = await runCompanyBrainSearchPlan(pool, context, companyBrainPlan, []);
     if (memorySearchResult) return memorySearchResult;
   }
-  if (!isSupportedRelationIntent(plan.intent)) return runBusinessSearchPlan(pool, context, businessPlan, []);
+  if (!isSupportedRelationIntent(plan.intent)) {
+    const directShipmentAnswer = await answerDirectShipmentBusinessPlan(pool, context, businessPlan, message, []);
+    if (directShipmentAnswer) return directShipmentAnswer;
+    return runBusinessSearchPlan(pool, context, businessPlan, []);
+  }
   if (plan.confidence < 0.7 || !relationRef(plan)) {
     return await runBusinessSearchPlan(pool, context, businessPlan, []) || relationMissingRefResult(plan);
   }
@@ -3428,8 +3496,24 @@ async function runBoundedContextAgent(pool, context, message, { recentMessages =
       return await runBusinessSearchPlan(pool, context, businessPlan, toolsCalled) || relationNotFoundResult(plan, "shipment", toolsCalled);
     }
     if (toolsCalled.length >= AGENTIC_CONTEXT_MAX_STEPS) return relationMissingRefResult(plan);
-    if (isShipmentFieldLookupPlan(plan)) {
-      const fieldAnswer = await answerShipmentFieldLookup(pool, context, plan, resolved.shipment, toolsCalled);
+    const shipmentFlags = intentFlags(message);
+    if (shipmentFlags.asksKootaj || shipmentFlags.asksPublicTracking) {
+      return answerResolvedShipmentReference(pool, context, shipmentEntityCandidate(resolved.shipment), message, toolsCalled, plan.registryIntent || plan.intent);
+    }
+    if (!hasExplicitShipmentDetailIntent(shipmentFlags, detectAiIntent(message)) && plan.registryIntent === "shipment.lookup") {
+      const shipment = await getShipmentFullProfile(pool, context, { shipmentId: resolved.shipment.id });
+      if (shipment) {
+        toolsCalled.push("getShipmentFullProfile");
+        return shipmentResolutionNeedsIntentResult(shipment, toolsCalled);
+      }
+    }
+    const fieldPlan = isShipmentFieldLookupPlan(plan)
+      ? plan
+      : isShipmentFieldLookupPlan(businessPlan)
+        ? businessPlan
+        : null;
+    if (fieldPlan) {
+      const fieldAnswer = await answerShipmentFieldLookup(pool, context, fieldPlan, resolved.shipment, toolsCalled);
       if (fieldAnswer) return fieldAnswer;
     }
 
@@ -3457,6 +3541,7 @@ async function runBoundedContextAgent(pool, context, message, { recentMessages =
       sources: [
         source("shipment", { id: detail.shipment.id, label: `محموله ${detail.shipment.shipmentCode}`, url: detail.shipment.actionUrl }),
         detail.customer?.id ? source("customer", { id: detail.customer.id, label: detail.customer.name || detail.customer.customerCode, url: detail.customer.actionUrl }) : null,
+        detail.captain?.malvaniProfileName ? source("malvani", { label: detail.captain.malvaniProfileName }) : null,
         ...(detail.commercialCards || []).slice(0, 2).map(commercialCardSource),
       ].filter(Boolean),
       recordIds: [detail.shipment.id, detail.customer?.id, detail.commercialCard?.id].filter(Boolean),
@@ -3938,9 +4023,30 @@ export async function runAiChat({
   const candidates = entityResolution.codeCandidates;
   const hints = messageHints(message);
   const flags = intentFlags(message);
+  if (intent === AI_INTENTS.MALVANI_AGENT_PHONE && activeEntity?.type === "shipment") {
+    const activeFollowUpResult = await answerFromActiveEntity(pool, toolContext, activeEntity, message);
+    if (activeFollowUpResult) return activeFollowUpResult;
+  }
   if (shouldUseActiveEntityForFollowUp(message, activeEntity)) {
     const activeFollowUpResult = await answerFromActiveEntity(pool, toolContext, activeEntity, message);
     if (activeFollowUpResult) return activeFollowUpResult;
+  }
+  if (intent === AI_INTENTS.MALVANI_AGENT_PHONE) {
+    const resolvedIntentResult = await answerResolvedEntityIntent(pool, toolContext, entityResolution, message);
+    if (resolvedIntentResult?.audit?.success || entityResolution.clue) return resolvedIntentResult;
+  }
+  const naturalShipmentClues = entityResolution.shipmentClues || {};
+  if (naturalShipmentClues.customerClue && naturalShipmentClues.goodsClue) {
+    const generalShipmentResult = await answerGeneralShipmentReference(pool, toolContext, entityResolution, message);
+    if (generalShipmentResult) return generalShipmentResult;
+  }
+  if (hints.customer && !hints.shipment && candidates.length) {
+    let lastCustomerResult = null;
+    for (const candidate of candidates) {
+      lastCustomerResult = await answerCustomer(pool, toolContext, candidate, { message });
+      if (lastCustomerResult?.audit?.success) return lastCustomerResult;
+    }
+    return lastCustomerResult || noCustomerResult();
   }
   const boundedContextResult = await runBoundedContextAgent(pool, toolContext, message, { recentMessages });
   if (boundedContextResult) return boundedContextResult;

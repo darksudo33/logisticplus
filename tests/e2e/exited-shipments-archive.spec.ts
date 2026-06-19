@@ -11,6 +11,7 @@ import {
   expectUnavailable,
   loginApi,
   loginViaUi,
+  nextValidShipmentCode,
   readOk,
   uniqueEmail,
 } from "./helpers";
@@ -41,7 +42,16 @@ async function dbQuery(sql: string, params: any[] = []) {
 }
 
 async function cleanupByTrackingPrefix(prefix: string) {
-  const result = await dbQuery("SELECT id FROM shipments WHERE shipment_code LIKE $1", [`${prefix}%`]);
+  const result = await dbQuery(
+    `SELECT DISTINCT s.id
+     FROM shipments s
+     LEFT JOIN shipment_kootaj_details k ON k.shipment_id = s.id
+     WHERE s.shipment_code LIKE $1
+        OR s.customer_name LIKE 'Exited Customer %'
+        OR k.cotage_number LIKE 'EXIT-COTAGE-%'
+        OR k.declaration_reference LIKE 'EXIT-DECL-%'`,
+    [`${prefix}%`]
+  );
   const ids = result.rows.map((row) => row.id);
   if (ids.length === 0) return;
 
@@ -91,8 +101,8 @@ async function uploadInternalDocument(context: APIRequestContext, shipmentId: st
   );
 }
 
-async function createFixture(owner: APIRequestContext, prefix: string, suffix: string): Promise<ExitedFixture> {
-  const trackingNumber = `${prefix}-${suffix}`;
+async function createFixture(owner: APIRequestContext, _prefix: string, suffix: string): Promise<ExitedFixture> {
+  const trackingNumber = await nextValidShipmentCode();
   const cotageNumber = `EXIT-COTAGE-${suffix}`;
   const declarationReference = `EXIT-DECL-${suffix}`;
   const internalNote = `private exited daily status ${suffix}`;

@@ -6,8 +6,8 @@ The current repository uses:
 
 - Vite + React + TypeScript for the frontend.
 - React Router for app/public routes.
-- Express in [server.js](/C:/Users/Ahmadreza/Documents/logisticplus/server.js) for the API and production static serving.
-- PostgreSQL through the raw `pg` data layer in [src/server/db.js](/C:/Users/Ahmadreza/Documents/logisticplus/src/server/db.js).
+- Express through [server.js](/C:/Users/Ahmadreza/Documents/logisticplus/server.js), which is a compatibility bridge into [server/src/server.js](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/server.js) for API startup and production static serving.
+- PostgreSQL through the raw `pg` pool plus module repositories under [server/src/modules](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/modules). [src/server/db.js](/C:/Users/Ahmadreza/Documents/logisticplus/src/server/db.js) remains as the legacy aggregate data-access layer for APIs and scripts that still need it.
 - SQL schema setup through [db/schema.sql](/C:/Users/Ahmadreza/Documents/logisticplus/db/schema.sql).
 - Password login with platform-admin controlled company/user provisioning. Public signup, Zarinpal payment handoff, contact, pricing, landing, and SMS login/worker surfaces are not active in the public-release app.
 
@@ -15,14 +15,27 @@ Do not assume this project is Next.js or Prisma-based unless the stack is delibe
 
 ## Current App State
 
-Last checked: 2026-05-17.
+Last checked: 2026-06-19.
 
 - Local app is running on `http://localhost:3000`; `/api/health` and `/api/db/health` return ok.
 - Browser smoke should check `/`, `/login`, `/dashboard`, `/admin`, and token-based public tracking routes. `/` shows the login entry; removed public marketing/self-serve/search routes redirect to login.
 - The protected app currently opens for the seeded owner session. Admin includes manual organization/user provisioning, historical signup/contact review, subscription limits, billing records, and operational errors.
 - The regression suite is green: `npm.cmd run test:e2e:setup` reset `logisticplus_test`, then `npm.cmd run test:e2e` passed 43/43 tests.
-- `npm.cmd run lint`, `node --check server.js`, `node --check src/server/db.js`, and `npm.cmd run build` pass. The build still emits Vite's existing large chunk warning.
+- `npm.cmd run lint`, `node --check server.js`, `node --check src/server/db.js`, `npm.cmd run build`, migration verification, and production-config smoke checks should pass before deploy. The build still emits Vite's existing large chunk warning.
 - In the Codex desktop sandbox, Vite/esbuild may fail to read parent directories while loading `vite.config.ts`; rerunning the same build outside the sandbox passed.
+
+## Backend Layout
+
+The backend is module-first under [server/src](/C:/Users/Ahmadreza/Documents/logisticplus/server/src):
+
+- [server/src/app.js](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/app.js) creates the Express app and shared middleware.
+- [server/src/server.js](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/server.js) owns startup, route registration, workers, and WebSocket attachment.
+- [server/src/config](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/config), [server/src/db](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/db), and [server/src/shared](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/shared) hold cross-cutting infrastructure.
+- Business routes and repositories live in [server/src/modules](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/modules), grouped by capability.
+
+The backend intentionally stays on runtime-safe `.js` files for now. `npm start` runs `node server.js`, and Liara can keep using the standard Node.js startup path without a separate server compile step.
+
+Some legacy support code still lives under [src/server](/C:/Users/Ahmadreza/Documents/logisticplus/src/server), including AI, SMS, document storage, public tracking, request schemas, shipment workflow/template helpers, cheque/compliance helpers, and the aggregate [src/server/db.js](/C:/Users/Ahmadreza/Documents/logisticplus/src/server/db.js). Do not reintroduce route or repository compatibility wrappers there for modules that already live under [server/src/modules](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/modules).
 
 ## Prerequisites
 
@@ -178,7 +191,7 @@ Command notes:
 
 Production start:
 
-`npm run start` runs `node server.js`. Set `NODE_ENV=production` through your host environment before using it for production static serving. In PowerShell, use:
+`npm run start` runs `node server.js`, which imports [server/src/server.js](/C:/Users/Ahmadreza/Documents/logisticplus/server/src/server.js). Set `NODE_ENV=production` through your host environment before using it for production static serving. In PowerShell, use:
 
 ```powershell
 $env:NODE_ENV = "production"

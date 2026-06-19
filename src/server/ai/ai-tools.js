@@ -1,4 +1,4 @@
-import { listCustomerPhoneNumbers } from "../repositories/customers.js";
+import { listCustomerPhoneNumbers } from "../../../server/src/modules/customers/customer.repository.js";
 import { AI_BUSINESS_SEARCH_ENTITY_TYPES, searchAiBusinessIndex } from "./ai-search-index.js";
 import {
   HAMYAR_SHIPMENT_FIELD_POLICY,
@@ -456,6 +456,7 @@ export async function getShipmentFullProfile(pool, context, { shipmentId } = {})
     customerName: customerDisplayName(row),
     status: normalizeShipmentStatus(row.status),
     priority: row.priority || "normal",
+    statusText: cleanText(base.statusText),
     currentStep: cleanText(base.currentStage) || cleanText(row.current_step_id),
     currentStatus: cleanText(base.currentStage) || shipmentStatusLabel(row.status),
     route: {
@@ -794,12 +795,15 @@ export async function getShipmentDetailContext(pool, context, { shipmentId } = {
   requireCeoToolContext(context);
   const shipment = await getShipmentFullProfile(pool, context, { shipmentId });
   if (!shipment) return null;
-  const commercialCardContext = await getCommercialCardContext(pool, context, {
-    shipmentId: shipment.id,
-    customerId: shipment.customerId,
-    cardRef: shipment.parties?.commercialCardId || shipment.parties?.commercialCardDisplayName,
-    limit: 3,
-  });
+  const [commercialCardContext, captain] = await Promise.all([
+    getCommercialCardContext(pool, context, {
+      shipmentId: shipment.id,
+      customerId: shipment.customerId,
+      cardRef: shipment.parties?.commercialCardId || shipment.parties?.commercialCardDisplayName,
+      limit: 3,
+    }),
+    getShipmentCaptainInfo(pool, context, { shipmentId: shipment.id }),
+  ]);
   const commercialCard = commercialCardContext.cards[0] || null;
   return {
     type: "shipment_detail_context",
@@ -807,11 +811,13 @@ export async function getShipmentDetailContext(pool, context, { shipmentId } = {
       id: shipment.id,
       shipmentCode: shipment.shipmentCode,
       status: shipment.status,
+      statusText: shipment.statusText,
       currentStatus: shipment.currentStatus,
       currentStep: shipment.currentStep,
       priority: shipment.priority,
       route: shipment.route,
       ports: shipment.ports,
+      publicTrackingStatus: shipment.publicTrackingStatus,
       operationalDates: shipment.operationalDates,
       updatedAt: shipment.updatedAt,
       actionUrl: shipment.actionUrl,
@@ -822,6 +828,7 @@ export async function getShipmentDetailContext(pool, context, { shipmentId } = {
       name: shipment.customerName,
       actionUrl: shipment.customerId ? `/customers/${shipment.customerId}` : "",
     },
+    captain,
     commercialCard,
     commercialCards: commercialCardContext.cards,
   };
