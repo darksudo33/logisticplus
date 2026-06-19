@@ -223,6 +223,12 @@ test.describe.serial("daily status board", () => {
       expect(kootajRows.some((row) => row.id === lenjShipmentId)).toBe(true);
       expect(kootajRows.every((row) => row.shipment.status === "KOOTAJ_DONE")).toBe(true);
 
+      const removedCustomsStatusFilter = await owner.get("/api/daily-status?customsStatus=in_customs_review");
+      expect(removedCustomsStatusFilter.status(), await removedCustomsStatusFilter.text()).toBe(400);
+
+      const removedReleaseStatusFilter = await owner.get("/api/daily-status?releaseStatus=ready");
+      expect(removedReleaseStatusFilter.status(), await removedReleaseStatusFilter.text()).toBe(400);
+
       const spoofedList = await owner.get(`/api/daily-status?organizationId=${encodeURIComponent(tenantInfo.organizationId)}`);
       await expectForbidden(spoofedList);
       expect((await spoofedList.json()).error?.code).toBe("TENANT_SCOPE_CONFLICT");
@@ -449,6 +455,8 @@ test.describe.serial("daily status board", () => {
     const detailCardId = `daily-card-detail-${suffix}`;
     const originalCotageNumber = `UI-COTAGE-${suffix}`;
     const editedCotageNumber = `UI-COTAGE-EDIT-${suffix}`;
+    const editedDailyOrderRegistrationNumber = `UI-DAILY-ORDER-${suffix}`;
+    const editedDailyCurrentStage = `Daily stage ${suffix}`;
     const detailCotageNumber = `UI-COTAGE-DETAIL-${suffix}`;
     const detailOrderRegistrationNumber = `UI-ORDER-${suffix}`;
     const detailBankTrackingNumber = `UI-BANK-${suffix}`;
@@ -502,6 +510,8 @@ test.describe.serial("daily status board", () => {
       await expect(page.getByTestId("daily-status-detail-panel")).toBeVisible();
       await expect(page.getByTestId("daily-status-table-panel")).toHaveCount(0);
       await expect(page.getByTestId("daily-status-mobile-list")).toBeHidden();
+      await expect(page.getByText("همه وضعیت‌ها", { exact: true })).toHaveCount(0);
+      await expect(page.getByText("همه ترخیص‌ها", { exact: true })).toHaveCount(0);
       await expectNoHorizontalPageOverflow(page);
 
       await page.getByTestId("daily-status-details-s1").click();
@@ -522,7 +532,7 @@ test.describe.serial("daily status board", () => {
       await expect(page.getByTestId("daily-status-desktop-base-origin-s1")).toBeVisible();
       await expect(page.getByTestId("daily-status-desktop-base-delivery-port-s1")).toBeVisible();
       await expect(page.getByTestId("daily-status-desktop-base-discharge-port-s1")).toBeVisible();
-      await expect(page.getByTestId("daily-status-desktop-base-consignee-s1")).toBeVisible();
+      await expect(page.getByTestId("daily-status-desktop-base-consignee-s1")).toHaveCount(0);
       await expect(page.getByTestId("daily-status-desktop-base-current-stage-s1")).toBeVisible();
       await expect(page.getByTestId("daily-status-desktop-base-goods-s1")).toHaveCount(0);
       await expect(page.getByTestId("daily-status-desktop-base-packaging-s1")).toHaveCount(0);
@@ -538,17 +548,51 @@ test.describe.serial("daily status board", () => {
 
       await page.getByTestId("daily-status-edit-s1").click();
       await expect(page.getByTestId("daily-status-desktop-edit-panel-s1")).toBeVisible();
-      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-base-s1"), true);
-      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-order-registration-s1"), false);
-      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-declaration-s1"), false);
-      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-payments-s1"), false);
-      await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-release-s1"), false);
-      await page.getByTestId("daily-status-desktop-section-declaration-s1").locator("summary").click();
-      await page.getByTestId("daily-status-desktop-section-commercial-card-s1").locator("summary").click();
-      await page.getByTestId("daily-status-desktop-commercialCardId-s1-select").click();
-      await page.locator('[data-slot="select-item"]').filter({ hasText: "بدون کارت" }).click();
-      await page.getByTestId("daily-status-desktop-commercialCardId-s1-select").click();
-      await page.locator('[data-slot="select-item"]').filter({ hasText: "Owner daily status UI card" }).first().click();
+      const currentEditSectionIds = [
+        "base",
+        "goods-v2",
+        "declarationKootaj",
+        "permits",
+        "payments",
+        "banking",
+        "notes",
+      ];
+      for (const sectionId of currentEditSectionIds) {
+        await expectDetailsOpen(page.getByTestId(`daily-status-desktop-section-${sectionId}-s1`), true);
+      }
+      for (const oldSectionId of [
+        "order-registration",
+        "fx-bank",
+        "origin-docs",
+        "arrival-warehouse",
+        "declaration",
+        "inspection",
+        "release",
+        "commercial-card",
+        "internal-note",
+      ]) {
+        await expect(page.getByTestId(`daily-status-desktop-section-${oldSectionId}-s1`)).toHaveCount(0);
+      }
+      await expect(page.getByTestId("daily-status-desktop-base-status-s1-select")).toBeVisible();
+      await expect(page.getByTestId("daily-status-desktop-base-order-registration-number-s1-input")).toBeVisible();
+      await expect(page.getByTestId("daily-status-desktop-base-origin-s1-input")).toHaveCount(0);
+      await expect(page.getByTestId("daily-status-desktop-base-delivery-port-s1-input")).toHaveCount(0);
+      await expect(page.getByTestId("daily-status-desktop-base-discharge-port-s1-input")).toHaveCount(0);
+      await expect(page.getByTestId("daily-status-desktop-base-consignee-s1")).toHaveCount(0);
+      await expect(page.getByTestId("daily-status-desktop-base-consignee-s1-input")).toHaveCount(0);
+      await expect(page.getByTestId("daily-status-desktop-base-current-stage-s1-input")).toBeVisible();
+      await expect(page.getByTestId("daily-status-desktop-commercialCardId-s1-select")).toHaveCount(0);
+      await expect(page.getByTestId("daily-status-desktop-orderRegistrationNumber-s1-input")).toHaveCount(0);
+      await expect(page.getByTestId("daily-status-desktop-bankTrackingNumber-s1-input")).toHaveCount(0);
+      await expect(page.getByTestId("daily-status-desktop-truckPlate-s1-input")).toHaveCount(0);
+      await expect(page.getByTestId("daily-status-desktop-driverName-s1-input")).toHaveCount(0);
+      const statusBox = await page.getByTestId("daily-status-desktop-base-status-s1").boundingBox();
+      const currentStageBox = await page.getByTestId("daily-status-desktop-base-current-stage-s1").boundingBox();
+      expect(statusBox).not.toBeNull();
+      expect(currentStageBox).not.toBeNull();
+      expect(Math.abs((statusBox?.y || 0) - (currentStageBox?.y || 0))).toBeLessThan(12);
+      await page.getByTestId("daily-status-desktop-base-order-registration-number-s1-input").fill(editedDailyOrderRegistrationNumber);
+      await page.getByTestId("daily-status-desktop-base-current-stage-s1-input").fill(editedDailyCurrentStage);
       await page.getByTestId("daily-status-desktop-cotageNumber-s1-input").fill(editedCotageNumber);
       const saveResponse = page.waitForResponse((response) => (
         response.url().includes("/api/daily-status/s1") && response.request().method() === "PATCH"
@@ -556,6 +600,8 @@ test.describe.serial("daily status board", () => {
       await page.getByTestId("daily-status-desktop-save-s1").click();
       expect((await saveResponse).status()).toBeLessThan(400);
       await expect(page.getByTestId("daily-status-desktop-view-panel-s1")).toContainText(editedCotageNumber);
+      await expect(page.getByTestId("daily-status-desktop-base-order-registration-number-s1")).toContainText(editedDailyOrderRegistrationNumber);
+      await expect(page.getByTestId("daily-status-desktop-base-current-stage-s1")).toContainText(editedDailyCurrentStage);
 
       await page.goto("/shipments/s1/legacy");
       await expect(page.getByTestId("shipment-daily-status-panel")).toBeVisible();
@@ -669,6 +715,8 @@ test.describe.serial("daily status board", () => {
 
       await page.getByTestId("daily-status-mobile-filter-toggle").click();
       await expect(page.getByTestId("daily-status-mobile-filters")).toBeVisible();
+      await expect(page.getByTestId("daily-status-mobile-filters").getByText("همه وضعیت‌ها", { exact: true })).toHaveCount(0);
+      await expect(page.getByTestId("daily-status-mobile-filters").getByText("همه ترخیص‌ها", { exact: true })).toHaveCount(0);
       await page.getByTestId("daily-status-mobile-details-s1").click();
       await expect(page.getByTestId("daily-status-mobile-view-panel-s1")).toBeVisible();
       await expect(page.getByTestId("daily-status-mobile-view-panel-s1")).toContainText(detailCotageNumber);

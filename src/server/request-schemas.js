@@ -383,8 +383,6 @@ export const dailyStatusListQuerySchema = z.object({
   shipmentId: z.preprocess(firstQueryValue, optionalId),
   commercialCardId: z.preprocess(firstQueryValue, optionalId),
   customsRoute: optionalQueryEnum(DAILY_STATUS_CUSTOMS_ROUTES),
-  customsStatus: optionalQueryEnum(DAILY_STATUS_CUSTOMS_STATUSES),
-  releaseStatus: optionalQueryEnum(DAILY_STATUS_RELEASE_STATUSES),
   shipmentStatus: optionalQueryEnum(SHIPMENT_STATUS_VALUES),
   limit: queryLimit(50),
 }).strict();

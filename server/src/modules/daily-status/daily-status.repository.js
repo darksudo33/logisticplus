@@ -382,8 +382,6 @@ function dailyStatusQuery(filters = {}, organizationId, { includeCustomerPrivate
   if (filters.shipmentId) appendFilter(values, conditions, "s.id = ?", filters.shipmentId);
   if (filters.commercialCardId) appendFilter(values, conditions, "k.commercial_card_id = ?", filters.commercialCardId);
   if (filters.customsRoute) appendFilter(values, conditions, "k.customs_route = ?", filters.customsRoute);
-  if (filters.customsStatus) appendFilter(values, conditions, "k.customs_status = ?", filters.customsStatus);
-  if (filters.releaseStatus) appendFilter(values, conditions, "k.release_status = ?", filters.releaseStatus);
   if (filters.shipmentStatus) appendFilter(values, conditions, "s.status = ?", normalizeShipmentStatus(filters.shipmentStatus));
   if (filters.q) {
     const searchParam = `%${filters.q}%`;
