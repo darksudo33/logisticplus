@@ -84,7 +84,6 @@
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/qrcode": "^1.5.6",
-    "autoprefixer": "^10.4.21",
     "depcheck": "^1.4.7",
     "knip": "^6.17.1",
     "tailwindcss": "^4.1.14",
