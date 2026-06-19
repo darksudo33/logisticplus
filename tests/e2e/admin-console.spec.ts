@@ -94,18 +94,15 @@ test.describe.serial("separate platform admin console", () => {
     }
   });
 
-  test("does not expose retired signup request, contact, or SMS modules", async ({ page }) => {
+  test("does not expose retired signup request or contact modules", async ({ page }) => {
     await loginViaUi(page);
     await page.goto("/platform-admin");
     await expect(page.getByTestId("admin-nav-requests")).toHaveCount(0);
     await expect(page.getByTestId("admin-nav-contacts")).toHaveCount(0);
-    await expect(page.getByTestId("admin-nav-sms")).toHaveCount(0);
     await expect(page.getByTestId("admin-signups-panel")).toHaveCount(0);
     await expect(page.getByTestId("admin-contacts-panel")).toHaveCount(0);
-    await expect(page.getByTestId("admin-sms-health-panel")).toHaveCount(0);
     await expect(page.getByTestId("admin-section-requests")).toHaveCount(0);
     await expect(page.getByTestId("admin-section-contacts")).toHaveCount(0);
-    await expect(page.getByTestId("admin-section-sms")).toHaveCount(0);
   });
 
   test("is responsive on mobile without console errors or horizontal overflow", async ({ browser }) => {

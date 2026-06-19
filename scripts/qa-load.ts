@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { chromium } from "@playwright/test";
 import pg from "pg";
 
 const { Client } = pg;
@@ -547,22 +548,6 @@ async function sampleDb(stageVus) {
 async function runBrowserProbes(vus) {
   if (!browserProbesEnabled) return [];
   const samples = [];
-  let chromium;
-  try {
-    ({ chromium } = await import("playwright"));
-  } catch (error) {
-    return [
-      {
-        kind: "browser",
-        op: "browser:launch",
-        status: "BROWSER_FAIL",
-        ok: false,
-        assertionFailed: true,
-        ms: 0,
-        error: `Playwright import failed: ${error?.message || error}`,
-      },
-    ];
-  }
 
   const started = performance.now();
   let browser;

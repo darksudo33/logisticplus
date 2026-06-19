@@ -176,9 +176,6 @@ test.describe.serial("security regression harness", () => {
     await expectForbidden(await employee.get("/api/admin/overview"));
     await expectForbidden(await employee.get("/api/admin/payments"));
     await expectForbidden(await employee.get("/api/admin/billing/invoices"));
-    await expectUnavailable(await employee.get("/api/admin/sms-deliveries"));
-    await expectUnavailable(await employee.get("/api/admin/sms-analytics"));
-    await expectUnavailable(await employee.get("/api/admin/sms-templates"));
     await readOk(await employee.get("/api/shipments"));
     await readOk(await employee.get("/api/documents"));
     await readOk(await employee.get("/api/quotations"));
@@ -440,7 +437,7 @@ test.describe.serial("security regression harness", () => {
     await disposeContexts(owner, expiredContext, revokedContext, publicContext);
   });
 
-  test("supports remember-me cookies and keeps phone SMS login unavailable in public release", async () => {
+  test("supports remember-me cookies", async () => {
     const rememberedContext = await apiContext();
     const rememberedLogin = await rememberedContext.post("/api/auth/login", {
       data: { email: OWNER_EMAIL, password: OWNER_PASSWORD, remember: true },
@@ -465,18 +462,10 @@ test.describe.serial("security regression harness", () => {
     expect(sessionOnlyCookie).toContain("Max-Age=");
     expect(sessionOnlyCookie).not.toContain("Expires=");
 
-    const phoneContext = await apiContext();
-    await expectUnavailable(await phoneContext.post("/api/auth/phone/request-code", {
-      data: { phone: "09365683694" },
-    }));
-    await expectUnavailable(await phoneContext.post("/api/auth/phone/verify", {
-      data: { phone: "09365683694", code: "000000", remember: true },
-    }));
-
-    await disposeContexts(rememberedContext, sessionOnlyContext, phoneContext);
+    await disposeContexts(rememberedContext, sessionOnlyContext);
   });
 
-  test("keeps public signup and Zarinpal payment routes unavailable in the public release", async () => {
+  test("keeps public signup unavailable in the public release", async () => {
     const publicContext = await apiContext();
 
     await expectUnavailable(await publicContext.post("/api/signup", {
@@ -490,12 +479,6 @@ test.describe.serial("security regression harness", () => {
         contactPhone: "09120000000",
       },
     }));
-    await expectUnavailable(await publicContext.post("/api/billing/payments/disabled-payment/start"));
-    await expectUnavailable(await publicContext.get(
-      "/api/billing/zarinpal/callback?Authority=disabled-public-release&Status=OK",
-      { maxRedirects: 0 }
-    ));
-
     await disposeContexts(publicContext);
   });
 

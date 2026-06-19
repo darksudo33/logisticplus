@@ -41,15 +41,6 @@ export function validateProductionConfig() {
   }
   validateHttpsUrl(process.env.APP_PUBLIC_URL, "APP_PUBLIC_URL", errors);
 
-  if (process.env.SMS_ENABLED === "true" && process.env.SMS_DRY_RUN === "false") {
-    if (!String(process.env.SMSIR_API_KEY || "").trim()) {
-      errors.push("SMSIR_API_KEY is required when live SMS sending is enabled.");
-    }
-    const useDefaultLine = parseBooleanEnv(process.env.SMSIR_USE_DEFAULT_LINE, false);
-    if (!useDefaultLine && !String(process.env.SMSIR_LINE_NUMBER || "").trim()) {
-      errors.push("SMSIR_LINE_NUMBER is required for live SMS unless SMSIR_USE_DEFAULT_LINE=true.");
-    }
-  }
   try {
     const rateLimitStore = resolveRateLimitStore();
     if (rateLimitStore !== "postgres") {

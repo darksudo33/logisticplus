@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useMockStore } from "../store/useMockStore";
+import { useAppStore } from "../store/useAppStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -86,9 +86,9 @@ const formatDate = (value?: string) => {
 };
 
 export default function UserManagement() {
-  const users = useMockStore((state) => state.users);
-  const currentUser = useMockStore((state) => state.currentUser);
-  const loadCurrentUserRecords = useMockStore((state) => state.loadCurrentUserRecords);
+  const users = useAppStore((state) => state.users);
+  const currentUser = useAppStore((state) => state.currentUser);
+  const loadCurrentUserRecords = useAppStore((state) => state.loadCurrentUserRecords);
 
   const [searchTerm, setSearchTerm] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("ALL");

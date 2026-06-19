@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ActionSkeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useMockStore } from "../store/useMockStore";
+import { useAppStore } from "../store/useAppStore";
 
 export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
@@ -15,7 +15,7 @@ export default function LoginPage() {
   const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState("");
   const navigate = useNavigate();
-  const loginWithPassword = useMockStore((state) => state.loginWithPassword);
+  const loginWithPassword = useAppStore((state) => state.loginWithPassword);
 
   const handleLogin = async () => {
     setIsLoading(true);

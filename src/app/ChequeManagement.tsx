@@ -20,7 +20,7 @@ import {
   Briefcase
 } from "lucide-react";
 import { format, parse } from "date-fns-jalali";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 import { Cheque, ChequeStatus } from "../types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -75,7 +75,7 @@ const ChequeTimer = ({ targetDate }: { targetDate: string }) => {
 };
 
 export default function ChequeManagement() {
-  const { cheques, loadCurrentUserRecords } = useMockStore();
+  const { cheques, loadCurrentUserRecords } = useAppStore();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<ChequeStatus | "ALL">("ALL");
   const [isDialogOpen, setIsDialogOpen] = useState(false);

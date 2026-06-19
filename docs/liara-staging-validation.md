@@ -87,7 +87,7 @@ The smoke script checks:
 
 - `/api/health` and `/api/db/health`
 - SPA shell routes `/`, `/login`, `/contact`, `/admin`
-- removed self-serve/payment/SMS public APIs return 404
+- removed self-serve public APIs return 404
 - owner login, if `STAGING_OWNER_PASSWORD` is set
 - private document upload/download
 - customer-visible document exposure through public tracking

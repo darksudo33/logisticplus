@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { ActionSkeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 
 type NotificationKey = "shipmentUpdates" | "taskDeadlines" | "chatMessages";
 
@@ -37,8 +37,8 @@ async function readFileAsDataUrl(file: File) {
 }
 
 export default function Profile() {
-  const currentUser = useMockStore((state) => state.currentUser);
-  const updateCurrentUser = useMockStore((state) => state.updateCurrentUser);
+  const currentUser = useAppStore((state) => state.currentUser);
+  const updateCurrentUser = useAppStore((state) => state.updateCurrentUser);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const initialPreferences = useMemo(

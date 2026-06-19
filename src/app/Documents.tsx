@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useAppDataStore, useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 import { 
   FileText, 
   Search, 
@@ -70,12 +70,12 @@ type ChatMediaAttachment = {
 
 export default function Documents() {
   const navigate = useNavigate();
-  const currentUser = useMockStore(state => state.currentUser);
+  const currentUser = useAppStore(state => state.currentUser);
   const canViewChatMedia = Boolean(currentUser?.permissions?.includes("chat.media.view"));
   const canDeleteChatMedia = Boolean(currentUser?.permissions?.includes("chat.media.delete"));
-  const documents = useAppDataStore(state => state.documents);
-  const shipments = useAppDataStore(state => state.shipments);
-  const refreshDocumentRecords = useAppDataStore(state => state.refreshDocuments);
+  const documents = useAppStore(state => state.documents);
+  const shipments = useAppStore(state => state.shipments);
+  const refreshDocumentRecords = useAppStore(state => state.refreshDocuments);
 
   const [activeSection, setActiveSection] = useState<"documents" | "chatMedia">("documents");
   const [searchTerm, setSearchTerm] = useState("");

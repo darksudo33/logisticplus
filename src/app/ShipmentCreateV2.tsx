@@ -12,7 +12,7 @@ import { apiGet } from "@/src/lib/api";
 import { useApiResource } from "@/src/lib/resourceState";
 import { shipmentV2Api } from "@/src/lib/shipmentV2Api";
 import { toEnglishDigits } from "@/src/components/ShamsiDateTimeField";
-import { useAppDataStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 import type { Customer, ShipmentV2FlowCode, ShipmentV2GoodsRow, ShipmentV2LenjType } from "@/src/types";
 
 type DraftGoodsRow = Omit<ShipmentV2GoodsRow, "quantity" | "weight" | "cbm" | "pcs"> & {
@@ -159,8 +159,8 @@ function FieldError({ message }: { message?: string }) {
 
 export default function ShipmentCreateV2() {
   const navigate = useNavigate();
-  const refreshShipments = useAppDataStore((state) => state.refreshShipments);
-  const currentUser = useAppDataStore((state) => state.currentUser);
+  const refreshShipments = useAppStore((state) => state.refreshShipments);
+  const currentUser = useAppStore((state) => state.currentUser);
   const customersResource = useApiResource(React.useCallback(() => apiGet<Customer[]>("/api/customers"), []), []);
   const customers = customersResource.data;
   const [state, setState] = React.useState<CreateState>(initialState);

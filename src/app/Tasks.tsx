@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useAppDataStore, useMockStore } from "../store/useMockStore";
+import { useAppStore } from "../store/useAppStore";
 import { 
   DndContext, 
   closestCorners, 
@@ -104,8 +104,8 @@ const TaskListItem = ({
   onHistory: (task: Task) => void,
   key?: React.Key
 }) => {
-  const users = useMockStore(state => state.users);
-  const shipments = useMockStore(state => state.shipments);
+  const users = useAppStore(state => state.users);
+  const shipments = useAppStore(state => state.shipments);
   
   const assignedUser = React.useMemo(() => users.find(u => u.id === task.assignedToUserId), [users, task.assignedToUserId]);
   const linkedShipment = React.useMemo(() => shipments.find(s => s.id === task.shipmentId), [shipments, task.shipmentId]);
@@ -255,16 +255,16 @@ const TaskListItem = ({
 };
 
 export default function Tasks() {
-  const allTasks = useMockStore(state => state.tasks);
-  const currentUser = useMockStore(state => state.currentUser);
-  const softDelete = useMockStore(state => state.softDelete);
-  const users = useMockStore(state => state.users);
-  const shipments = useMockStore(state => state.shipments);
-  const organizationMembers = useAppDataStore(state => state.organizationMembers);
-  const refreshTasks = useAppDataStore(state => state.refreshTasks);
-  const fetchOrganizationMembers = useAppDataStore(state => state.fetchOrganizationMembers);
-  const updateTaskStatusRemote = useAppDataStore(state => state.updateTaskStatusRemote);
-  const fetchTaskEvents = useAppDataStore(state => state.fetchTaskEvents);
+  const allTasks = useAppStore(state => state.tasks);
+  const currentUser = useAppStore(state => state.currentUser);
+  const softDelete = useAppStore(state => state.softDelete);
+  const users = useAppStore(state => state.users);
+  const shipments = useAppStore(state => state.shipments);
+  const organizationMembers = useAppStore(state => state.organizationMembers);
+  const refreshTasks = useAppStore(state => state.refreshTasks);
+  const fetchOrganizationMembers = useAppStore(state => state.fetchOrganizationMembers);
+  const updateTaskStatusRemote = useAppStore(state => state.updateTaskStatusRemote);
+  const fetchTaskEvents = useAppStore(state => state.fetchTaskEvents);
   
   const [searchTerm, setSearchTerm] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("ALL");

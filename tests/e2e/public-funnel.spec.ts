@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { apiContext, disposeContexts, expectUnavailable } from "./helpers";
 
-const retiredPublicRoutes = ["/pricing", "/signup", "/signup/pending", "/contact", "/billing/callback/zarinpal"];
+const retiredPublicRoutes = ["/signup", "/signup/pending", "/contact"];
 const loginEntryRoutes = ["/", "/login", ...retiredPublicRoutes];
 const viewports = [
   { name: "desktop", width: 1280, height: 720 },
@@ -19,9 +19,7 @@ function isIgnorableDevServerMessage(message: string) {
 
 async function expectNoRetiredPublicLinks(page: Page) {
   await expect(page.locator('a[href="/contact"]')).toHaveCount(0);
-  await expect(page.locator('a[href="/pricing"]')).toHaveCount(0);
   await expect(page.locator('a[href^="/signup"]')).toHaveCount(0);
-  await expect(page.locator('a[href*="/billing/callback/zarinpal"]')).toHaveCount(0);
 }
 
 for (const viewport of viewports) {
@@ -62,15 +60,11 @@ test("/login does not prefill internal admin email", async ({ page }) => {
   await expect(page.locator("body")).not.toContainText("darksudo22@gmail.com");
 });
 
-test("retired public signup, contact, payment, and phone-login APIs stay unavailable", async () => {
+test("retired public signup and contact APIs stay unavailable", async () => {
   const context = await apiContext();
 
   await expectUnavailable(await context.post("/api/contact-requests", { data: { companyName: "Disabled" } }));
   await expectUnavailable(await context.post("/api/signup", { data: { companyName: "Disabled" } }));
-  await expectUnavailable(await context.post("/api/billing/payments/disabled-payment/start"));
-  await expectUnavailable(await context.get("/api/billing/zarinpal/callback?Authority=disabled-public-release&Status=OK"));
-  await expectUnavailable(await context.post("/api/auth/phone/request-code", { data: { phone: "09120000000" } }));
-  await expectUnavailable(await context.post("/api/auth/phone/verify", { data: { phone: "09120000000", code: "000000" } }));
 
   await disposeContexts(context);
 });

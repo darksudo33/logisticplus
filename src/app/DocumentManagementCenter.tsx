@@ -24,7 +24,7 @@ import {
 import { businessEntitiesApi } from "@/src/lib/businessEntitiesApi";
 import { downloadBinaryFile } from "@/src/lib/downloads";
 import { shipmentV2Api } from "@/src/lib/shipmentV2Api";
-import { useAppDataStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 import { getDocumentTypeFilterValue, getDocumentTypeLabel } from "@/src/shared/document-types";
 import { shipmentStatusLabel } from "@/src/shared/shipment-statuses.js";
 import type { MalvaniProfile, ShipmentDocument, ShipmentV2ProfileResponse } from "@/src/types";
@@ -326,12 +326,12 @@ export default function DocumentManagementCenter() {
   const routedShipmentQuery = getRoutedShipmentQuery(searchParams);
   const autoOpenedShipmentQueryRef = React.useRef("");
 
-  const currentUser = useAppDataStore((state) => state.currentUser);
-  const customers = useAppDataStore((state) => state.customers);
-  const shipments = useAppDataStore((state) => state.shipments);
-  const commercialCards = useAppDataStore((state) => state.commercialCards);
-  const documents = useAppDataStore((state) => state.documents);
-  const refreshDocuments = useAppDataStore((state) => state.refreshDocuments);
+  const currentUser = useAppStore((state) => state.currentUser);
+  const customers = useAppStore((state) => state.customers);
+  const shipments = useAppStore((state) => state.shipments);
+  const commercialCards = useAppStore((state) => state.commercialCards);
+  const documents = useAppStore((state) => state.documents);
+  const refreshDocuments = useAppStore((state) => state.refreshDocuments);
   const canUseChat = Boolean(currentUser?.permissions?.includes("chat.use"));
 
   const selectedDocuments = React.useMemo(

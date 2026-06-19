@@ -72,12 +72,11 @@ npm run seed:production-admin:test
 
 Core catalog:
 
-- `subscription_plans` for `starter`, `business`, and `enterprise` from the pricing catalog.
+- `subscription_plans` for `starter`, `business`, and `enterprise` from the subscription plan catalog.
 - Tenant `permissions` used by production workflows.
 - Direct-only `platform.admin` permission.
 - Tenant `roles`: `CEO`, `MANAGER`, `OPERATIONS`, `CUSTOMER_SERVICE`, `FINANCE`, `QUOTATION_MANAGER`, `COMPLIANCE_STAFF`, `EMPLOYEE`, `CUSTOMER_VIEWER`.
 - `role_permissions` for tenant access, excluding `platform.admin`.
-- Default `sms_templates`. Existing template bodies and enabled flags are preserved.
 
 Initial admin:
 
@@ -92,7 +91,7 @@ The password hash uses bcrypt with cost factor 12.
 
 ## Idempotency
 
-Repeated runs do not duplicate plans, permissions, roles, role-permissions, SMS templates, user, organization, membership, subscription, or direct platform admin grant.
+Repeated runs do not duplicate plans, permissions, roles, role-permissions, user, organization, membership, subscription, or direct platform admin grant.
 
 If the user already exists, the admin script preserves the existing password hash unless `--reset-password` is passed. It may still ensure the user is active, has role `CEO`, has the target organization as the primary organization when currently unassigned, and has active owner membership.
 
@@ -139,7 +138,7 @@ WHERE lower(u.email) = lower('<initial-admin-email>')
   AND p.key = 'platform.admin';
 ```
 
-Do not paste passwords, database URLs, payment authorities, SMS secrets, bucket names, access keys, or token values into logs or tickets.
+Do not paste passwords, database URLs, gateway authorities, message-provider secrets, bucket names, access keys, or token values into logs or tickets.
 
 ## Automated Verifiers
 

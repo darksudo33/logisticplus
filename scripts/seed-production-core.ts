@@ -4,8 +4,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { pricingPlans } from "../src/lib/pricing.ts";
-import { DEFAULT_SMS_TEMPLATES } from "../src/server/sms-templates.js";
+import { subscriptionPlans } from "../src/lib/subscriptionPlans.ts";
 import {
   PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS,
   SEEDED_SHIPMENT_WORKFLOW_TEMPLATES,
@@ -180,7 +179,7 @@ function selectedSubscriptionStatus(env = process.env) {
 }
 
 export function planRows() {
-  return pricingPlans.map((plan, index) => ({
+  return subscriptionPlans.map((plan, index) => ({
     id: plan.id,
     name: plan.name,
     description: plan.description || plan.audience || "",
@@ -286,19 +285,6 @@ async function ensurePermissionsAndRoles(client: any) {
     permissions: Object.keys(permissionDescriptions),
     roles: Object.keys(roleDescriptions),
   };
-}
-
-async function ensureSmsTemplates(client: any) {
-  for (const template of DEFAULT_SMS_TEMPLATES) {
-    await client.query(
-      `INSERT INTO sms_templates (key, label, body, enabled, updated_at)
-       VALUES ($1, $2, $3, TRUE, NOW())
-       ON CONFLICT (key) DO UPDATE SET
-         label = EXCLUDED.label`,
-      [template.key, template.label, template.body]
-    );
-  }
-  return DEFAULT_SMS_TEMPLATES.map((template) => template.key);
 }
 
 function slug(value: unknown) {
@@ -649,7 +635,6 @@ export async function ensureInitialOrganizationSubscription(
 export async function ensureProductionCoreCatalog(client: any, { env = process.env, includeInitialOrgSubscription = true } = {}) {
   const plans = await ensurePlans(client);
   const access = await ensurePermissionsAndRoles(client);
-  const smsTemplates = await ensureSmsTemplates(client);
   const workflowStepCatalog = await ensureWorkflowStepCatalog(client);
   const workflowTemplates = await ensureWorkflowTemplates(client);
   const initialSubscription = includeInitialOrgSubscription
@@ -660,7 +645,6 @@ export async function ensureProductionCoreCatalog(client: any, { env = process.e
     plans,
     permissions: access.permissions,
     roles: access.roles,
-    smsTemplates,
     workflowStepCatalog,
     workflowTemplates,
     initialSubscription,
@@ -685,7 +669,6 @@ function printSummary(summary: any, logger = console) {
   logger.log(`Plans ensured: ${summary.plans.join(", ")}`);
   logger.log(`Permissions ensured: ${summary.permissions.length}`);
   logger.log(`Roles ensured: ${summary.roles.join(", ")}`);
-  logger.log(`SMS templates ensured: ${summary.smsTemplates.length}`);
   logger.log(`Workflow catalog steps ensured: ${summary.workflowStepCatalog}`);
   logger.log(`Workflow templates ensured: ${summary.workflowTemplates.workflowTemplates}`);
   logger.log(`Workflow type mappings ensured: ${summary.workflowTemplates.workflowMappings}`);

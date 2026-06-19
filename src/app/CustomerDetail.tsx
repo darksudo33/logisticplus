@@ -1,6 +1,6 @@
 import React from "react";
 import { Navigate, useParams, useNavigate } from "react-router-dom";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -30,9 +30,9 @@ const StatusBadge = ({ status }: { status: string }) => {
 export default function CustomerDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const customers = useMockStore(state => state.customers);
-  const shipments = useMockStore(state => state.shipments);
-  const currentUser = useMockStore(state => state.currentUser);
+  const customers = useAppStore(state => state.customers);
+  const shipments = useAppStore(state => state.shipments);
+  const currentUser = useAppStore(state => state.currentUser);
   const [remoteShipments, setRemoteShipments] = React.useState<any[]>([]);
   const isCeo = currentUser?.role === "CEO";
 

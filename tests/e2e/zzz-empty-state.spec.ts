@@ -75,7 +75,6 @@ async function cleanOperationalData() {
       ["DELETE FROM change_logs"],
       ["DELETE FROM app_error_logs"],
       ["DELETE FROM contact_requests"],
-      ["DELETE FROM sms_deliveries"],
       ["DELETE FROM billing_invoice_items"],
       ["DELETE FROM billing_receipts"],
       ["DELETE FROM billing_invoices"],

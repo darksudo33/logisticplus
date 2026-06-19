@@ -61,7 +61,6 @@ import {
 import {
   previewUserDeletion as previewUserDeletionFromRepository,
 } from "../../server/src/modules/users/user.repository.js";
-import { DEFAULT_SMS_TEMPLATE_MAP, renderSmsTemplateBody } from "./sms-templates.js";
 import { organizationIdFromTenantContext, organizationScopeClause, requireOrganizationScope } from "./tenant-scope.js";
 import { withTransaction } from "./transaction.js";
 import { shipmentTimerOrderBy } from "./repositories/shipment-sort.js";
@@ -668,16 +667,6 @@ export async function searchOperationalRecords({ user, tenantContext, q, type = 
     offset: safeOffset,
     results: combined.slice(safeOffset, safeOffset + safeLimit).map((item) => item.result),
   };
-}
-
-export function normalizeSmsPhone(phone) {
-  const digits = normalizeDigits(phone).replace(/\D/g, "");
-  if (!digits) return "";
-  if (digits.startsWith("0098") && digits.length === 14) return digits.slice(2);
-  if (digits.startsWith("98") && digits.length === 12) return digits;
-  if (digits.startsWith("0") && digits.length === 11) return `98${digits.slice(1)}`;
-  if (digits.length === 10 && digits.startsWith("9")) return `98${digits}`;
-  return "";
 }
 
 export async function getUserById(userId) {
@@ -2800,7 +2789,6 @@ export async function createTaskRecord({
       title: "وظیفه جدید",
       body: String(title || "").trim(),
     });
-    await queueHighPriorityTaskSms(client, result.rows[0], "assigned");
     await client.query("COMMIT");
     const savedTask = result.rows[0];
     return savedTask;
@@ -2934,18 +2922,6 @@ export async function updateTaskRecord(taskId, updates = {}, { organizationId } 
         title: "ارجاع وظیفه",
       body: result.rows[0].title,
       });
-    }
-    const beforeHighPriority = isHighPriority(before.priority);
-    const afterHighPriority = isHighPriority(result.rows[0].priority);
-    if (
-      afterHighPriority &&
-      (nextAssignedToId !== before.assigned_to_id || !beforeHighPriority)
-    ) {
-      await queueHighPriorityTaskSms(
-        client,
-        result.rows[0],
-        nextAssignedToId !== before.assigned_to_id ? "reassigned" : "priority"
-      );
     }
     await client.query("COMMIT");
     const payload = { before, after: result.rows[0] };
@@ -3088,9 +3064,6 @@ export async function assignTaskRecord(taskId, {
       title: "ارجاع وظیفه",
       body: after.title,
     });
-    if (isHighPriority(after.priority)) {
-      await queueHighPriorityTaskSms(client, after, before.assigned_to_id === assignee.id ? "priority" : "reassigned");
-    }
     await client.query("COMMIT");
     const payload = { before, after };
     return payload;
@@ -3422,9 +3395,6 @@ export async function createShipmentTaskRecord({ shipmentId, stepId, actorUser, 
       title: existing ? "بروزرسانی وظیفه مرحله" : "وظیفه مرحله حمل",
       body: result.rows[0].title,
     });
-    if (!existing || assignedToId !== existing.assigned_to_id || !isHighPriority(existing.priority)) {
-      await queueHighPriorityTaskSms(client, result.rows[0], existing ? "reassigned" : "assigned");
-    }
     await client.query("COMMIT");
     return { before: existing, after: result.rows[0] };
   } catch (error) {
@@ -4230,49 +4200,6 @@ function toUiPlan(row) {
   };
 }
 
-function toUiSmsDelivery(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    organizationId: row.organization_id,
-    organizationName: row.organization_name || "",
-    userId: row.user_id || null,
-    userName: row.user_name || "",
-    recipientType: row.recipient_type || "user",
-    recipientName: row.recipient_name || row.user_name || "",
-    recipientPhone: row.recipient_phone || "",
-    message: row.message || "",
-    status: row.status,
-    provider: row.provider,
-    sourceType: row.source_type,
-    sourceId: row.source_id || "",
-    eventKey: row.event_key,
-    attemptCount: Number(row.attempt_count || 0),
-    providerMessageId: row.provider_message_id || "",
-    providerResponse: row.provider_response || {},
-    skipReason: row.skip_reason || "",
-    errorMessage: row.error_message || "",
-    sentAt: row.sent_at,
-    skippedAt: row.skipped_at,
-    failedAt: row.failed_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function toUiSmsTemplate(row) {
-  if (!row) return null;
-  return {
-    key: row.key,
-    label: row.label,
-    body: row.body,
-    enabled: row.enabled !== false,
-    updatedById: row.updated_by_id || null,
-    updatedAt: row.updated_at,
-    createdAt: row.created_at,
-  };
-}
-
 function billingNumber(prefix) {
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   return `${prefix}-${stamp}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
@@ -4439,7 +4366,7 @@ export async function getOrganizationForUser(userId) {
 
 function mergeSubscriptionLimits(planLimits = {}, planFeatures = {}, limitsOverride = {}) {
   const override = limitsOverride || {};
-  const featureKeys = ["chat", "cheques", "compliance", "quotations", "archive", "smsNotifications"];
+  const featureKeys = ["chat", "cheques", "compliance", "quotations", "archive"];
   const limits = { ...(planLimits || {}) };
   const features = { ...(planFeatures || {}) };
   for (const [key, value] of Object.entries(override)) {
@@ -4483,228 +4410,6 @@ export async function getEffectiveSubscriptionLimits(organizationId, queryable =
       effectiveFeatures: effective.features,
     },
   };
-}
-
-function isHighPriority(priority) {
-  return ["HIGH", "URGENT"].includes(String(priority || "").toUpperCase());
-}
-
-async function organizationCanUseSms(organizationId, queryable = pool) {
-  const subscription = await getEffectiveSubscriptionLimits(organizationId, queryable);
-  return subscription.subscription?.status === "active" && Boolean(subscription.features?.smsNotifications);
-}
-
-async function getSmsTemplate(queryable, key) {
-  const result = await queryable.query("SELECT * FROM sms_templates WHERE key = $1 LIMIT 1", [key]);
-  const row = result.rows[0];
-  if (row) return row;
-  const fallback = DEFAULT_SMS_TEMPLATE_MAP[key];
-  return fallback ? { ...fallback, enabled: true } : null;
-}
-
-async function renderSmsTemplate(queryable, key, replacements = {}) {
-  const template = await getSmsTemplate(queryable, key);
-  if (!template || template.enabled === false) return null;
-  return renderSmsTemplateBody(template.body, replacements).trim();
-}
-
-function formatSmsDateTime(value) {
-  const date = parseOperationalDate(value);
-  if (!date) return value ? String(value) : "";
-  return date.toLocaleString("fa-IR", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatSmsTaskTime(task) {
-  const legacy = task?.legacy_data || {};
-  const dueDate = task?.due_at || legacy.dueDate || "";
-  const deadline = legacy.deadline || "";
-  const value = dueDate && deadline && !/[T\s]\d{1,2}:\d{2}/.test(String(dueDate))
-    ? `${dueDate} ${deadline}`
-    : dueDate || deadline;
-  return formatSmsDateTime(value) || "در اولین فرصت";
-}
-
-function meetingTemplateKey(windowName) {
-  return windowName === "2h" ? "meeting_reminder_2h" : "meeting_reminder_24h";
-}
-
-function demurrageTemplateKey(windowName) {
-  if (windowName === "overdue") return "demurrage_overdue";
-  return windowName === "24h" ? "demurrage_warning_24h" : "demurrage_warning_72h";
-}
-
-async function enqueueSmsDelivery(queryable, {
-  organizationId,
-  userId,
-  recipientType = "user",
-  recipientName,
-  recipientPhone,
-  message,
-  sourceType,
-  sourceId,
-  eventKey,
-  skipReason: requestedSkipReason,
-}) {
-  if (!organizationId || !eventKey || !message || !(await organizationCanUseSms(organizationId, queryable))) {
-    return null;
-  }
-  const normalizedPhone = normalizeSmsPhone(recipientPhone);
-  const status = normalizedPhone ? "queued" : "skipped";
-  const skipReason = normalizedPhone ? null : requestedSkipReason || "missing_or_invalid_phone";
-  const result = await queryable.query(
-    `INSERT INTO sms_deliveries (
-       id, organization_id, user_id, recipient_type, recipient_name, recipient_phone, message, status, source_type, source_id,
-       event_key, skip_reason, skipped_at, updated_at
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $8 = 'skipped' THEN NOW() ELSE NULL END, NOW())
-     ON CONFLICT (event_key) DO NOTHING
-     RETURNING *`,
-    [
-      crypto.randomUUID(),
-      organizationId,
-      userId || null,
-      recipientType || "user",
-      recipientName || null,
-      normalizedPhone || null,
-      String(message).slice(0, 900),
-      status,
-      sourceType,
-      sourceId || null,
-      eventKey,
-      skipReason,
-    ]
-  );
-  return result.rows[0] || null;
-}
-
-function sanitizeSmsProviderResponse(value) {
-  if (!value || typeof value !== "object") return value || {};
-  if (Array.isArray(value)) return value.map((item) => sanitizeSmsProviderResponse(item));
-
-  const sensitiveKeys = new Set([
-    "body",
-    "code",
-    "message",
-    "messages",
-    "messageText",
-    "otp",
-    "text",
-  ]);
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([key]) => !sensitiveKeys.has(key))
-      .map(([key, nested]) => [key, sanitizeSmsProviderResponse(nested)])
-  );
-}
-
-function smsProviderResponse(providerResult = {}) {
-  return sanitizeSmsProviderResponse(providerResult.raw || providerResult || {});
-}
-
-export async function recordImmediateSmsDelivery({
-  organizationId,
-  userId,
-  recipientType = "user",
-  recipientName,
-  recipientPhone,
-  message,
-  sourceType,
-  sourceId,
-  eventKey,
-  status = "sent",
-  providerResult = {},
-  errorMessage,
-  skipReason,
-}) {
-  const normalizedPhone = normalizeSmsPhone(recipientPhone);
-  const safeStatus = ["sent", "failed", "skipped", "queued"].includes(status) ? status : "sent";
-  const finalStatus = normalizedPhone ? safeStatus : "skipped";
-  const providerResponse = smsProviderResponse(providerResult);
-  const result = await pool.query(
-    `INSERT INTO sms_deliveries (
-       id, organization_id, user_id, recipient_type, recipient_name, recipient_phone, message, status, source_type, source_id,
-       event_key, provider_message_id, provider_response, skip_reason, error_message, sent_at, skipped_at, failed_at, updated_at
-     )
-     VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-       $11, $12, $13::jsonb, $14, $15,
-       CASE WHEN $8 = 'sent' THEN NOW() ELSE NULL END,
-       CASE WHEN $8 = 'skipped' THEN NOW() ELSE NULL END,
-       CASE WHEN $8 = 'failed' THEN NOW() ELSE NULL END,
-       NOW()
-     )
-     ON CONFLICT (event_key) DO UPDATE SET
-       status = EXCLUDED.status,
-       provider_message_id = EXCLUDED.provider_message_id,
-       provider_response = EXCLUDED.provider_response,
-       skip_reason = EXCLUDED.skip_reason,
-       error_message = EXCLUDED.error_message,
-       sent_at = EXCLUDED.sent_at,
-       skipped_at = EXCLUDED.skipped_at,
-       failed_at = EXCLUDED.failed_at,
-       updated_at = NOW()
-     RETURNING *`,
-    [
-      crypto.randomUUID(),
-      organizationId || null,
-      userId || null,
-      recipientType || "user",
-      recipientName || null,
-      normalizedPhone || null,
-      String(message || "SMS notification").slice(0, 900),
-      finalStatus,
-      sourceType || "manual",
-      sourceId || null,
-      eventKey || `manual:${crypto.randomUUID()}`,
-      providerResult.messageId || null,
-      JSON.stringify(providerResponse),
-      finalStatus === "skipped" ? skipReason || "missing_or_invalid_phone" : null,
-      finalStatus === "failed" ? errorMessage || "SMS send failed." : null,
-    ]
-  );
-  return toUiSmsDelivery(result.rows[0]);
-}
-
-async function getUserSmsTarget(queryable, userId, organizationId) {
-  if (!userId) return null;
-  const result = await queryable.query(
-    `SELECT id, name, phone, organization_id
-     FROM app_users
-     WHERE id = $1
-       AND status = 'active'
-       AND ($2::text IS NULL OR organization_id = $2)
-     LIMIT 1`,
-    [userId, organizationId || null]
-  );
-  return result.rows[0] || null;
-}
-
-async function queueHighPriorityTaskSms(queryable, task, eventName = "assigned") {
-  if (!task || !isHighPriority(task.priority) || !task.assigned_to_id || ["DONE", "CANCELLED"].includes(task.status)) {
-    return null;
-  }
-  const assignee = await getUserSmsTarget(queryable, task.assigned_to_id, task.organization_id);
-  const message = await renderSmsTemplate(queryable, "high_priority_task", {
-    task: task.title,
-    time: formatSmsTaskTime(task),
-  });
-  if (!message) return null;
-  return enqueueSmsDelivery(queryable, {
-    organizationId: task.organization_id,
-    userId: task.assigned_to_id,
-    recipientType: "user",
-    recipientName: assignee?.name || task.assigned_to_name || "",
-    recipientPhone: assignee?.phone || "",
-    message,
-    sourceType: "task",
-    sourceId: task.id,
-    eventKey: `task:${task.id}:${eventName}:${task.assigned_to_id}:${task.priority}`,
-  });
 }
 
 function jalaliToGregorian(jy, jm, jd) {
@@ -4756,341 +4461,6 @@ function parseOperationalDate(value) {
   }
   const parsed = new Date(text);
   return Number.isNaN(parsed.valueOf()) ? null : parsed;
-}
-
-function addDays(date, days) {
-  const next = new Date(date);
-  next.setDate(next.getDate() + Number(days || 0));
-  return next;
-}
-
-function selectReminderWindow(diffMs) {
-  if (diffMs <= 0) return null;
-  const hours = diffMs / (60 * 60 * 1000);
-  if (hours <= 2) return "2h";
-  if (hours <= 24) return "24h";
-  return null;
-}
-
-function selectDemurrageWindow(diffMs) {
-  const hours = diffMs / (60 * 60 * 1000);
-  if (hours <= 0) return "overdue";
-  if (hours <= 24) return "24h";
-  if (hours <= 72) return "72h";
-  return null;
-}
-
-async function getDemurrageRecipient(queryable, shipment) {
-  const result = await queryable.query(
-    `SELECT u.id, u.name, u.phone, u.organization_id
-     FROM organizations o
-     JOIN app_users u ON u.id = o.owner_user_id
-     WHERE o.id = $1
-       AND u.status = 'active'
-       AND u.role = 'CEO'
-     LIMIT 1`,
-    [shipment.organization_id]
-  );
-  if (result.rows[0]) return result.rows[0];
-
-  const fallback = await queryable.query(
-    `SELECT id, name, phone, organization_id
-     FROM app_users
-     WHERE organization_id = $1
-       AND status = 'active'
-       AND role = 'CEO'
-     ORDER BY created_at ASC
-     LIMIT 1`,
-    [shipment.organization_id]
-  );
-  return fallback.rows[0] || null;
-}
-
-export async function queueScheduledSmsAlerts({ now = new Date() } = {}) {
-  const queued = { meetings: 0, demurrage: 0 };
-  const meetings = await pool.query(
-    `SELECT cm.*, u.phone AS assigned_phone
-     FROM compliance_meetings cm
-     LEFT JOIN app_users u ON u.id = cm.assigned_to_id
-     WHERE cm.archived_at IS NULL
-       AND cm.status NOT IN ('COMPLETED', 'CANCELLED', 'ARCHIVED')
-       AND cm.assigned_to_id IS NOT NULL
-       AND cm.organization_id IS NOT NULL`
-  );
-  for (const meeting of meetings.rows) {
-    const targetDate = parseOperationalDate(meeting.meeting_at);
-    const windowName = targetDate ? selectReminderWindow(targetDate.getTime() - now.getTime()) : null;
-    if (!windowName) continue;
-    const message = await renderSmsTemplate(pool, meetingTemplateKey(windowName), {
-      mtg: meeting.title,
-      time: formatSmsDateTime(meeting.meeting_at),
-    });
-    if (!message) continue;
-    const delivery = await enqueueSmsDelivery(pool, {
-      organizationId: meeting.organization_id,
-      userId: meeting.assigned_to_id,
-      recipientType: "user",
-      recipientName: meeting.assigned_to_name || "",
-      recipientPhone: meeting.assigned_phone || "",
-      message,
-      sourceType: "meeting",
-      sourceId: meeting.id,
-      eventKey: `meeting:${meeting.id}:${windowName}`,
-    });
-    if (delivery) queued.meetings += 1;
-  }
-
-  const shipments = await pool.query(
-    `SELECT *
-     FROM shipments
-     WHERE archived_at IS NULL
-       AND organization_id IS NOT NULL
-        AND status IN ('ARRIVED', 'KOOTAJ_DONE')`
-  );
-  for (const shipment of shipments.rows) {
-    const estimatedDelivery = parseOperationalDate(shipment.estimated_delivery_at);
-    const freeTimeEnd =
-      parseOperationalDate(shipment.free_time_ends_at) ||
-      (estimatedDelivery ? addDays(estimatedDelivery, shipment.legacy_data?.freeTimeDays || 0) : null);
-    const windowName = freeTimeEnd ? selectDemurrageWindow(freeTimeEnd.getTime() - now.getTime()) : null;
-    if (!windowName) continue;
-    const recipient = await getDemurrageRecipient(pool, shipment);
-    const message = await renderSmsTemplate(pool, demurrageTemplateKey(windowName), {
-      ship: shipment.shipment_code,
-      time: formatSmsDateTime(freeTimeEnd),
-    });
-    if (!message) continue;
-    const delivery = await enqueueSmsDelivery(pool, {
-      organizationId: shipment.organization_id,
-      userId: recipient?.id || null,
-      recipientType: "user",
-      recipientName: recipient?.name || "CEO",
-      recipientPhone: recipient?.phone || "",
-      message,
-      sourceType: "demurrage",
-      sourceId: shipment.id,
-      eventKey: `demurrage:${shipment.id}:${windowName}`,
-      skipReason: recipient?.phone ? undefined : "missing_ceo_recipient",
-    });
-    if (delivery) queued.demurrage += 1;
-  }
-  return queued;
-}
-
-export async function claimQueuedSmsDeliveries({ limit = 50 } = {}) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const result = await client.query(
-      `UPDATE sms_deliveries
-       SET status = 'sending',
-           attempt_count = attempt_count + 1,
-           updated_at = NOW()
-       WHERE id IN (
-         SELECT id
-         FROM sms_deliveries
-         WHERE status = 'queued'
-           AND next_attempt_at <= NOW()
-         ORDER BY created_at ASC
-         LIMIT $1
-         FOR UPDATE SKIP LOCKED
-       )
-       RETURNING *`,
-      [Number(limit) || 50]
-    );
-    await client.query("COMMIT");
-    return result.rows.map(toUiSmsDelivery);
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-export async function markSmsDeliverySent(deliveryId, providerResult = {}) {
-  const result = await pool.query(
-    `UPDATE sms_deliveries
-     SET status = 'sent',
-         sent_at = NOW(),
-         provider_message_id = $2,
-         provider_response = $3::jsonb,
-         error_message = NULL,
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [deliveryId, providerResult.messageId || null, JSON.stringify(smsProviderResponse(providerResult))]
-  );
-  return toUiSmsDelivery(result.rows[0]);
-}
-
-export async function markSmsDeliverySkipped(deliveryId, reason, providerResult = {}) {
-  const result = await pool.query(
-    `UPDATE sms_deliveries
-     SET status = 'skipped',
-         skipped_at = NOW(),
-         skip_reason = $2,
-         provider_response = $3::jsonb,
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [deliveryId, reason || "skipped", JSON.stringify(smsProviderResponse(providerResult))]
-  );
-  return toUiSmsDelivery(result.rows[0]);
-}
-
-export async function markSmsDeliveryFailed(deliveryId, error, { maxAttempts = 3 } = {}) {
-  const current = await pool.query("SELECT attempt_count FROM sms_deliveries WHERE id = $1", [deliveryId]);
-  const attemptCount = Number(current.rows[0]?.attempt_count || 1);
-  const finalFailure = attemptCount >= maxAttempts;
-  const result = await pool.query(
-    `UPDATE sms_deliveries
-     SET status = $2,
-         failed_at = CASE WHEN $2 = 'failed' THEN NOW() ELSE failed_at END,
-         next_attempt_at = CASE WHEN $2 = 'queued' THEN NOW() + ($4::int * INTERVAL '5 minutes') ELSE next_attempt_at END,
-         error_message = $3,
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [deliveryId, finalFailure ? "failed" : "queued", error?.message || String(error || "SMS send failed."), Math.max(attemptCount, 1)]
-  );
-  return toUiSmsDelivery(result.rows[0]);
-}
-
-export async function listSmsDeliveries({ organizationId, status, limit = 100 } = {}) {
-  const values = [];
-  const conditions = [];
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`sd.organization_id = $${values.length}`);
-  }
-  if (status) {
-    values.push(status);
-    conditions.push(`sd.status = $${values.length}`);
-  }
-  values.push(Number(limit) || 100);
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  const result = await pool.query(
-    `SELECT sd.*, o.name AS organization_name, u.name AS user_name
-     FROM sms_deliveries sd
-     LEFT JOIN organizations o ON o.id = sd.organization_id
-     LEFT JOIN app_users u ON u.id = sd.user_id
-     ${where}
-     ORDER BY sd.created_at DESC
-     LIMIT $${values.length}`,
-    values
-  );
-  return result.rows.map(toUiSmsDelivery);
-}
-
-export async function listSmsTemplates() {
-  const result = await pool.query(
-    `SELECT *
-     FROM sms_templates
-     ORDER BY key ASC`
-  );
-  return result.rows.map(toUiSmsTemplate);
-}
-
-export async function updateSmsTemplate(key, updates = {}, actorUserId) {
-  const defaultTemplate = DEFAULT_SMS_TEMPLATE_MAP[key];
-  if (!defaultTemplate) {
-    const error = new Error("SMS template was not found.");
-    error.statusCode = 404;
-    error.code = "SMS_TEMPLATE_NOT_FOUND";
-    throw error;
-  }
-  const body = updates.body === undefined ? null : String(updates.body || "").trim();
-  if (updates.body !== undefined && !body) {
-    const error = new Error("SMS template body is required.");
-    error.statusCode = 400;
-    error.code = "VALIDATION_ERROR";
-    throw error;
-  }
-  const result = await pool.query(
-    `INSERT INTO sms_templates (key, label, body, enabled, updated_by_id, updated_at)
-     VALUES ($1, $2, COALESCE($3, $4), COALESCE($5, TRUE), $6, NOW())
-     ON CONFLICT (key) DO UPDATE SET
-       label = EXCLUDED.label,
-       body = COALESCE($3, sms_templates.body),
-       enabled = COALESCE($5, sms_templates.enabled),
-       updated_by_id = $6,
-       updated_at = NOW()
-     RETURNING *`,
-    [
-      key,
-      defaultTemplate.label,
-      body,
-      defaultTemplate.body,
-      updates.enabled === undefined ? null : Boolean(updates.enabled),
-      actorUserId || null,
-    ]
-  );
-  return toUiSmsTemplate(result.rows[0]);
-}
-
-export async function getSmsAnalytics({ organizationId } = {}) {
-  const values = [];
-  const conditions = [];
-  if (organizationId) {
-    values.push(organizationId);
-    conditions.push(`sd.organization_id = $${values.length}`);
-  }
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  const summaryResult = await pool.query(
-    `SELECT
-       COUNT(*) FILTER (WHERE sd.status = 'sent')::int AS total_sent,
-       COUNT(*) FILTER (WHERE sd.status = 'sent' AND sd.sent_at >= date_trunc('month', NOW()))::int AS sent_this_month,
-       COUNT(*) FILTER (WHERE sd.status = 'failed')::int AS failed,
-       COUNT(*) FILTER (WHERE sd.status = 'skipped')::int AS skipped,
-       COUNT(*) FILTER (WHERE sd.status = 'queued')::int AS queued
-     FROM sms_deliveries sd
-     ${where}`,
-    values
-  );
-  const recipientsResult = await pool.query(
-    `SELECT
-       sd.organization_id,
-       o.name AS organization_name,
-       COALESCE(sd.recipient_type, 'user') AS recipient_type,
-       COALESCE(NULLIF(sd.recipient_name, ''), u.name, 'نامشخص') AS recipient_name,
-       COALESCE(sd.recipient_phone, '') AS recipient_phone,
-       COUNT(*) FILTER (WHERE sd.status = 'sent')::int AS sent_count,
-       COUNT(*) FILTER (WHERE sd.status = 'failed')::int AS failed_count,
-       COUNT(*) FILTER (WHERE sd.status = 'skipped')::int AS skipped_count,
-       (ARRAY_AGG(sd.status ORDER BY sd.updated_at DESC, sd.created_at DESC))[1] AS last_status,
-       MAX(COALESCE(sd.sent_at, sd.failed_at, sd.skipped_at, sd.updated_at, sd.created_at)) AS last_activity_at
-     FROM sms_deliveries sd
-     LEFT JOIN organizations o ON o.id = sd.organization_id
-     LEFT JOIN app_users u ON u.id = sd.user_id
-     ${where}
-     GROUP BY sd.organization_id, o.name, COALESCE(sd.recipient_type, 'user'), COALESCE(NULLIF(sd.recipient_name, ''), u.name, 'نامشخص'), COALESCE(sd.recipient_phone, '')
-     ORDER BY last_activity_at DESC
-     LIMIT 100`,
-    values
-  );
-  const summary = summaryResult.rows[0] || {};
-  return {
-    summary: {
-      totalSent: Number(summary.total_sent || 0),
-      sentThisMonth: Number(summary.sent_this_month || 0),
-      failed: Number(summary.failed || 0),
-      skipped: Number(summary.skipped || 0),
-      queued: Number(summary.queued || 0),
-    },
-    recipients: recipientsResult.rows.map((row) => ({
-      organizationId: row.organization_id,
-      organizationName: row.organization_name || "",
-      recipientType: row.recipient_type || "user",
-      recipientName: row.recipient_name || "نامشخص",
-      recipientPhone: row.recipient_phone || "",
-      sentCount: Number(row.sent_count || 0),
-      failedCount: Number(row.failed_count || 0),
-      skippedCount: Number(row.skipped_count || 0),
-      lastStatus: row.last_status || "",
-      lastActivityAt: row.last_activity_at,
-    })),
-  };
 }
 
 export async function assertPlanAllowsUser(organizationId) {
@@ -8711,56 +8081,6 @@ export async function disableShipmentCustomerAccess(shipmentId, { organizationId
   });
 }
 
-async function queueCustomerShipmentUpdateSms(queryable, shipmentId, event, { organizationId } = {}) {
-  if (!event?.is_customer_visible) return null;
-  const scopedOrganizationId = requireOrganizationScope(
-    organizationId || event.organization_id,
-    "queueCustomerShipmentUpdateSms"
-  );
-  const shipmentResult = await queryable.query(
-    `SELECT
-       s.id,
-       s.organization_id,
-       s.shipment_code,
-       s.customer_name,
-       s.legacy_data,
-       c.contact_name AS customer_contact_name,
-       c.company_name AS customer_company_name,
-       c.phone AS customer_phone
-     FROM shipments s
-     LEFT JOIN customers c ON c.id = s.customer_id AND c.organization_id = s.organization_id
-     WHERE s.id = $1
-       AND s.organization_id = $2
-     LIMIT 1`,
-    [shipmentId, scopedOrganizationId]
-  );
-  const shipment = shipmentResult.rows[0];
-  if (!shipment?.organization_id) return null;
-  const message = await renderSmsTemplate(queryable, "customer_shipment_update", {
-    ship: shipment.shipment_code,
-    status: event.public_label,
-  });
-  if (!message) return null;
-  const recipientPhone = shipment.customer_phone || shipment.legacy_data?.customerPhone || "";
-  const recipientName =
-    shipment.customer_contact_name ||
-    shipment.customer_company_name ||
-    shipment.customer_name ||
-    shipment.legacy_data?.customerName ||
-    "مشتری";
-  return enqueueSmsDelivery(queryable, {
-    organizationId: shipment.organization_id,
-    userId: null,
-    recipientType: "customer",
-    recipientName,
-    recipientPhone,
-    message,
-    sourceType: "customer_shipment_update",
-    sourceId: event.id,
-    eventKey: `customer-shipment-update:${event.id}`,
-  });
-}
-
 export async function updateShipmentPublicStatus({
   shipmentId,
   publicLabel,
@@ -8790,7 +8110,6 @@ export async function updateShipmentPublicStatus({
     ]
   );
   const event = result.rows[0];
-  await queueCustomerShipmentUpdateSms(pool, shipmentId, event, { organizationId });
   return event;
 }
 

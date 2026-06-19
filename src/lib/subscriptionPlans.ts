@@ -1,7 +1,7 @@
-export type PricingPlanId = "starter" | "business" | "enterprise";
+export type SubscriptionPlanId = "starter" | "business" | "enterprise";
 
-export type PricingPlan = {
-  id: PricingPlanId;
+export type SubscriptionPlan = {
+  id: SubscriptionPlanId;
   name: string;
   badge?: string;
   audience: string;
@@ -21,7 +21,7 @@ export type PricingPlan = {
   recommended?: boolean;
 };
 
-export const pricingPlans: PricingPlan[] = [
+export const subscriptionPlans: SubscriptionPlan[] = [
   {
     id: "starter",
     name: "اقتصادی",
@@ -41,7 +41,6 @@ export const pricingPlans: PricingPlan[] = [
       compliance: false,
       quotations: false,
       archive: true,
-      smsNotifications: false,
     },
     summaryFeatures: [
       "تا ۳ کاربر",
@@ -57,7 +56,6 @@ export const pricingPlans: PricingPlan[] = [
       "صفحه رهگیری امن برای مشتری",
       "لینک و QR پیگیری محموله",
       "تاریخچه پایه تغییرات مهم",
-      "پیامک / SMS هشدارها به‌عنوان افزونه پرداختی",
     ],
     disabledFeatures: [
       "مدیریت کوتیشن / استعلام نرخ",
@@ -87,7 +85,6 @@ export const pricingPlans: PricingPlan[] = [
       compliance: true,
       quotations: true,
       archive: true,
-      smsNotifications: false,
     },
     summaryFeatures: [
       "تا ۱۰ کاربر",
@@ -104,7 +101,6 @@ export const pricingPlans: PricingPlan[] = [
       "خروجی ماهانه: ماهی یک‌بار",
       "گزارش‌های کاربردی‌تر برای مدیر عملیات",
       "پشتیبانی اولویت‌دار",
-      "پیامک / SMS هشدارها به‌عنوان افزونه پرداختی",
     ],
     disabledFeatures: [],
     recommended: true,
@@ -128,7 +124,6 @@ export const pricingPlans: PricingPlan[] = [
       compliance: true,
       quotations: true,
       archive: true,
-      smsNotifications: true,
     },
     summaryFeatures: [
       "تا ۳۰ کاربر",
@@ -146,26 +141,13 @@ export const pricingPlans: PricingPlan[] = [
       "پشتیبانی ویژه",
       "آموزش اولیه تیم",
       "بررسی ماهانه استفاده از سیستم",
-      "پیامک / SMS هشدار جلسات، دمیوراژ و وظایف فوری",
     ],
     disabledFeatures: [],
   },
 ];
 
-export const extraUsagePricing = [
-  "هر کاربر اضافه: ۳,۹۰۰,۰۰۰ ریال / ماه",
-  "هر ۱۰۰ محموله اضافه: ۷,۹۰۰,۰۰۰ ریال / ماه",
-  "هر ۵ گیگابایت فضای اضافه: ۴,۹۰۰,۰۰۰ ریال / ماه",
-  "خروجی گزارش اضافه: ۱,۹۰۰,۰۰۰ ریال / هر خروجی",
-  "پیامک / SMS هشدارها برای پلن‌های پایین‌تر: افزونه توافقی با صورتحساب دستی",
-];
+export const defaultSubscriptionPlanId: SubscriptionPlanId = "business";
 
-export const defaultPricingPlanId: PricingPlanId = "business";
-
-export function formatIrr(value: number) {
-  return `${Number(value || 0).toLocaleString("fa-IR")} ریال`;
-}
-
-export function getPricingPlan(planId?: string | null) {
-  return pricingPlans.find((plan) => plan.id === planId) || pricingPlans.find((plan) => plan.id === defaultPricingPlanId) || pricingPlans[0];
+export function getSubscriptionPlan(planId?: string | null) {
+  return subscriptionPlans.find((plan) => plan.id === planId) || subscriptionPlans.find((plan) => plan.id === defaultSubscriptionPlanId) || subscriptionPlans[0];
 }

@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { pricingPlans } from "../src/lib/pricing.ts";
+import { subscriptionPlans } from "../src/lib/subscriptionPlans.ts";
 import { DEFAULT_SHIPMENT_FORM_TEMPLATE_DEFINITIONS } from "../src/shared/shipment-form-fields.js";
 import {
   PREDEFINED_SHIPMENT_TYPE_WORKFLOW_MAPPINGS,
@@ -14,7 +14,6 @@ import {
 } from "../src/shared/shipment-workflow-template-presets.js";
 import { SYSTEM_CUSTOMS_STEP_CATALOG } from "../src/shared/shipment-workflow-step-catalog.js";
 import { normalizeShipmentStatus } from "../src/shared/shipment-statuses.js";
-import { DEFAULT_SMS_TEMPLATES } from "../src/server/sms-templates.js";
 
 const { Client } = pg;
 
@@ -129,7 +128,7 @@ function isLegacyDemoNotification(notification: any) {
   return ["n1", "n2", "n3", "n4"].includes(String(notification?.id || ""));
 }
 
-const defaultPlans = pricingPlans.map((plan, index) => ({
+const defaultPlans = subscriptionPlans.map((plan, index) => ({
   id: plan.id,
   name: plan.name,
   description: plan.audience,
@@ -191,16 +190,6 @@ async function seedSaasFoundation(client: Client) {
     [`sub-${defaultOrganizationId}`, defaultOrganizationId]
   );
 
-  for (const template of DEFAULT_SMS_TEMPLATES) {
-    await client.query(
-      `INSERT INTO sms_templates (key, label, body, enabled, updated_at)
-       VALUES ($1, $2, $3, TRUE, NOW())
-       ON CONFLICT (key) DO UPDATE SET
-         label = EXCLUDED.label,
-         updated_at = sms_templates.updated_at`,
-      [template.key, template.label, template.body]
-    );
-  }
 }
 
 async function attachExistingDataToDefaultOrganization(client: Client) {

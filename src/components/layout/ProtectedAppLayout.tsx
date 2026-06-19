@@ -5,7 +5,7 @@ import { Sidebar, TopBar } from "./Navbar";
 import { MobileBottomNav } from "./MobileBottomNav";
 import { ProtectedContentSkeleton, ProtectedShellSkeleton } from "@/src/components/SkeletonStates";
 import { recordClientMetric } from "@/src/lib/clientPerformance";
-import { useAppDataStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 
 const HYDRATION_RETRY_MS = 8000;
 const OFFLINE_HYDRATION_RETRY_MS = 15000;
@@ -64,7 +64,7 @@ function BackgroundSyncNotice({ isOnline, isHydrating }: { isOnline: boolean; is
 }
 
 function ThemeSync() {
-  const currentTheme = useAppDataStore((state) => state.currentTheme);
+  const currentTheme = useAppStore((state) => state.currentTheme);
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -79,10 +79,10 @@ function ThemeSync() {
 }
 
 function ComplianceSync() {
-  const currentUser = useAppDataStore((state) => state.currentUser);
-  const appointments = useAppDataStore((state) => state.appointments);
-  const updateAppointment = useAppDataStore((state) => state.updateAppointment);
-  const addNotification = useAppDataStore((state) => state.addNotification);
+  const currentUser = useAppStore((state) => state.currentUser);
+  const appointments = useAppStore((state) => state.appointments);
+  const updateAppointment = useAppStore((state) => state.updateAppointment);
+  const addNotification = useAppStore((state) => state.addNotification);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -117,12 +117,12 @@ export default function ProtectedAppLayout({
   allOf?: string[];
   roles?: string[];
 }) {
-  const currentUser = useAppDataStore((state) => state.currentUser);
-  const setCurrentUser = useAppDataStore((state) => state.setCurrentUser);
-  const hasHydratedFromDatabase = useAppDataStore((state) => state.hasHydratedFromDatabase);
-  const isHydratingFromDatabase = useAppDataStore((state) => state.isHydratingFromDatabase);
-  const loadCurrentUserRecords = useAppDataStore((state) => state.loadCurrentUserRecords);
-  const restoreCurrentUserFromSession = useAppDataStore((state) => state.restoreCurrentUserFromSession);
+  const currentUser = useAppStore((state) => state.currentUser);
+  const setCurrentUser = useAppStore((state) => state.setCurrentUser);
+  const hasHydratedFromDatabase = useAppStore((state) => state.hasHydratedFromDatabase);
+  const isHydratingFromDatabase = useAppStore((state) => state.isHydratingFromDatabase);
+  const loadCurrentUserRecords = useAppStore((state) => state.loadCurrentUserRecords);
+  const restoreCurrentUserFromSession = useAppStore((state) => state.restoreCurrentUserFromSession);
   const [hasCheckedSession, setHasCheckedSession] = React.useState(false);
   const [isRestoringSession, setIsRestoringSession] = React.useState(false);
   const [isOnline, setIsOnline] = React.useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));

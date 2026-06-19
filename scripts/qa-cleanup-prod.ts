@@ -68,16 +68,8 @@ const tableSpecs = [
     where: "id LIKE $1 OR user_id LIKE $1",
   },
   {
-    name: "login_sms_challenges",
-    where: "id LIKE $1 OR user_id LIKE $1 OR user_agent LIKE $2",
-  },
-  {
     name: "rate_limit_buckets",
     where: "key LIKE $1 OR key LIKE $2",
-  },
-  {
-    name: "sms_deliveries",
-    where: "id LIKE $1 OR event_key LIKE $1 OR source_id LIKE $1 OR message LIKE $2 OR provider_response::text LIKE $2",
   },
   {
     name: "notifications",

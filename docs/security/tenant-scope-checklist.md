@@ -9,7 +9,7 @@ Use this checklist before changing protected routes, data access, route extracti
 - [ ] Every protected tenant-owned read includes `organization_id` or an explicit equivalent server-side scope.
 - [ ] Every protected tenant-owned write/update/archive/delete includes `organization_id` or an explicit equivalent server-side scope.
 - [ ] Raw SQL uses parameterized values and does not interpolate user-controlled identifiers.
-- [ ] Response DTOs omit tokens, hashes, password fields, storage keys, raw filesystem paths, merchant secrets, SMS codes, and raw legacy payloads.
+- [ ] Response DTOs omit tokens, hashes, password fields, storage keys, raw filesystem paths, gateway secrets, one-time codes, and raw legacy payloads.
 - [ ] Security-sensitive changes add or update focused tests.
 
 ## Area Checklist
@@ -53,7 +53,6 @@ Use this checklist before changing protected routes, data access, route extracti
 
 - [ ] Company billing views use `user.organizationId`.
 - [ ] Platform billing/admin routes require `requirePlatformAdmin` before accepting target organization filters.
-- [ ] Zarinpal callback lookup is idempotent and does not trust client amount, organization id, or status beyond gateway verification rules.
 - [ ] Invoice, receipt, payment, subscription, signup, and organization transitions happen in one safe transaction path.
 
 ### Archive
@@ -75,7 +74,7 @@ Use this checklist before changing protected routes, data access, route extracti
 - [ ] Every platform admin route calls `requirePlatformAdmin` before accepting target organization/user ids.
 - [ ] Admin organization filters are treated as privileged admin targeting, not normal tenant scope.
 - [ ] Admin user mutations protect last active CEO and self-destructive actions.
-- [ ] Admin billing, SMS, error-log, signup, and organization responses avoid exposing secrets.
+- [ ] Admin billing, error-log, signup, and organization responses avoid exposing secrets.
 
 ### Public Tracking
 

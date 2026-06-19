@@ -183,7 +183,6 @@ export function expectPublicTrackingPayloadIsSafe(data: any) {
     "payment",
     "invoice",
     "receipt",
-    "sms",
     "password_hash",
     "audit",
     "cheques",

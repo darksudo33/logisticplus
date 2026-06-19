@@ -71,7 +71,7 @@ S3_FORCE_PATH_STYLE=true
 DOCUMENT_STORAGE_DUAL_WRITE_REQUIRED=true
 ```
 
-Keep database, object-storage, session, and bootstrap secrets out of source control and support logs. Public signup, Zarinpal payment handoff, contact/pricing/landing pages, and SMS login/worker surfaces are not used by the public-release app.
+Keep database, object-storage, session, and bootstrap secrets out of source control and support logs. Public self-serve checkout, contact intake, marketing plan pages, and phone-code worker surfaces are not used by the public-release app.
 
 ## Local Preflight
 
@@ -134,12 +134,11 @@ npm run documents:storage:backfill
 
 `seed:production-core` creates or ensures only shared production catalog data:
 
-- Public subscription plans from [src/lib/pricing.ts](/C:/Users/Ahmadreza/Documents/logisticplus/src/lib/pricing.ts): `starter`, `business`, `enterprise`.
+- Public subscription plans from [src/lib/subscriptionPlans.ts](/C:/Users/Ahmadreza/Documents/logisticplus/src/lib/subscriptionPlans.ts): `starter`, `business`, `enterprise`.
 - Tenant permissions used by dashboards, customers, shipments, documents, tasks, chat, archive, compliance, quotations, cheques, and user management.
 - Direct-only platform permission `platform.admin`.
 - Tenant roles: `CEO`, `MANAGER`, `OPERATIONS`, `CUSTOMER_SERVICE`, `FINANCE`, `QUOTATION_MANAGER`, `COMPLIANCE_STAFF`, `EMPLOYEE`, `CUSTOMER_VIEWER`.
 - Role-permission rows for tenant access. No role receives `platform.admin`.
-- Default SMS template rows for schema/catalog compatibility. Existing template bodies and enabled flags are preserved.
 - First organization subscription when the initial organization already exists.
 
 `seed:production-admin` creates or ensures the first real admin user, first real organization, owner membership, explicit `platform.admin` user grant, and active first-organization subscription. It preserves existing passwords unless `--reset-password` is passed.
@@ -160,7 +159,7 @@ Neither seed creates demo customers, demo shipments, documents, imported legacy 
 - Private public-document download is blocked.
 - Audit logs are written.
 - Public tracking responses do not contain storage keys, object keys, bucket names, storage paths, signed URLs, token hashes, or internal document fields.
-- Removed public self-serve/payment/SMS endpoints return 404.
+- Removed public self-serve endpoints return 404.
 
 ## Rollback Plan
 

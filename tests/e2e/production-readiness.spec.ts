@@ -8,7 +8,6 @@ import {
   loginApi,
   loginViaUi,
   readOk,
-  expectUnavailable,
 } from "./helpers";
 
 const protectedApiRoutes = [
@@ -90,13 +89,6 @@ test.describe.serial("production readiness regression checks", () => {
     await expect(page.locator(".app-shell")).toBeVisible();
     await expect(page.locator('input[type="password"]')).toHaveCount(0);
     await context.close();
-  });
-
-  test("retired SMS phone-login APIs stay unavailable", async () => {
-    const context = await apiContext();
-    await expectUnavailable(await context.post("/api/auth/phone/request-code", { data: { phone: "09120000000" } }));
-    await expectUnavailable(await context.post("/api/auth/phone/verify", { data: { phone: "09120000000", code: "000000" } }));
-    await disposeContexts(context);
   });
 
   test("dashboard and core workspaces render cleanly on desktop and mobile", async ({ browser }) => {

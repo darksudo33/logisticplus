@@ -44,7 +44,7 @@ import {
   SHIPMENT_STATUS_OPTIONS,
   shipmentStatusLabel,
 } from "@/src/shared/shipment-statuses.js";
-import { useAppDataStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 
 const StatusBadge = ({ status }: { status: string }) => {
   const styles: Record<string, string> = {
@@ -79,8 +79,8 @@ export default function Shipments() {
   const tasksResource = useApiResource(React.useCallback(() => apiGet<Task[]>("/api/tasks"), []), []);
   const shipments = shipmentsResource.data;
   const tasks = tasksResource.data;
-  const refreshStoreShipments = useAppDataStore(state => state.refreshShipments);
-  const currentUser = useAppDataStore(state => state.currentUser);
+  const refreshStoreShipments = useAppStore(state => state.refreshShipments);
+  const currentUser = useAppStore(state => state.currentUser);
   const [shipmentSteps, setShipmentSteps] = useState<ShipmentStep[]>([]);
 
   const [searchTerm, setSearchTerm] = useState("");

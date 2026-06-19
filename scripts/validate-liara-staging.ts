@@ -118,13 +118,10 @@ async function checkPublicPages() {
 }
 
 async function checkRemovedPublicEndpoints() {
-  log("Checking removed public self-serve/payment/SMS endpoints.");
+  log("Checking removed public self-serve endpoints.");
   const checks = [
     { path: "/api/contact-requests", init: { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" } },
     { path: "/api/signup", init: { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" } },
-    { path: "/api/billing/payments/staging-smoke/start", init: { method: "POST" } },
-    { path: "/api/billing/zarinpal/callback?Authority=STAGING&Status=NOK", init: { redirect: "manual" } },
-    { path: "/api/auth/phone/request-code", init: { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" } },
   ];
 
   for (const check of checks) {

@@ -89,10 +89,8 @@ test.describe.serial("client-readiness route smoke", () => {
       "/",
       "/login",
       "/contact",
-      "/pricing",
       "/signup",
       "/signup/pending",
-      "/billing/callback/zarinpal",
       `/track/${encodeURIComponent(access.token)}`,
     ];
 

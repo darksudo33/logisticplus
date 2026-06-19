@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 import type { ActivityLog } from "@/src/types";
 import { 
   History, 
@@ -100,7 +100,7 @@ const mapServerLog = (row: any): ActivityLog => {
 
 export default function ChangeLog() {
   const navigate = useNavigate();
-  const { activityLogs, currentUser } = useMockStore();
+  const { activityLogs, currentUser } = useAppStore();
   const [searchTerm, setSearchTerm] = useState("");
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [serverLogs, setServerLogs] = useState<ActivityLog[]>([]);
@@ -365,9 +365,9 @@ export default function ChangeLog() {
                              size="sm" 
                              className="flex-1 md:flex-none h-10 px-4 text-[11px] font-black border-border text-emerald-600 dark:text-emerald-400 hover:bg-emerald-400/10 hover:border-emerald-500 rounded-xl transition-all"
                              onClick={() => {
-                               const task = useMockStore.getState().tasks.find(t => t.id === log.entityId);
+                               const task = useAppStore.getState().tasks.find(t => t.id === log.entityId);
                                if (task && task.status !== 'DONE') {
-                                 useMockStore.getState().updateTaskStatus(log.entityId, 'DONE');
+                                 useAppStore.getState().updateTaskStatus(log.entityId, 'DONE');
                                }
                              }}
                            >
