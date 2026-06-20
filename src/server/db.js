@@ -12,10 +12,7 @@ import {
   normalizeShipmentTypeCode,
   shipmentTypeByCode,
 } from "../shared/shipment-form-fields.js";
-import {
-  isShipmentTerminalStatus,
-  normalizeShipmentStatus,
-} from "../shared/shipment-statuses.js";
+import { normalizeShipmentStatus } from "../shared/shipment-statuses.js";
 import {
   getDocumentDetail as getDocumentDetailFromRepository,
   getDocumentForDownload as getDocumentForDownloadFromRepository,
@@ -63,7 +60,6 @@ import {
 } from "../../server/src/modules/users/user.repository.js";
 import { organizationIdFromTenantContext, organizationScopeClause, requireOrganizationScope } from "./tenant-scope.js";
 import { withTransaction } from "./transaction.js";
-import { shipmentTimerOrderBy } from "./repositories/shipment-sort.js";
 
 export { checkDatabase, createApiError, pool };
 
@@ -1539,7 +1535,6 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
     const legacyPatch = cleanShipmentLegacyPatch(updates);
     const hasStatusUpdate = updates.status !== undefined;
     const nextStatus = hasStatusUpdate ? normalizeShipmentStatus(updates.status) : normalizeShipmentStatus(before.status);
-    const hasTimerDeadlineUpdate = updates.timerDeadlineAt !== undefined;
     const hasShipmentTypeUpdate =
       updates.shipmentTypeCode !== undefined ||
       updates.shipment_type_code !== undefined ||
@@ -1610,25 +1605,6 @@ export async function updateShipmentOperationalFields(id, updates = {}, { organi
     if (updates.destination !== undefined) addColumn("destination", updates.destination || null);
     if (updates.estimatedDelivery !== undefined) addColumn("estimated_delivery_at", updates.estimatedDelivery || null);
     if (updates.assignedManagerId !== undefined) addColumn("assigned_manager_id", updates.assignedManagerId || null);
-    if (hasTimerDeadlineUpdate) {
-      const nextDeadline = updates.timerDeadlineAt ? new Date(updates.timerDeadlineAt).toISOString() : null;
-      addColumn("timer_deadline_at", nextDeadline);
-      if (nextDeadline) {
-        if (!before.timer_deadline_at) addColumn("timer_started_at", new Date().toISOString());
-        addColumn("timer_removed_at", null);
-      } else {
-        addColumn("timer_removed_at", new Date().toISOString());
-      }
-    }
-    if (hasStatusUpdate) {
-      const wasTerminal = isShipmentTerminalStatus(before.status);
-      const isTerminal = isShipmentTerminalStatus(nextStatus);
-      if (isTerminal && !wasTerminal && before.timer_started_at && !before.timer_completed_at) {
-        addColumn("timer_completed_at", new Date().toISOString());
-      } else if (!isTerminal && wasTerminal) {
-        addColumn("timer_completed_at", null);
-      }
-    }
     addColumn("legacy_data", JSON.stringify(nextLegacy));
 
     const result = await client.query(
@@ -4002,7 +3978,7 @@ export async function getDashboardData(user, permissions = []) {
        WHERE s.archived_at IS NULL
          AND s.exited_archived_at IS NULL
          AND ($1::text IS NULL OR s.organization_id = $1)
-       ORDER BY ${shipmentTimerOrderBy("s")}
+       ORDER BY s.created_at DESC
        LIMIT 8`,
       [orgParam]
     ),
@@ -4016,7 +3992,7 @@ export async function getDashboardData(user, permissions = []) {
          AND s.exited_archived_at IS NULL
           AND s.status IN ('ARRIVED', 'KOOTAJ_DONE', 'IN_TRANSIT')
          AND ($1::text IS NULL OR s.organization_id = $1)
-       ORDER BY ${shipmentTimerOrderBy("s")}
+       ORDER BY s.created_at DESC
        LIMIT 6`,
       [orgParam]
     ),

@@ -75,12 +75,6 @@ const isRealShipmentV2Date = (value) => {
   const stringValue = String(value);
   return stringValue.includes("/") ? isPlausibleShamsiDate(stringValue) : isRealIsoDate(stringValue);
 };
-const isRealDateTime = (value) => {
-  if (!value) return true;
-  const date = new Date(String(value));
-  return Number.isFinite(date.getTime());
-};
-
 const optionalId = z.preprocess(
   blankToUndefined,
   z.string().trim().min(1, "Identifier is required.").max(128).optional().nullable()
@@ -318,10 +312,6 @@ const shipmentOperationalFieldsBaseSchema = z.object({
   estimatedDelivery: optionalTrimmedText(80),
   actualDelivery: optionalTrimmedText(80),
   freeTimeDays: optionalNonNegativeNumber,
-  timerDeadlineAt: z.preprocess(
-    blankToNull,
-    z.string().trim().refine(isRealDateTime, "Timer deadline must be a valid date/time.").nullable().optional()
-  ),
   notes: optionalTrimmedText(4000),
   customsDeclarationNumber: optionalTrimmedText(120),
   customsStatus: optionalTrimmedText(120),

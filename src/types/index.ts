@@ -90,10 +90,6 @@ export interface Shipment {
   estimatedDelivery: string;
   actualDelivery?: string;
   freeTimeDays: number;
-  timerStartedAt?: string | null;
-  timerDeadlineAt?: string | null;
-  timerCompletedAt?: string | null;
-  timerRemovedAt?: string | null;
   isArchived?: boolean;
   isExitedArchived?: boolean;
   exitedArchivedAt?: string | null;
@@ -138,10 +134,6 @@ export interface ShipmentV2ShipmentSummary {
   origin: string;
   destination: string;
   estimatedDelivery: string;
-  timerStartedAt?: string | null;
-  timerDeadlineAt?: string | null;
-  timerCompletedAt?: string | null;
-  timerRemovedAt?: string | null;
   assignedManagerId?: string | null;
   isExitedArchived?: boolean;
   createdAt?: string | null;

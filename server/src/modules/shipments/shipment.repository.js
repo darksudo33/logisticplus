@@ -1,7 +1,6 @@
 import { organizationScopeClause, requireOrganizationScope } from "../../shared/middleware/tenant.middleware.js";
 import { DEFAULT_SHIPMENT_TYPE_CODE } from "../../../../src/shared/shipment-form-fields.js";
 import { normalizeShipmentStatus, shipmentStatusLabel } from "../../../../src/shared/shipment-statuses.js";
-import { shipmentTimerOrderBy } from "../../../../src/server/repositories/shipment-sort.js";
 
 function jsonObjectValue(value) {
   if (!value) return {};
@@ -57,10 +56,6 @@ export function toUiShipment(row, { includeCustomerPrivateDetails = true } = {})
     estimatedDelivery: row.estimated_delivery_at || legacy.estimatedDelivery || "",
     actualDelivery: row.actual_delivery_at || legacy.actualDelivery || undefined,
     freeTimeDays: Number.isFinite(freeTimeDays) ? freeTimeDays : 0,
-    timerStartedAt: row.timer_started_at || null,
-    timerDeadlineAt: row.timer_deadline_at || null,
-    timerCompletedAt: row.timer_completed_at || null,
-    timerRemovedAt: row.timer_removed_at || null,
     isArchived: Boolean(row.archived_at || legacy.isArchived),
     isExitedArchived: Boolean(row.exited_archived_at),
     exitedArchivedAt: row.exited_archived_at || null,
@@ -103,7 +98,7 @@ export async function listBootstrapShipments(
        FROM shipments
        WHERE owner_user_id = $1
          AND exited_archived_at IS NULL
-       ORDER BY ${shipmentTimerOrderBy("")}`,
+       ORDER BY created_at DESC`,
       [ownerUserId]
     );
     return result.rows.map((row) => toUiShipment(row, { includeCustomerPrivateDetails }));
@@ -130,7 +125,7 @@ export async function listBootstrapShipments(
           s.organization_id = $1
           OR (s.owner_user_id = $2 AND s.organization_id IS NULL)
         )
-      ORDER BY ${shipmentTimerOrderBy("s")}`,
+      ORDER BY s.created_at DESC`,
     [organizationId, ownerUserId]
   );
   return result.rows.map((row) => toUiShipment(row, { includeCustomerPrivateDetails }));
@@ -158,7 +153,7 @@ export async function listShipmentRecords(pool, { organizationId, includeExited 
        ON p.shipment_id = s.id
       AND p.organization_id = s.organization_id
      WHERE ${organizationFilter}${exitedFilter}
-     ORDER BY ${shipmentTimerOrderBy("s")}`,
+     ORDER BY s.created_at DESC`,
     values
   );
   return result.rows;

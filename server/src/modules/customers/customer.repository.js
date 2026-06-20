@@ -2,7 +2,6 @@ import { organizationScopeClause, requireOrganizationScope } from "../../shared/
 import { listCheques } from "../../../../src/server/repositories/cheques.js";
 import { listDocuments } from "../documents/document.repository.js";
 import { listQuotations } from "../quotations/quotation.repository.js";
-import { shipmentTimerOrderBy } from "../../../../src/server/repositories/shipment-sort.js";
 import { toCustomerPhoneNumber, toUiCustomer } from "./customer.mapper.js";
 
 export {
@@ -154,7 +153,7 @@ export async function listCustomerRelated(pool, id, type, { organizationId, incl
       `SELECT * FROM shipments s
        WHERE customer_id = $1 AND organization_id = $2
          AND exited_archived_at IS NULL
-       ORDER BY ${shipmentTimerOrderBy("s")}`,
+       ORDER BY s.created_at DESC`,
       [id, scopedOrganizationId]
     );
     return result.rows.map(toCustomerRelatedShipment);

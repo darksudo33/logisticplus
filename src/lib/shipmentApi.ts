@@ -42,7 +42,6 @@ export type ShipmentMutation = Partial<
     | "estimatedDelivery"
     | "actualDelivery"
     | "freeTimeDays"
-    | "timerDeadlineAt"
   >
 > & {
   notes?: string;
