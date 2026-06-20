@@ -9,9 +9,9 @@ Implemented in this slice:
 - `src/lib/api.ts` centralizes JSON API calls and backend error normalization.
 - `src/lib/resourceState.ts` provides a lightweight loading/error/refresh state helper without adding dependencies.
 - `src/lib/shipmentApi.ts` exposes canonical shipment list/get/create/update/archive calls.
-- `src/app/Shipments.tsx` now loads shipments, customers, tasks, and shipment steps from backend APIs instead of `useMockStore`.
+- `src/app/Shipments.tsx` now loads shipments, customers, tasks, and shipment steps from backend APIs instead of the compatibility-backed app store.
 - `src/app/ShipmentEdit.tsx` now loads a shipment from `GET /api/shipments/:id` and saves through `PATCH /api/shipments/:id/operational-fields`.
-- `src/store/useMockStore.ts` no longer writes the migrated `shipments` collection through the legacy `/api/users/:id/records` bridge.
+- `src/store/useAppStore.ts` no longer writes the migrated `shipments` collection through the legacy `/api/users/:id/records` bridge.
 
 ## Compatibility Boundaries
 
@@ -21,7 +21,7 @@ Implemented in this slice:
 
 ## Remaining Mock/Legacy Dependencies
 
-- `Dashboard.tsx`, `ShipmentDetail.tsx`, `Archive.tsx`, `Tasks.tsx`, `Documents.tsx`, `Customers.tsx`, `QuotageManagement.tsx`, `ChequeManagement.tsx`, `Compliance.tsx`, `ChangeLog.tsx`, `UserManagement.tsx`, `Chat.tsx`, and layout/session components still read from `useMockStore`.
+- `Dashboard.tsx`, `ShipmentDetail.tsx`, `Archive.tsx`, `Tasks.tsx`, `Documents.tsx`, `Customers.tsx`, `QuotageManagement.tsx`, `ChequeManagement.tsx`, `Compliance.tsx`, `ChangeLog.tsx`, `UserManagement.tsx`, `Chat.tsx`, and layout/session components still read from `useAppStore`.
 - Legacy write helpers such as `addShipment`, `updateShipment`, `updateShipmentStatus`, and `archiveShipment` remain for compatibility, but migrated pages must not call them.
 - Browser-side fake activity log creation remains in unmigrated mock-store actions. Migrated domains should rely on backend `auditLog`.
 
@@ -33,5 +33,5 @@ Migrate `ShipmentDetail.tsx` to canonical APIs:
 - Load shipment documents from `GET /api/shipments/:id/documents`.
 - Load steps and progress from `/api/shipments/:id/steps` and `/api/shipments/:id/progress`.
 - Keep document upload/archive/visibility actions on canonical document APIs.
-- Remove shipment detail reads from `useMockStore.shipments`, `useMockStore.documents`, `useMockStore.tasks`, and `useMockStore.customers`.
+- Remove shipment detail reads from `useAppStore.shipments`, `useAppStore.documents`, `useAppStore.tasks`, and `useAppStore.customers`.
 

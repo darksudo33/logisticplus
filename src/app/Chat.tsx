@@ -24,7 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/src/components/EmptyState";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 
 type ChatParticipant = {
   id: string;
@@ -228,7 +228,7 @@ function messageTimestamp(value?: string) {
 }
 
 export default function Chat() {
-  const currentUser = useMockStore((state) => state.currentUser);
+  const currentUser = useAppStore((state) => state.currentUser);
   const canManageGroups = Boolean(currentUser?.permissions?.includes("chat.manage_groups"));
   const canDeleteMedia = Boolean(currentUser?.permissions?.includes("chat.media.delete"));
   const [threads, setThreads] = useState<ChatThread[]>([]);

@@ -57,7 +57,7 @@ import {
   shipmentStatusLabel,
 } from "@/src/shared/shipment-statuses.js";
 import { cn } from "@/lib/utils";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 import type { BusinessEntityContact, CommercialCard, Customer, DailyStatusBoardRow, DailyStatusPatch, MalvaniProfile, Shipment, ShipmentStatus } from "@/src/types";
 
 const ALL_VALUE = "__all__";
@@ -764,8 +764,8 @@ function DailyBaseInfoGrid({
   const [isEditingCustomer, setIsEditingCustomer] = React.useState(false);
   const [isSavingCustomer, setIsSavingCustomer] = React.useState(false);
   const [customerDraft, setCustomerDraft] = React.useState<CustomerEditDraft>(emptyCustomerEditDraft);
-  const currentUser = useMockStore((state) => state.currentUser);
-  const loadCurrentUserRecords = useMockStore((state) => state.loadCurrentUserRecords);
+  const currentUser = useAppStore((state) => state.currentUser);
+  const loadCurrentUserRecords = useAppStore((state) => state.loadCurrentUserRecords);
   const customer = customers.find((item) => item.id === row.customer?.id) || null;
   const activeCustomerShipments = React.useMemo(() => {
     if (!row.customer?.id) return [];
@@ -1784,9 +1784,9 @@ function MobileCard({
 }
 
 export default function DailyStatus() {
-  const commercialCards = useMockStore((state) => state.commercialCards);
-  const customers = useMockStore((state) => state.customers);
-  const shipments = useMockStore((state) => state.shipments);
+  const commercialCards = useAppStore((state) => state.commercialCards);
+  const customers = useAppStore((state) => state.customers);
+  const shipments = useAppStore((state) => state.shipments);
   const [rows, setRows] = React.useState<DailyStatusBoardRow[]>([]);
   const [filters, setFilters] = React.useState<DailyStatusListFilters>({ limit: 50 });
   const [searchText, setSearchText] = React.useState("");

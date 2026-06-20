@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { useMockStore } from "@/src/store/useMockStore";
+import { useAppStore } from "@/src/store/useAppStore";
 
 type ShipmentChatThread = {
   id: string;
@@ -45,7 +45,7 @@ function shipmentChatMessageTimestamp(value?: string) {
 
 export function ShipmentChatPanel({ shipmentId, shipmentCode }: { shipmentId: string; shipmentCode: string }) {
   const navigate = useNavigate();
-  const currentUser = useMockStore((state) => state.currentUser);
+  const currentUser = useAppStore((state) => state.currentUser);
   const canUseChat = Boolean(currentUser?.permissions?.includes("chat.use"));
   const [thread, setThread] = React.useState<ShipmentChatThread | null>(null);
   const [messages, setMessages] = React.useState<ShipmentChatMessage[]>([]);
