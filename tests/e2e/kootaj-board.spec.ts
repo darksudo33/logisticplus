@@ -44,6 +44,10 @@ async function expectNoHorizontalPageOverflow(page: Page) {
   expect(overflow.document).toBeLessThanOrEqual(1);
 }
 
+function safeTestId(value: string) {
+  return value.replace(/[^a-zA-Z0-9_-]/g, "-");
+}
+
 async function createCustomer(context: Awaited<ReturnType<typeof loginApi>>, marker: string) {
   return readOk<any>(
     await context.post("/api/customers", {
@@ -90,7 +94,7 @@ async function createTenantOwner(owner: Awaited<ReturnType<typeof loginApi>>) {
   return { ...data, tenantEmail };
 }
 
-test.describe.serial("read-only kootaj board", () => {
+test.describe.serial("kootaj board", () => {
   test("uses the Daily Status projection alias with tenant and customer privacy safeguards", async () => {
     const owner = await loginApi();
     const anonymous = await apiContext();
@@ -316,7 +320,178 @@ test.describe.serial("read-only kootaj board", () => {
     }
   });
 
-  test("renders protected read-only rows, links to canonical detail, and preserves legacy redirects", async ({ page }) => {
+  test("allows authorized users to edit safe Kootaj fields from the board", async ({ page }) => {
+    const owner = await loginApi();
+    const suffix = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    try {
+      const customer = await createCustomer(owner, `KootajPhase2B${suffix}`);
+      const created = await readOk<any>(
+        await owner.post("/api/shipments/v2", {
+          data: {
+            flowCode: "IMPORT_SHIP",
+            customerId: customer.id,
+            origin: "Jebel Ali",
+            dischargePort: "Bandar Abbas",
+            deliveryPort: "Tehran",
+            consigneeName: "Kootaj Phase 2B consignee",
+          },
+        })
+      );
+      const shipmentId = created.shipment.id;
+      const rowTestId = safeTestId(shipmentId);
+      const initialCotageNumber = `UI-COTAGE-${suffix}`;
+      const nextCotageNumber = `UI-COTAGE-SAVED-${suffix}`;
+      const initial = await readOk<any>(
+        await owner.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
+          data: {
+            cotageNumber: initialCotageNumber,
+            customsRoute: "yellow",
+            customsStatus: "inspection",
+            releaseStatus: "ready",
+          },
+        })
+      );
+      expect(initial.kootajUpdatedAt).toBeTruthy();
+
+      let patchPayload: Record<string, unknown> | null = null;
+      page.on("request", (request) => {
+        if (request.method() === "PATCH" && request.url().includes(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`)) {
+          patchPayload = JSON.parse(request.postData() || "{}");
+        }
+      });
+
+      await loginPageByApi(page);
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto("/kootaj-board");
+      await page.getByTestId("kootaj-board-search").fill(initialCotageNumber);
+      await expect(page.getByTestId(`kootaj-board-row-${rowTestId}`)).toBeVisible();
+      await page.getByTestId(`kootaj-board-edit-${rowTestId}`).click();
+      await expect(page.getByTestId("kootaj-board-edit-dialog")).toBeVisible();
+      await page.getByTestId("kootaj-board-cotage-input").fill(nextCotageNumber);
+      await page.getByTestId("kootaj-board-customs-route-select").selectOption("red");
+      await page.getByTestId("kootaj-board-customs-status-select").selectOption("ready_for_release");
+      await page.getByTestId("kootaj-board-release-status-select").selectOption("released");
+
+      const responsePromise = page.waitForResponse(
+        (response) =>
+          response.request().method() === "PATCH" &&
+          response.url().includes(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`)
+      );
+      await page.getByTestId("kootaj-board-save-edit").click();
+      const response = await responsePromise;
+      expect(response.status(), await response.text()).toBeLessThan(400);
+      expect(patchPayload).toEqual({
+        cotageNumber: nextCotageNumber,
+        customsRoute: "red",
+        customsStatus: "ready_for_release",
+        releaseStatus: "released",
+        expectedKootajUpdatedAt: initial.kootajUpdatedAt,
+      });
+      await expect(page.getByTestId("kootaj-board-edit-dialog")).toBeHidden();
+      await expect(page.getByTestId(`kootaj-board-row-${rowTestId}`)).toContainText(nextCotageNumber);
+      await expect(page.locator('[data-testid="kootaj-board-customer-input"], [data-testid="kootaj-board-shipment-code-input"], [data-testid="kootaj-board-task-count-input"], [data-testid="kootaj-board-document-count-input"]')).toHaveCount(0);
+
+      const kootajRows = await readOk<any[]>(
+        await owner.get(`/api/kootaj-board?shipmentId=${encodeURIComponent(shipmentId)}`)
+      );
+      expect(kootajRows[0].kootaj).toMatchObject({
+        cotageNumber: nextCotageNumber,
+        customsRoute: "red",
+        customsStatus: "ready_for_release",
+        releaseStatus: "released",
+      });
+
+      const detailAlias = await readOk<any>(
+        await owner.get(`/api/shipments/${encodeURIComponent(shipmentId)}/daily-status`)
+      );
+      expect(detailAlias.kootaj).toMatchObject(kootajRows[0].kootaj);
+    } finally {
+      await disposeContexts(owner);
+    }
+  });
+
+  test("handles stale Kootaj edit versions without overwriting newer data", async ({ page }) => {
+    const owner = await loginApi();
+    const suffix = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+    try {
+      const customer = await createCustomer(owner, `KootajConflict${suffix}`);
+      const created = await readOk<any>(
+        await owner.post("/api/shipments/v2", {
+          data: {
+            flowCode: "IMPORT_SHIP",
+            customerId: customer.id,
+            origin: "Jebel Ali",
+            dischargePort: "Bandar Abbas",
+            deliveryPort: "Tehran",
+            consigneeName: "Kootaj conflict consignee",
+          },
+        })
+      );
+      const shipmentId = created.shipment.id;
+      const rowTestId = safeTestId(shipmentId);
+      const initialCotageNumber = `UI-CONFLICT-${suffix}`;
+      const staleCotageNumber = `UI-CONFLICT-STALE-${suffix}`;
+      const initial = await readOk<any>(
+        await owner.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
+          data: {
+            cotageNumber: initialCotageNumber,
+            customsRoute: "yellow",
+            customsStatus: "inspection",
+            releaseStatus: "ready",
+          },
+        })
+      );
+
+      let patchPayload: Record<string, unknown> | null = null;
+      page.on("request", (request) => {
+        if (request.method() === "PATCH" && request.url().includes(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`)) {
+          patchPayload = JSON.parse(request.postData() || "{}");
+        }
+      });
+
+      await loginPageByApi(page);
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto("/kootaj-board");
+      await page.getByTestId("kootaj-board-search").fill(initialCotageNumber);
+      await expect(page.getByTestId(`kootaj-board-row-${rowTestId}`)).toBeVisible();
+      await page.getByTestId(`kootaj-board-edit-${rowTestId}`).click();
+      await page.getByTestId("kootaj-board-cotage-input").fill(staleCotageNumber);
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const concurrentUpdate = await readOk<any>(
+        await owner.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
+          data: {
+            releaseStatus: "released",
+            expectedKootajUpdatedAt: initial.kootajUpdatedAt,
+          },
+        })
+      );
+      expect(concurrentUpdate.kootajUpdatedAt).not.toBe(initial.kootajUpdatedAt);
+
+      const conflictPromise = page.waitForResponse(
+        (response) =>
+          response.request().method() === "PATCH" &&
+          response.url().includes(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`)
+      );
+      await page.getByTestId("kootaj-board-save-edit").click();
+      const conflictResponse = await conflictPromise;
+      expect(conflictResponse.status(), await conflictResponse.text()).toBe(409);
+      expect(patchPayload?.expectedKootajUpdatedAt).toBe(initial.kootajUpdatedAt);
+      await expect(page.getByText("اطلاعات این ردیف توسط کاربر دیگری تغییر کرده است. صفحه را به‌روزرسانی کردیم، دوباره بررسی کنید.")).toBeVisible();
+      await expect(page.getByTestId("kootaj-board-edit-dialog")).toBeHidden();
+
+      const afterConflictRows = await readOk<any[]>(
+        await owner.get(`/api/kootaj-board?shipmentId=${encodeURIComponent(shipmentId)}`)
+      );
+      expect(afterConflictRows[0].kootaj.cotageNumber).toBe(initialCotageNumber);
+      expect(afterConflictRows[0].kootaj.releaseStatus).toBe("released");
+      expect(afterConflictRows[0].kootajUpdatedAt).toBe(concurrentUpdate.kootajUpdatedAt);
+    } finally {
+      await disposeContexts(owner);
+    }
+  });
+
+  test("renders protected rows, links to canonical detail, and preserves legacy redirects", async ({ page }) => {
     const owner = await loginApi();
     try {
       const rows = await readOk<any[]>(await owner.get("/api/kootaj-board?shipmentId=s1"));
@@ -339,8 +514,9 @@ test.describe.serial("read-only kootaj board", () => {
     await expect(page.getByTestId("kootaj-board-table")).toBeVisible();
     await expect(page.getByTestId("kootaj-board-row-s1")).toBeVisible();
     await expect(page.getByTestId("kootaj-board-readonly-notice")).toBeVisible();
-    await expect(page.getByRole("button", { name: /ذخیره|ویرایش|حذف/ })).toHaveCount(0);
-    await expect(page.locator('[data-testid^="kootaj-board-edit"], [data-testid^="kootaj-board-save"]')).toHaveCount(0);
+    await expect(page.getByTestId("kootaj-board-edit-s1")).toBeVisible();
+    await expect(page.locator('[data-testid="kootaj-board-save-edit"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="kootaj-board-customer-input"], [data-testid="kootaj-board-shipment-code-input"], [data-testid="kootaj-board-task-count-input"], [data-testid="kootaj-board-document-count-input"]')).toHaveCount(0);
     await expectNoHorizontalPageOverflow(page);
 
     await page.getByTestId("kootaj-board-row-link-s1").click();

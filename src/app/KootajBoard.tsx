@@ -7,16 +7,28 @@ import {
   FileText,
   ListChecks,
   Loader2,
+  Pencil,
   RefreshCw,
   Route as RouteIcon,
   Search,
   ShieldCheck,
   Ship,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ApiError } from "@/src/lib/api";
 import {
   customsStatusOptions,
   labelForOption,
@@ -25,10 +37,20 @@ import {
 } from "@/src/app/dailyStatusColumns";
 import { kootajBoardApi, type DailyStatusListFilters } from "@/src/lib/dailyStatusApi";
 import { shipmentStatusLabel, SHIPMENT_STATUS_OPTIONS } from "@/src/shared/shipment-statuses.js";
+import { useAppStore } from "@/src/store/useAppStore";
 import type { DailyStatusBoardRow } from "@/src/types";
 
 const ALL_VALUE = "ALL";
 const BOARD_LIMIT = 50;
+const NO_VALUE = "__none";
+const KOOTAJ_CONFLICT_MESSAGE = "اطلاعات این ردیف توسط کاربر دیگری تغییر کرده است. صفحه را به‌روزرسانی کردیم، دوباره بررسی کنید.";
+
+type KootajEditDraft = {
+  cotageNumber: string;
+  customsRoute: string;
+  customsStatus: string;
+  releaseStatus: string;
+};
 
 function safeTestId(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -90,6 +112,24 @@ function lastUpdatedText(row: DailyStatusBoardRow) {
   return actor ? `${formatDateTime(updatedAt)} · ${actor}` : formatDateTime(updatedAt);
 }
 
+function draftFromRow(row: DailyStatusBoardRow): KootajEditDraft {
+  return {
+    cotageNumber: row.kootaj.cotageNumber || "",
+    customsRoute: row.kootaj.customsRoute || "",
+    customsStatus: row.kootaj.customsStatus || "",
+    releaseStatus: row.kootaj.releaseStatus || "",
+  };
+}
+
+function nullableSelectValue(value: string) {
+  return value === NO_VALUE ? "" : value;
+}
+
+function patchValue(value: string) {
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
 function SummaryTile({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="rounded-xl border border-border bg-card p-3 shadow-sm">
@@ -127,12 +167,20 @@ function FilterSelect({
   );
 }
 
-function KootajDesktopRow({ row }: { row: DailyStatusBoardRow }) {
+function KootajDesktopRow({
+  canEdit,
+  onEdit,
+  row,
+}: {
+  canEdit: boolean;
+  onEdit: (row: DailyStatusBoardRow) => void;
+  row: DailyStatusBoardRow;
+}) {
   const testId = safeTestId(row.id);
   return (
     <div
       role="row"
-      className="grid min-w-0 grid-cols-[minmax(92px,0.9fr)_minmax(110px,1fr)_minmax(130px,1.15fr)_minmax(92px,0.8fr)_minmax(150px,1.25fr)_minmax(110px,0.9fr)_minmax(96px,0.8fr)_minmax(128px,1fr)] items-center gap-2 border-t border-border px-3 py-3 text-xs"
+      className="grid min-w-0 grid-cols-[minmax(86px,0.8fr)_minmax(104px,0.95fr)_minmax(116px,1.05fr)_minmax(86px,0.75fr)_minmax(132px,1.1fr)_minmax(104px,0.85fr)_minmax(88px,0.72fr)_minmax(118px,0.95fr)_56px] items-center gap-2 border-t border-border px-3 py-3 text-xs"
       data-testid={`kootaj-board-row-${testId}`}
     >
       <div className="min-w-0">
@@ -173,11 +221,34 @@ function KootajDesktopRow({ row }: { row: DailyStatusBoardRow }) {
       <div className="min-w-0">
         <p className="line-clamp-2 text-[11px] font-bold text-muted-foreground">{lastUpdatedText(row)}</p>
       </div>
+      <div className="flex justify-end">
+        {canEdit ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 rounded-lg px-2 text-[10px] font-black"
+            onClick={() => onEdit(row)}
+            data-testid={`kootaj-board-edit-${testId}`}
+          >
+            <Pencil className="ml-1 h-3.5 w-3.5" />
+            ویرایش
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }
 
-function KootajMobileCard({ row }: { row: DailyStatusBoardRow }) {
+function KootajMobileCard({
+  canEdit,
+  onEdit,
+  row,
+}: {
+  canEdit: boolean;
+  onEdit: (row: DailyStatusBoardRow) => void;
+  row: DailyStatusBoardRow;
+}) {
   const testId = safeTestId(row.id);
   return (
     <Card className="overflow-hidden" data-testid={`kootaj-board-mobile-card-${testId}`}>
@@ -219,18 +290,165 @@ function KootajMobileCard({ row }: { row: DailyStatusBoardRow }) {
             </div>
           </div>
           <p className="text-[11px] font-bold text-muted-foreground">{lastUpdatedText(row)}</p>
+          {canEdit ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full rounded-lg text-xs font-black"
+              onClick={() => onEdit(row)}
+              data-testid={`kootaj-board-mobile-edit-${testId}`}
+            >
+              <Pencil className="ml-1 h-3.5 w-3.5" />
+              ویرایش وضعیت کوتاژ
+            </Button>
+          ) : null}
         </div>
       </CardContent>
     </Card>
   );
 }
 
+function KootajEditDialog({
+  draft,
+  open,
+  row,
+  saving,
+  onChange,
+  onClose,
+  onSave,
+}: {
+  draft: KootajEditDraft;
+  open: boolean;
+  row: DailyStatusBoardRow | null;
+  saving: boolean;
+  onChange: (field: keyof KootajEditDraft, value: string) => void;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => {
+      if (!nextOpen && !saving) onClose();
+    }}>
+      <DialogContent className="sm:max-w-xl" dir="rtl" data-testid="kootaj-board-edit-dialog">
+        <DialogHeader>
+          <DialogTitle className="text-base font-black">ویرایش وضعیت کوتاژ</DialogTitle>
+          <DialogDescription className="text-xs font-bold leading-6">
+            فقط شماره کوتاژ، مسیر گمرکی، وضعیت گمرکی و وضعیت ترخیص قابل ویرایش هستند.
+            سایر اطلاعات از محموله، مشتری، اسناد و وظایف به‌صورت خواندنی نمایش داده می‌شود.
+          </DialogDescription>
+        </DialogHeader>
+
+        {row ? (
+          <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs font-bold text-muted-foreground">
+            <span className="text-foreground">{row.shipment.code || row.baseInfo.code}</span>
+            <span className="mx-2">·</span>
+            <span>{customerLabel(row)}</span>
+          </div>
+        ) : null}
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Label className="grid gap-1 text-xs font-black">
+            شماره کوتاژ
+            <Input
+              value={draft.cotageNumber}
+              onChange={(event) => onChange("cotageNumber", event.target.value)}
+              className="h-10 rounded-lg text-xs font-bold"
+              maxLength={120}
+              data-testid="kootaj-board-cotage-input"
+            />
+          </Label>
+
+          <Label className="grid gap-1 text-xs font-black">
+            مسیر گمرکی
+            <select
+              value={draft.customsRoute || NO_VALUE}
+              onChange={(event) => onChange("customsRoute", nullableSelectValue(event.target.value))}
+              className="h-10 rounded-lg border border-input bg-background px-3 text-xs font-bold text-foreground outline-none focus:ring-2 focus:ring-ring"
+              data-testid="kootaj-board-customs-route-select"
+            >
+              <option value={NO_VALUE}>ثبت نشده</option>
+              {routeOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </Label>
+
+          <Label className="grid gap-1 text-xs font-black">
+            وضعیت گمرکی
+            <select
+              value={draft.customsStatus || NO_VALUE}
+              onChange={(event) => onChange("customsStatus", nullableSelectValue(event.target.value))}
+              className="h-10 rounded-lg border border-input bg-background px-3 text-xs font-bold text-foreground outline-none focus:ring-2 focus:ring-ring"
+              data-testid="kootaj-board-customs-status-select"
+            >
+              <option value={NO_VALUE}>ثبت نشده</option>
+              {customsStatusOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </Label>
+
+          <Label className="grid gap-1 text-xs font-black">
+            وضعیت ترخیص
+            <select
+              value={draft.releaseStatus || NO_VALUE}
+              onChange={(event) => onChange("releaseStatus", nullableSelectValue(event.target.value))}
+              className="h-10 rounded-lg border border-input bg-background px-3 text-xs font-bold text-foreground outline-none focus:ring-2 focus:ring-ring"
+              data-testid="kootaj-board-release-status-select"
+            >
+              <option value={NO_VALUE}>ثبت نشده</option>
+              {releaseStatusOptions.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </Label>
+        </div>
+
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            className="rounded-lg text-xs font-black"
+            onClick={onClose}
+            disabled={saving}
+            data-testid="kootaj-board-cancel-edit"
+          >
+            انصراف
+          </Button>
+          <Button
+            type="button"
+            className="rounded-lg text-xs font-black"
+            onClick={onSave}
+            disabled={saving}
+            data-testid="kootaj-board-save-edit"
+          >
+            {saving ? <Loader2 className="ml-1 h-4 w-4 animate-spin" /> : null}
+            ذخیره تغییرات
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function KootajBoard() {
+  const currentUser = useAppStore((state) => state.currentUser);
   const [rows, setRows] = React.useState<DailyStatusBoardRow[]>([]);
   const [filters, setFilters] = React.useState<DailyStatusListFilters>({ limit: BOARD_LIMIT });
   const [searchText, setSearchText] = React.useState("");
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [editingRow, setEditingRow] = React.useState<DailyStatusBoardRow | null>(null);
+  const [editDraft, setEditDraft] = React.useState<KootajEditDraft>({
+    cotageNumber: "",
+    customsRoute: "",
+    customsStatus: "",
+    releaseStatus: "",
+  });
+  const [savingEdit, setSavingEdit] = React.useState(false);
+  const userPermissions = Array.isArray(currentUser?.permissions) ? currentUser.permissions : [];
+  const canEditKootaj = userPermissions.includes("shipments.update") || userPermissions.includes("platform.admin");
 
   const loadRows = React.useCallback(async (nextFilters: DailyStatusListFilters) => {
     setLoading(true);
@@ -267,6 +485,51 @@ export default function KootajBoard() {
   };
 
   const refreshRows = () => loadRows({ ...filters, q: searchText.trim() || undefined, limit: BOARD_LIMIT });
+  const openEditDialog = (row: DailyStatusBoardRow) => {
+    setEditingRow(row);
+    setEditDraft(draftFromRow(row));
+  };
+  const closeEditDialog = () => {
+    if (savingEdit) return;
+    setEditingRow(null);
+    setEditDraft({
+      cotageNumber: "",
+      customsRoute: "",
+      customsStatus: "",
+      releaseStatus: "",
+    });
+  };
+  const saveEdit = async () => {
+    if (!editingRow) return;
+    setSavingEdit(true);
+    try {
+      const updated = await kootajBoardApi.update(editingRow.id, {
+        cotageNumber: patchValue(editDraft.cotageNumber),
+        customsRoute: editDraft.customsRoute || null,
+        customsStatus: editDraft.customsStatus || null,
+        releaseStatus: editDraft.releaseStatus || null,
+        expectedKootajUpdatedAt: editingRow.kootajUpdatedAt || null,
+      });
+      setRows((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setEditingRow(null);
+      setEditDraft(draftFromRow(updated));
+      toast.success("وضعیت کوتاژ بروزرسانی شد.");
+    } catch (saveError) {
+      if (saveError instanceof ApiError && saveError.status === 409 && saveError.code === "KOOTAJ_VERSION_CONFLICT") {
+        toast.error(KOOTAJ_CONFLICT_MESSAGE);
+        setEditingRow(null);
+        await refreshRows();
+        return;
+      }
+      if (saveError instanceof ApiError && saveError.status === 403) {
+        toast.error("شما مجوز ویرایش وضعیت کوتاژ را ندارید.");
+        return;
+      }
+      toast.error(saveError instanceof Error ? saveError.message : "ذخیره وضعیت کوتاژ ناموفق بود.");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
   const hasFilters = Boolean(searchText || filters.shipmentStatus || filters.customsRoute);
   const withCotage = rows.filter((row) => row.kootaj.cotageNumber).length;
   const blockedRows = rows.filter((row) => row.kootaj.customsStatus === "blocked" || row.kootaj.releaseStatus === "blocked").length;
@@ -284,7 +547,7 @@ export default function KootajBoard() {
               <div className="min-w-0">
                 <h1 className="truncate text-2xl font-black tracking-normal text-foreground">برد کوتاژ</h1>
                 <p className="mt-1 text-xs font-bold text-muted-foreground">
-                  نمای عملیاتی فقط‌خواندنی از محموله‌ها، وضعیت روزانه، اسناد و وظایف
+                  نمای عملیاتی محموله‌ها، وضعیت روزانه، اسناد و وظایف با ویرایش محدود فیلدهای کوتاژ
                 </p>
               </div>
             </div>
@@ -348,7 +611,7 @@ export default function KootajBoard() {
         </section>
 
         <section className="rounded-xl border border-blue-200 bg-blue-50/70 p-3 text-xs font-bold text-blue-900 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-100" data-testid="kootaj-board-readonly-notice">
-          این فاز فقط‌خواندنی است و هیچ دکمه ذخیره، ویرایش یا تغییر وضعیت از برد کوتاژ ارسال نمی‌شود. هر ردیف به صفحه canonical محموله متصل است.
+          <span className="block">در این فاز فقط شماره کوتاژ، مسیر گمرکی، وضعیت گمرکی و وضعیت ترخیص قابل ویرایش هستند. مشتری، شماره محموله، مسیر، شمارش وظایف/اسناد و زمان آخرین بروزرسانی خواندنی می‌مانند.</span>
         </section>
 
         {error ? (
@@ -375,7 +638,7 @@ export default function KootajBoard() {
         ) : (
           <>
             <section className="hidden overflow-hidden rounded-xl border border-border bg-card shadow-sm lg:block" role="table" aria-label="برد کوتاژ" data-testid="kootaj-board-table">
-              <div role="row" className="grid min-w-0 grid-cols-[minmax(92px,0.9fr)_minmax(110px,1fr)_minmax(130px,1.15fr)_minmax(92px,0.8fr)_minmax(150px,1.25fr)_minmax(110px,0.9fr)_minmax(96px,0.8fr)_minmax(128px,1fr)] gap-2 bg-muted/60 px-3 py-2 text-[11px] font-black text-muted-foreground">
+              <div role="row" className="grid min-w-0 grid-cols-[minmax(86px,0.8fr)_minmax(104px,0.95fr)_minmax(116px,1.05fr)_minmax(86px,0.75fr)_minmax(132px,1.1fr)_minmax(104px,0.85fr)_minmax(88px,0.72fr)_minmax(118px,0.95fr)_56px] gap-2 bg-muted/60 px-3 py-2 text-[11px] font-black text-muted-foreground">
                 <div role="columnheader">محموله</div>
                 <div role="columnheader">مشتری</div>
                 <div role="columnheader"><RouteIcon className="ml-1 inline h-3.5 w-3.5" />مسیر</div>
@@ -384,10 +647,11 @@ export default function KootajBoard() {
                 <div role="columnheader">کوتاژ / کارت</div>
                 <div role="columnheader"><ListChecks className="ml-1 inline h-3.5 w-3.5" />وظایف / اسناد</div>
                 <div role="columnheader"><Clock3 className="ml-1 inline h-3.5 w-3.5" />آخرین بروزرسانی</div>
+                <div role="columnheader">عملیات</div>
               </div>
               {rows.map((row) => (
                 <React.Fragment key={row.id}>
-                  <KootajDesktopRow row={row} />
+                  <KootajDesktopRow row={row} canEdit={canEditKootaj} onEdit={openEditDialog} />
                 </React.Fragment>
               ))}
             </section>
@@ -395,7 +659,7 @@ export default function KootajBoard() {
             <section className="grid gap-3 lg:hidden" data-testid="kootaj-board-mobile-list">
               {rows.map((row) => (
                 <React.Fragment key={row.id}>
-                  <KootajMobileCard row={row} />
+                  <KootajMobileCard row={row} canEdit={canEditKootaj} onEdit={openEditDialog} />
                 </React.Fragment>
               ))}
             </section>
@@ -408,6 +672,16 @@ export default function KootajBoard() {
           <span className="inline-flex items-center gap-1"><ExternalLink className="h-3.5 w-3.5" />جزئیات کامل در /shipments/:id باقی می‌ماند.</span>
         </footer>
       </div>
+
+      <KootajEditDialog
+        draft={editDraft}
+        open={Boolean(editingRow)}
+        row={editingRow}
+        saving={savingEdit}
+        onChange={(field, value) => setEditDraft((current) => ({ ...current, [field]: value }))}
+        onClose={closeEditDialog}
+        onSave={saveEdit}
+      />
     </div>
   );
 }
