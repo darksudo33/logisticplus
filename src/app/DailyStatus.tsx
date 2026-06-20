@@ -2008,7 +2008,6 @@ export default function DailyStatus() {
               </div>
               <div className="min-w-0">
                 <h1 className="truncate text-2xl font-black tracking-normal text-foreground">وضعیت روزانه</h1>
-                <p className="mt-1 text-xs font-bold text-muted-foreground">نمای عملیاتی محموله، کوتاژ، کارت بازرگانی، فرآیند، وظایف و اسناد</p>
               </div>
             </div>
           </div>
