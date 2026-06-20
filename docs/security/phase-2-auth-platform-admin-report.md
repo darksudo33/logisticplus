@@ -15,7 +15,7 @@ No routes, public tracking flow, billing/Zarinpal flow, SMS provider flow, Persi
 - SMS provider/worker: `src/server/sms-provider.js`, `src/server/sms-worker.js`.
 - Schema and migrations: `db/schema.sql`, `db/migrations/*`.
 - Seed/bridge scripts: `scripts/seed-db.ts`, `scripts/bridge-canonical-db.ts`, `scripts/seed-demo-company.ts`, `scripts/reset-test-db.ts`.
-- Frontend session/nav state: `src/store/useMockStore.ts`, `src/components/layout/Navbar.tsx`, `src/types/index.ts`.
+- Frontend session/nav state: `src/store/useAppStore.ts`, `src/components/layout/Navbar.tsx`, `src/types/index.ts`.
 - Auth/security tests: `tests/e2e/security.spec.ts`, `tests/e2e/helpers.ts`, `tests/e2e/rbac-policy.ts`, `tests/e2e/tenant-isolation-phase1.spec.ts`.
 
 ## Hardcoded Admin Checks

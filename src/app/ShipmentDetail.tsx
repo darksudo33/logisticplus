@@ -49,7 +49,7 @@ import {
   SHIPMENT_STATUS_OPTIONS,
   shipmentStatusLabel,
 } from "@/src/shared/shipment-statuses.js";
-import { useAppDataStore } from "@/src/store/useMockStore";
+import { useAppDataStore } from "@/src/store/useAppStore";
 import type {
   CommercialCard,
   BusinessEntityContact,

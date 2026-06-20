@@ -533,7 +533,7 @@ Copy patterns from `daily-status-board.spec.ts`, `shipment-v2.spec.ts`, `shipmen
 - `server/src/server.js`: large composition root; only add narrow dependency wiring.
 - `src/app/DailyStatus.tsx`: large working board with merged customer changes and extensive UI coverage.
 - `src/app/ShipmentDetail.tsx`: canonical detail page with many section editors; integrate incrementally.
-- `src/store/useAppStore.ts` and `src/store/useMockStore.ts`: large state/compatibility surfaces; do not make Kootaj Board dependent on bootstrap state.
+- `src/store/useAppStore.ts`: large state/compatibility surface; do not make Kootaj Board dependent on bootstrap state.
 - `src/server/request-schemas.js`: central compatibility export; prefer a modular schema with a narrow re-export if architecture permits.
 - `src/shared/shipment-form-fields.js`: broad canonical registry used by templates and multiple shipment types.
 - `db/schema.sql` and `db/migrations/*`: update schema only with a new forward migration in an implementation phase; never rewrite history.

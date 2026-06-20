@@ -386,7 +386,7 @@ Files touched:
 - `src/app/Shipments.tsx`
 - `src/app/Chat.tsx`
 - `src/components/DeleteConfirmDialog.tsx`
-- `src/store/useMockStore.ts`
+- `src/store/useAppStore.ts`
 - `src/types/index.ts`
 - `scripts/clean-liara-production-data.mjs`
 - `scripts/reset-owner-password-hash.mjs`
@@ -958,7 +958,7 @@ What changed:
 
 Files touched:
 
-- `src/store/useMockStore.ts`
+- `src/store/useAppStore.ts`
 - `src/App.tsx`
 - `src/components/layout/Navbar.tsx`
 - `src/app/Documents.tsx`
@@ -1224,7 +1224,7 @@ logisticplus/
     server/
       db.js
     store/
-      useMockStore.ts
+      useAppStore.ts
     types/
       index.ts
   components/
@@ -1266,7 +1266,7 @@ Important folders and files:
 | `src/index.css` | Tailwind/global styling and app theme. |
 | `src/app/` | Feature pages and route components. Most product UI lives here. |
 | `src/components/layout/` | Sidebar, top bar, mobile bottom navigation. |
-| `src/store/useMockStore.ts` | Zustand store. Despite the name, this is still central to app state and syncs with backend `user_records`. |
+| `src/store/useAppStore.ts` | Zustand store for active production app state; it syncs compatibility data with backend `user_records`. |
 | `src/lib/mockData.ts` | Seed/mock source data used by the seed script and likely fallback UI flows. |
 | `src/lib/errorReporting.ts` | Client-side error reporting helper used by `ClientErrorBoundary`. |
 | `src/server/db.js` | Main data access layer, SQL queries, auth/session helpers, permission helpers, SaaS/billing functions, feature CRUD, audit, chat, documents, public tracking. |
@@ -1298,7 +1298,7 @@ Generated, temporary, or legacy files:
 - `node_modules/`: dependency install output.
 - `storage/documents/`: runtime uploaded files.
 - `server-dev.out.log` and `server-dev.err.log`: local logs.
-- `src/lib/mockData.ts` and `src/store/useMockStore.ts`: important, but carry legacy/mock architecture assumptions.
+- `src/lib/mockData.ts` and `src/store/useAppStore.ts`: important, but still carry legacy/mock architecture assumptions.
 - `user_records` table: compatibility/persistence bridge for the Zustand store. Do not remove until all pages are fully canonicalized.
 
 ## 4. codexplan Folder Summary
@@ -1406,7 +1406,6 @@ Frameworks and libraries:
   - date-fns-jalali for Persian/Jalali dates
   - motion for animations
   - Recharts for charts
-  - qrcode for QR generation
 - Backend:
   - Express 4
   - pg for PostgreSQL
@@ -1452,8 +1451,7 @@ Data flow:
 
 State management:
 
-- Zustand store in `src/store/useMockStore.ts`.
-- Store name still says "mock", but it is active production app state.
+- Zustand store in `src/store/useAppStore.ts`.
 - The store likely remains necessary for UI hydration, current user, theme, notifications, and legacy collections.
 - Future work should either document this as intentional or gradually reduce reliance on legacy store persistence.
 
@@ -1559,7 +1557,7 @@ Unclear or needs verification:
 | Manual admin company signup | Done | `src/app/AdminPanel.tsx`, `server.js`, `src/server/db.js` | Creates organization/user/subscription/signup record manually. |
 | Error reporting/logs | Partial | `src/lib/errorReporting.ts`, `src/components/ClientErrorBoundary.tsx`, `server.js`, `src/app/AdminPanel.tsx` | Client errors can be reported and viewed/admin-resolved. Coverage and privacy need review. |
 | Billing/invoicing | Partial | `src/app/AdminPanel.tsx`, `server.js`, `src/server/db.js`, `db/schema.sql` | Manual payment marking/invoices/renew/expire exist. Zarinpal production behavior needs verification. |
-| Notifications/background jobs | Partial / Missing | `src/store/useMockStore.ts`, `db/schema.sql`, `src/App.tsx`, `src/server/db.js` | UI/store notifications exist. Real background scheduler not found. |
+| Notifications/background jobs | Partial / Missing | `src/store/useAppStore.ts`, `db/schema.sql`, `src/App.tsx`, `src/server/db.js` | UI/store notifications exist. Real background scheduler not found. |
 | Tests | Partial / Active | `package.json`, `playwright.config.ts`, `tests/e2e/security.spec.ts` | Playwright e2e security suite exists and currently covers 12 regression scenarios. Unit/API test frameworks are not added. |
 | Documentation | Partial to Done | `README.md`, `.env.example`, `PROJECT_HANDOFF.md` | README/env cover local setup, Playwright, Liara launch, storage, rate limiting, and Zarinpal configuration. |
 | Deployment | Partial to Done | `liara.json`, `package.json`, `server.js`, `src/server/startup-checks.js` | Liara config exists with production startup checks. Real deploy and live Zarinpal validation still require production credentials. |
@@ -1598,7 +1596,7 @@ Unclear or needs verification:
 | Live document/tracking smoke | Log in as owner, upload/download a private document, create a customer/shipment/tracking token, expose one customer-visible document, verify public tracking, then archive the test records. | Authenticated route smoke is green, but document storage and tracking token behavior still need a post-cleanup production rehearsal. | Browser, Liara app, `server.js`, document storage disk | Owner session and cleanup after test. |
 | Live Zarinpal validation | Run one controlled live merchant payment from signup through callback, invoice, receipt, and admin billing state. | Sandbox is covered; live payment behavior still requires real credentials and gateway validation. | `server.js`, `src/server/db.js`, `src/app/SaasSignup.tsx`, `src/app/AdminPanel.tsx` | Real merchant credentials and test payment plan. |
 | Audit log coverage review | Verify every create/update/archive/status/assignment/upload action calls `auditLog` and add missing regression cases. | Audit trail is a non-negotiable planning requirement. | `server.js`, `src/server/db.js`, feature pages, `tests/e2e/` | Current Playwright harness. |
-| Stabilize state model | Document which features still use Zustand/user_records vs canonical tables, then plan a safe migration path. | Hybrid state is now the main maintainability risk. | `src/store/useMockStore.ts`, `server.js`, `src/server/db.js`, feature pages | Product decision on migration scope. |
+| Stabilize state model | Document which features still use Zustand/user_records vs canonical tables, then plan a safe migration path. | Hybrid state is now the main maintainability risk. | `src/store/useAppStore.ts`, `server.js`, `src/server/db.js`, feature pages | Product decision on migration scope. |
 
 ### Short-Term Tasks
 
