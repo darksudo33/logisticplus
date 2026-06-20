@@ -9,7 +9,6 @@ import {
   FileSearch,
   FileText,
   Loader2,
-  PackageSearch,
   Search,
   Ship,
   Users,
@@ -58,15 +57,6 @@ type DashboardHomeData = {
   metrics: DashboardMetric[];
   myActiveTasks: DashboardTask[];
   lastUpdatedShipments: DashboardShipment[];
-};
-
-type ShipmentSearchResult = {
-  id: string;
-  type: string;
-  title: string;
-  subtitle?: string;
-  description?: string;
-  url?: string;
 };
 
 const metricIcons: Record<DashboardMetric["key"], LucideIcon> = {
@@ -171,126 +161,6 @@ function MetricCard({ metric }: { metric: DashboardMetric; key?: React.Key }) {
     >
       {content}
     </button>
-  );
-}
-
-function ShipmentQuickSearch() {
-  const navigate = useNavigate();
-  const [query, setQuery] = React.useState("");
-  const [results, setResults] = React.useState<ShipmentSearchResult[]>([]);
-  const [error, setError] = React.useState("");
-  const [isSearching, setIsSearching] = React.useState(false);
-
-  const openShipment = React.useCallback(
-    (result: ShipmentSearchResult) => {
-      navigate(result.url || `/shipments/${result.id}`);
-    },
-    [navigate]
-  );
-
-  const handleSearch = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const searchTerm = query.trim();
-    setError("");
-    setResults([]);
-
-    if (searchTerm.length < 2) {
-      setError("برای جستجو حداقل دو کاراکتر وارد کنید.");
-      return;
-    }
-
-    setIsSearching(true);
-    try {
-      const params = new URLSearchParams({ q: searchTerm, type: "shipments", limit: "6" });
-      const response = await fetch(`/api/search?${params.toString()}`, { credentials: "include" });
-      const payload = await response.json().catch(() => ({}));
-      if (response.status === 401) {
-        navigate("/login");
-        return;
-      }
-      if (!response.ok) {
-        throw new Error(payload?.error?.message || "جستجوی محموله ناموفق بود.");
-      }
-      const shipmentResults = (payload.results || []).filter((item: ShipmentSearchResult) => item.type === "shipment");
-      if (shipmentResults.length === 1) {
-        openShipment(shipmentResults[0]);
-        return;
-      }
-      setResults(shipmentResults);
-      if (shipmentResults.length === 0) {
-        setError("محموله‌ای با این شماره پیدا نشد.");
-      }
-    } catch (searchError) {
-      setError(searchError instanceof Error ? searchError.message : "جستجوی محموله ناموفق بود.");
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  return (
-    <Card data-testid="dashboard-shipment-search-section">
-      <CardHeader className="pb-0">
-        <div className="flex items-start gap-3">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-            <PackageSearch className="h-5 w-5" />
-          </span>
-          <div className="min-w-0">
-            <CardTitle className="text-base font-black">جستجوی سریع محموله</CardTitle>
-            <CardDescription className="mt-1 text-xs font-bold">
-              شماره محموله را وارد کنید تا پرونده از مسیر اصلی محموله باز شود.
-            </CardDescription>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="pt-4">
-        <form className="flex flex-col gap-2 sm:flex-row" onSubmit={handleSearch}>
-          <div className="relative min-w-0 flex-1">
-            <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                if (error) setError("");
-              }}
-              placeholder="جستجوی شماره محموله..."
-              className="h-10 rounded-lg bg-background pr-9 text-sm font-bold"
-              data-testid="dashboard-shipment-search-input"
-            />
-          </div>
-          <Button type="submit" className="h-10 px-4 text-xs font-black" disabled={isSearching} data-testid="dashboard-shipment-search-submit">
-            {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-            جستجو
-          </Button>
-        </form>
-
-        {error ? (
-          <p className="mt-2 flex items-center gap-1 text-xs font-bold text-destructive" data-testid="dashboard-shipment-search-error">
-            <AlertCircle className="h-3.5 w-3.5" />
-            {error}
-          </p>
-        ) : null}
-
-        {results.length > 0 ? (
-          <div className="mt-3 grid gap-2" data-testid="dashboard-shipment-search-results">
-            {results.map((result) => (
-              <button
-                key={result.id}
-                type="button"
-                className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border bg-background p-3 text-right transition-colors hover:border-primary/30 hover:bg-primary/5"
-                onClick={() => openShipment(result)}
-                data-testid="dashboard-shipment-search-result"
-              >
-                <span className="min-w-0">
-                  <span className="block truncate font-mono text-sm font-black text-primary">{result.title}</span>
-                  <span className="mt-1 block truncate text-xs font-bold text-muted-foreground">{result.subtitle || result.description || "محموله"}</span>
-                </span>
-                <ArrowLeft className="h-4 w-4 text-muted-foreground" />
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </CardContent>
-    </Card>
   );
 }
 
@@ -535,8 +405,6 @@ export default function Dashboard() {
           <MetricCard key={metric.key} metric={metric} />
         ))}
       </section>
-
-      <ShipmentQuickSearch />
 
       <DocumentShipmentQuickSearch />
 
