@@ -461,6 +461,7 @@ test.describe.serial("daily status board", () => {
     const ownerCardId = `daily-card-ui-${suffix}`;
     const detailCardId = `daily-card-detail-${suffix}`;
     const originalCotageNumber = `UI-COTAGE-${suffix}`;
+    const originalDeclarationReference = `UI-DECL-${suffix}`;
     const editedCotageNumber = `UI-COTAGE-EDIT-${suffix}`;
     const editedDailyOrderRegistrationNumber = `UI-DAILY-ORDER-${suffix}`;
     const editedDailyCurrentStage = `Daily stage ${suffix}`;
@@ -494,6 +495,7 @@ test.describe.serial("daily status board", () => {
             releaseStatus: "ready",
             customsPaymentStatus: "pending",
             customsOffice: "UI Test Customs Office",
+            declarationReference: originalDeclarationReference,
             internalNote: `daily-status-ui-private-${suffix}`,
           },
         })
@@ -520,6 +522,27 @@ test.describe.serial("daily status board", () => {
       await expect(page.getByText("همه وضعیت‌ها", { exact: true })).toHaveCount(0);
       await expect(page.getByText("همه ترخیص‌ها", { exact: true })).toHaveCount(0);
       await expectNoHorizontalPageOverflow(page);
+
+      await page.getByTestId("daily-status-search").fill(originalCotageNumber);
+      await expect(page.getByTestId("daily-status-row-s1")).toBeVisible();
+      await page.getByTestId("daily-status-search").fill(originalDeclarationReference);
+      await expect(page.getByTestId("daily-status-row-s1")).toBeVisible();
+      await page.getByTestId("daily-status-search").fill("");
+      await expect(page.getByTestId("daily-status-row-s1")).toBeVisible();
+      await page.getByTestId("daily-status-customs-status-filter").click();
+      await page.getByRole("option", { name: "متوقف" }).click();
+      await expect(page.getByTestId("daily-status-row-s1")).toHaveCount(0);
+      await page.getByTestId("daily-status-customs-status-filter").click();
+      await page.getByRole("option", { name: "در بررسی گمرک" }).click();
+      await expect(page.getByTestId("daily-status-row-s1")).toBeVisible();
+      await page.getByTestId("daily-status-release-status-filter").click();
+      await page.getByRole("option", { name: "ترخیص نشده" }).click();
+      await expect(page.getByTestId("daily-status-row-s1")).toHaveCount(0);
+      await page.getByTestId("daily-status-release-status-filter").click();
+      await page.getByRole("option", { name: "آماده ترخیص" }).click();
+      await expect(page.getByTestId("daily-status-row-s1")).toBeVisible();
+      await page.getByRole("button", { name: "پاکسازی" }).click();
+      await expect(page.getByTestId("daily-status-row-s1")).toBeVisible();
 
       await page.getByTestId("daily-status-details-s1").click();
       await expect(page.getByTestId("daily-status-desktop-view-panel-s1")).toBeVisible();
@@ -670,11 +693,17 @@ test.describe.serial("daily status board", () => {
 
       await page.getByTestId("daily-status-mobile-filter-toggle").click();
       await expect(page.getByTestId("daily-status-mobile-filters")).toBeVisible();
+      await expect(page.getByTestId("daily-status-mobile-filters").getByTestId("daily-status-customs-status-filter")).toBeVisible();
+      await expect(page.getByTestId("daily-status-mobile-filters").getByTestId("daily-status-release-status-filter")).toBeVisible();
       await expect(page.getByTestId("daily-status-mobile-filters").getByText("همه وضعیت‌ها", { exact: true })).toHaveCount(0);
       await expect(page.getByTestId("daily-status-mobile-filters").getByText("همه ترخیص‌ها", { exact: true })).toHaveCount(0);
       await page.getByTestId("daily-status-mobile-details-s1").click();
       await expect(page.getByTestId("daily-status-mobile-view-panel-s1")).toBeVisible();
       await expect(page.getByTestId("daily-status-mobile-view-panel-s1")).toContainText(detailCotageNumber);
+
+      await page.goto("/kootaj-board");
+      await expect(page).not.toHaveURL(/\/kootaj-board$/);
+      await expect(page.getByTestId("daily-status-page")).toHaveCount(0);
     } finally {
       await dbQuery(
         "DELETE FROM shipment_kootaj_details WHERE organization_id = $1 AND shipment_id = 's1' AND cotage_number IN ($2, $3, $4)",

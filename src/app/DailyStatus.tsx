@@ -509,8 +509,24 @@ function rowRouteLabel(row: DailyStatusBoardRow) {
   return optionLabel(routeOptions, row.kootaj.customsRoute || row.workflow?.route);
 }
 
-function rowExitOrCustomsLabel(row: DailyStatusBoardRow) {
-  return optionLabel(releaseStatusOptions, row.kootaj.releaseStatus) || optionLabel(customsStatusOptions, row.kootaj.customsStatus);
+function rowSearchText(row: DailyStatusBoardRow) {
+  return [
+    row.baseInfo?.code,
+    row.shipment.code,
+    rowCustomerCode(row),
+    row.customer?.customerCode,
+    row.customer?.name,
+    row.kootaj.cotageNumber,
+    row.kootaj.declarationReference,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function statusPill(label: string, value: string | null | undefined, options: Array<{ value: string; label: string }>) {
+  return (
+    <Badge variant={value ? "outline" : "secondary"} className="h-6 max-w-full rounded-md px-2 text-[10px] font-black">
+      <span className="truncate">{label}: {optionLabel(options, value) || EMPTY_TEXT}</span>
+    </Badge>
+  );
 }
 
 function formatDailyNumber(value?: number | null) {
@@ -559,9 +575,9 @@ function goodsCompactSummary(row: DailyStatusBoardRow) {
 
 function SummaryTile({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="min-w-0 rounded-lg border border-border bg-background px-3 py-2">
+    <div className="min-w-0 rounded-xl border border-border bg-background px-3 py-2 shadow-sm">
       <p className="truncate text-[11px] font-bold text-muted-foreground">{label}</p>
-      <p className="mt-1 text-base font-black text-foreground">{value}</p>
+      <p className="mt-1 text-lg font-black text-foreground">{value}</p>
     </div>
   );
 }
@@ -1611,16 +1627,18 @@ function FilterSelect({
   options,
   onChange,
   widthClass,
+  testId,
 }: {
   value?: string;
   allLabel: string;
   options: Array<{ value: string; label: string }>;
   onChange: (value: string) => void;
   widthClass?: string;
+  testId?: string;
 }) {
   return (
     <Select value={value || ALL_VALUE} onValueChange={onChange}>
-      <SelectTrigger className={cn("h-10 rounded-lg bg-background text-xs font-bold", widthClass)}>
+      <SelectTrigger className={cn("h-10 rounded-lg bg-background text-xs font-bold", widthClass)} data-testid={testId}>
         <span className="truncate">{value ? labelForOption(options, value) : allLabel}</span>
       </SelectTrigger>
       <SelectContent className="bg-card text-foreground" dir="rtl">
@@ -1662,11 +1680,21 @@ function CompactRow({
           </div>
           <CompactFact label="مرحله فعلی" value={row.baseInfo?.currentStage || row.workflow?.currentStepLabel} />
           <CompactFact label="کالا و بسته‌بندی" value={goodsCompactSummary(row)} />
-          <CompactFact label="مسیر گمرکی" value={rowRouteLabel(row)} />
-          <CompactFact label="شماره کوتاژ" value={row.kootaj.cotageNumber} />
+          <div className="min-h-[58px] min-w-0 rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-2">
+            <p className="truncate text-[10px] font-bold text-muted-foreground">کوتاژ و اظهارنامه</p>
+            <p className="mt-1 truncate text-xs font-black text-foreground">{displayValue(row.kootaj.cotageNumber)}</p>
+            <p className="mt-0.5 truncate text-[10px] font-bold text-muted-foreground">{displayValue(row.kootaj.declarationReference || row.kootaj.customsOffice)}</p>
+          </div>
           <CompactFact label="شماره ثبت سفارش" value={row.baseInfo?.orderRegistrationNumber || row.kootaj.orderRegistrationNumber} />
           <CompactFact label={credential.label} value={credential.displayName} />
-          <CompactFact label="وضعیت خروج/گمرک" value={rowExitOrCustomsLabel(row)} />
+          <div className="min-h-[58px] min-w-0 rounded-lg border border-border bg-background px-2.5 py-2">
+            <p className="truncate text-[10px] font-bold text-muted-foreground">گمرک / ترخیص</p>
+            <div className="mt-1 flex min-w-0 flex-wrap gap-1">
+              {statusPill("گمرک", row.kootaj.customsStatus, customsStatusOptions)}
+              {statusPill("ترخیص", row.kootaj.releaseStatus, releaseStatusOptions)}
+            </div>
+          </div>
+          <CompactFact label="مسیر گمرکی" value={rowRouteLabel(row)} />
           <CompactFact label="آخرین بروزرسانی" value={formatDate(row.baseInfo?.updatedAt || row.kootaj.updatedAt || row.shipment.updatedAt)} />
         </div>
         <div className="flex flex-wrap justify-end gap-2 border-t border-border/70 pt-2">
@@ -1742,9 +1770,12 @@ function MobileCard({
         <ReadField label="کالا و بسته‌بندی" value={goodsCompactSummary(row)} />
         <ReadField label="مسیر گمرکی" value={rowRouteLabel(row)} />
         <ReadField label="شماره کوتاژ" value={row.kootaj.cotageNumber} />
+        <ReadField label="اظهارنامه" value={row.kootaj.declarationReference} />
+        <ReadField label="گمرک" value={row.kootaj.customsOffice} />
         <ReadField label="شماره ثبت سفارش" value={row.baseInfo?.orderRegistrationNumber || row.kootaj.orderRegistrationNumber} />
         <ReadField label={credential.label} value={credential.displayName} />
-        <ReadField label="وضعیت خروج/گمرک" value={rowExitOrCustomsLabel(row)} />
+        <ReadField label="وضعیت گمرک" value={optionLabel(customsStatusOptions, row.kootaj.customsStatus)} />
+        <ReadField label="وضعیت ترخیص" value={optionLabel(releaseStatusOptions, row.kootaj.releaseStatus)} />
         <ReadField label="آخرین بروزرسانی" value={formatDate(row.baseInfo?.updatedAt || row.kootaj.updatedAt || row.shipment.updatedAt)} />
       </div>
 
@@ -1797,7 +1828,19 @@ export default function DailyStatus() {
   const [draft, setDraft] = React.useState<DailyStatusPatch>({});
   const [savingId, setSavingId] = React.useState<string | null>(null);
   const [showMobileFilters, setShowMobileFilters] = React.useState(false);
+  const [customsStatusFilter, setCustomsStatusFilter] = React.useState("");
+  const [releaseStatusFilter, setReleaseStatusFilter] = React.useState("");
   const hasLoadedRowsRef = React.useRef(false);
+
+  const visibleRows = React.useMemo(() => {
+    const query = searchText.trim().toLowerCase();
+    return rows.filter((row) => {
+      if (query && !rowSearchText(row).includes(query)) return false;
+      if (customsStatusFilter && row.kootaj.customsStatus !== customsStatusFilter) return false;
+      if (releaseStatusFilter && row.kootaj.releaseStatus !== releaseStatusFilter) return false;
+      return true;
+    });
+  }, [rows, searchText, customsStatusFilter, releaseStatusFilter]);
 
   const activeRow = React.useMemo(() => rows.find((row) => row.id === activeRowId) || null, [rows, activeRowId]);
   const sectionsForRow = React.useCallback((row: DailyStatusBoardRow | null) => dailyStatusSectionsForRow(row), []);
@@ -1911,15 +1954,17 @@ export default function DailyStatus() {
   const clearFilters = () => {
     const nextFilters = { limit: 50 };
     setSearchText("");
+    setCustomsStatusFilter("");
+    setReleaseStatusFilter("");
     setFilters(nextFilters);
     loadRows(nextFilters);
   };
 
   const refreshRows = () => loadRows({ ...filters, q: searchText || undefined });
-  const hasFilters = Boolean(searchText || filters.customsRoute || filters.shipmentStatus);
-  const totalOpenTasks = rows.reduce((sum, row) => sum + row.tasks.openCount, 0);
-  const withCotage = rows.filter((row) => row.kootaj.cotageNumber).length;
-  const blockedRows = rows.filter((row) => row.kootaj.customsStatus === "blocked" || row.kootaj.releaseStatus === "blocked").length;
+  const hasFilters = Boolean(searchText || filters.customsRoute || filters.shipmentStatus || customsStatusFilter || releaseStatusFilter);
+  const totalOpenTasks = visibleRows.reduce((sum, row) => sum + row.tasks.openCount, 0);
+  const withCotage = visibleRows.filter((row) => row.kootaj.cotageNumber).length;
+  const blockedRows = visibleRows.filter((row) => row.kootaj.customsStatus === "blocked" || row.kootaj.releaseStatus === "blocked").length;
 
   const filterControls = (
     <>
@@ -1949,12 +1994,15 @@ export default function DailyStatus() {
         ))}
       </div>
       <FilterSelect value={filters.customsRoute} allLabel="همه مسیرها" options={routeOptions} onChange={(value) => setFilterValue("customsRoute", value)} widthClass="w-full lg:w-36" />
+      <FilterSelect value={customsStatusFilter} allLabel="همه وضعیت‌های گمرکی" options={customsStatusOptions} onChange={(value) => setCustomsStatusFilter(value === ALL_VALUE ? "" : value)} widthClass="w-full lg:w-44" testId="daily-status-customs-status-filter" />
+      <FilterSelect value={releaseStatusFilter} allLabel="همه وضعیت‌های ترخیص" options={releaseStatusOptions} onChange={(value) => setReleaseStatusFilter(value === ALL_VALUE ? "" : value)} widthClass="w-full lg:w-44" testId="daily-status-release-status-filter" />
     </>
   );
 
   return (
     <div className="min-h-screen max-w-full overflow-x-hidden bg-background p-3 text-foreground md:p-4 lg:p-6" dir="rtl" data-testid="daily-status-page">
       <div className="mx-auto flex w-full max-w-[1380px] flex-col gap-4">
+        <div className="rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -1968,14 +2016,15 @@ export default function DailyStatus() {
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:min-w-[520px]">
-            <SummaryTile label="ردیف‌ها" value={rows.length} />
+            <SummaryTile label="ردیف‌ها" value={visibleRows.length} />
             <SummaryTile label="کوتاژ ثبت‌شده" value={withCotage} />
             <SummaryTile label="وظایف باز" value={totalOpenTasks} />
             <SummaryTile label="متوقف" value={blockedRows} />
           </div>
         </div>
+        </div>
 
-        <div className="rounded-lg border border-border bg-card p-3" data-testid="daily-status-toolbar">
+        <div className="rounded-xl border border-border bg-card p-3 shadow-sm" data-testid="daily-status-toolbar">
           <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
             <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -2029,13 +2078,13 @@ export default function DailyStatus() {
                 <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
                 در حال بارگیری وضعیت روزانه
               </div>
-            ) : rows.length === 0 ? (
+            ) : visibleRows.length === 0 ? (
               <div className="rounded-lg border border-border bg-card p-8 text-center">
                 <p className="text-sm font-black text-foreground">ردیفی برای نمایش نیست</p>
                 <p className="mt-2 text-xs font-bold text-muted-foreground">فیلترها را تغییر دهید یا محموله جدید ثبت کنید.</p>
               </div>
             ) : (
-              rows.map((row) => (
+              visibleRows.map((row) => (
                 <React.Fragment key={row.id}>
                   <CompactRow
                     row={row}
@@ -2080,13 +2129,13 @@ export default function DailyStatus() {
               <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
               در حال بارگیری وضعیت روزانه
             </div>
-          ) : rows.length === 0 ? (
+          ) : visibleRows.length === 0 ? (
             <div className="rounded-lg border border-border bg-card p-8 text-center">
               <p className="text-sm font-black text-foreground">ردیفی برای نمایش نیست</p>
               <p className="mt-2 text-xs font-bold text-muted-foreground">فیلترها را تغییر دهید یا محموله جدید ثبت کنید.</p>
             </div>
           ) : (
-            rows.map((row) => (
+            visibleRows.map((row) => (
               <React.Fragment key={row.id}>
                 <MobileCard
                   row={row}
