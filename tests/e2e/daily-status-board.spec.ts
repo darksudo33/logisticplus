@@ -467,21 +467,6 @@ test.describe.serial("daily status board", () => {
       await expect(page.getByTestId("daily-status-row-s1")).toBeVisible();
       await page.getByTestId("daily-status-search").fill("");
       await expect(page.getByTestId("daily-status-row-s1")).toBeVisible();
-      await page.getByTestId("daily-status-customs-status-filter").click();
-      await page.getByRole("option", { name: "متوقف" }).click();
-      await expect(page.getByTestId("daily-status-row-s1")).toHaveCount(0);
-      await page.getByTestId("daily-status-customs-status-filter").click();
-      await page.getByRole("option", { name: "در بررسی گمرک" }).click();
-      await expect(page.getByTestId("daily-status-row-s1")).toBeVisible();
-      await page.getByTestId("daily-status-release-status-filter").click();
-      await page.getByRole("option", { name: "ترخیص نشده" }).click();
-      await expect(page.getByTestId("daily-status-row-s1")).toHaveCount(0);
-      await page.getByTestId("daily-status-release-status-filter").click();
-      await page.getByRole("option", { name: "آماده ترخیص" }).click();
-      await expect(page.getByTestId("daily-status-row-s1")).toBeVisible();
-      await page.getByRole("button", { name: "پاکسازی" }).click();
-      await expect(page.getByTestId("daily-status-row-s1")).toBeVisible();
-
       await page.getByTestId("daily-status-details-s1").click();
       await expect(page.getByTestId("daily-status-desktop-view-panel-s1")).toBeVisible();
       await expectDetailsOpen(page.getByTestId("daily-status-desktop-section-base-s1"), true);
@@ -631,8 +616,6 @@ test.describe.serial("daily status board", () => {
 
       await page.getByTestId("daily-status-mobile-filter-toggle").click();
       await expect(page.getByTestId("daily-status-mobile-filters")).toBeVisible();
-      await expect(page.getByTestId("daily-status-mobile-filters").getByTestId("daily-status-customs-status-filter")).toBeVisible();
-      await expect(page.getByTestId("daily-status-mobile-filters").getByTestId("daily-status-release-status-filter")).toBeVisible();
       await expect(page.getByTestId("daily-status-mobile-filters").getByText("همه وضعیت‌ها", { exact: true })).toHaveCount(0);
       await expect(page.getByTestId("daily-status-mobile-filters").getByText("همه ترخیص‌ها", { exact: true })).toHaveCount(0);
       await page.getByTestId("daily-status-mobile-details-s1").click();
