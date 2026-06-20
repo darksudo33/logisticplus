@@ -398,63 +398,6 @@ test.describe.serial("daily status board", () => {
     }
   });
 
-  test("orders daily status rows by closest active shipment timer before created date fallback", async () => {
-    const owner = await loginApi();
-    try {
-      const noTimer = await readOk<any>(
-        await owner.post("/api/shipments", {
-          data: {
-            trackingNumber: await nextValidShipmentCode(),
-            origin: "Daily no timer origin",
-            destination: "Daily no timer destination",
-            status: "LOADING",
-          },
-        })
-      );
-      const laterTimer = await readOk<any>(
-        await owner.post("/api/shipments", {
-          data: {
-            trackingNumber: await nextValidShipmentCode(),
-            origin: "Daily later timer origin",
-            destination: "Daily later timer destination",
-            status: "LOADING",
-          },
-        })
-      );
-      const closestTimer = await readOk<any>(
-        await owner.post("/api/shipments", {
-          data: {
-            trackingNumber: await nextValidShipmentCode(),
-            origin: "Daily closest timer origin",
-            destination: "Daily closest timer destination",
-            status: "LOADING",
-          },
-        })
-      );
-
-      await readOk<any>(
-        await owner.patch(`/api/shipments/${encodeURIComponent(laterTimer.id)}/operational-fields`, {
-          data: { timerDeadlineAt: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString() },
-        })
-      );
-      await readOk<any>(
-        await owner.patch(`/api/shipments/${encodeURIComponent(closestTimer.id)}/operational-fields`, {
-          data: { timerDeadlineAt: new Date(Date.now() + 60 * 60 * 1000).toISOString() },
-        })
-      );
-
-      const rows = await readOk<any[]>(await owner.get("/api/daily-status"));
-      const ids = rows.map((row) => row.id);
-      expect(ids.indexOf(closestTimer.id)).toBeGreaterThanOrEqual(0);
-      expect(ids.indexOf(laterTimer.id)).toBeGreaterThanOrEqual(0);
-      expect(ids.indexOf(noTimer.id)).toBeGreaterThanOrEqual(0);
-      expect(ids.indexOf(closestTimer.id)).toBeLessThan(ids.indexOf(laterTimer.id));
-      expect(ids.indexOf(laterTimer.id)).toBeLessThan(ids.indexOf(noTimer.id));
-    } finally {
-      await disposeContexts(owner);
-    }
-  });
-
   test("keeps the board usable on desktop/mobile and syncs edits both ways with shipment detail", async ({ page }) => {
     const owner = await loginApi();
     const suffix = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
@@ -498,11 +441,6 @@ test.describe.serial("daily status board", () => {
             declarationReference: originalDeclarationReference,
             internalNote: `daily-status-ui-private-${suffix}`,
           },
-        })
-      );
-      await readOk<any>(
-        await owner.patch("/api/shipments/s1/operational-fields", {
-          data: { timerDeadlineAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() },
         })
       );
       const uiRows = await readOk<any[]>(await owner.get("/api/daily-status"));
@@ -710,7 +648,6 @@ test.describe.serial("daily status board", () => {
         [ownerOrganizationId, originalCotageNumber, editedCotageNumber, detailCotageNumber]
       ).catch(() => null);
       await dbQuery("DELETE FROM user_records WHERE item_id IN ($1, $2)", [ownerCardId, detailCardId]).catch(() => null);
-      await owner.patch("/api/shipments/s1/operational-fields", { data: { timerDeadlineAt: null } }).catch(() => null);
       await disposeContexts(owner);
     }
   });

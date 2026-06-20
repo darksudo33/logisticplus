@@ -164,13 +164,13 @@ test.describe.serial("shipment module v2", () => {
       nodes.map((node) => node.getAttribute("data-testid"))
     );
     expect(sectionOrder).toEqual([
+      "shipment-v2-section-notes",
       "shipment-v2-section-base",
       "shipment-v2-section-goods",
       "shipment-v2-section-declarationKootaj",
       "shipment-v2-section-permits",
       "shipment-v2-section-payments",
       "shipment-v2-section-banking",
-      "shipment-v2-section-notes",
     ]);
     await expect(page.getByTestId("shipment-v2-section-orderRegistration")).toHaveCount(0);
 

@@ -15,7 +15,6 @@ import {
   Save,
   Ship,
   ShieldCheck,
-  TimerReset,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -38,7 +37,7 @@ import {
 } from "@/src/app/dailyStatusColumns";
 import { ApiError, apiGet } from "@/src/lib/api";
 import { businessEntitiesApi } from "@/src/lib/businessEntitiesApi";
-import { getShamsiDatePart, parseShamsiDateTimeValue, ShamsiDateTimeField, toEnglishDigits, toPersianDigits } from "@/src/components/ShamsiDateTimeField";
+import { getShamsiDatePart, ShamsiDateTimeField, toEnglishDigits, toPersianDigits } from "@/src/components/ShamsiDateTimeField";
 import { ShipmentChatPanel } from "@/src/components/shipments/ShipmentChatPanel";
 import { ShipmentDocumentsPanel } from "@/src/components/shipments/ShipmentDocumentsPanel";
 import { dailyStatusApi } from "@/src/lib/dailyStatusApi";
@@ -76,6 +75,7 @@ import type {
   ShipmentV2SectionPayload,
   ShipmentV2ShipmentSummary,
   User,
+  UserRole,
 } from "@/src/types";
 
 type EditableSectionProps = {
@@ -175,6 +175,20 @@ const permitNameSuggestions = [
 function displayValue(value?: string | number | null) {
   if (value === undefined || value === null || value === "") return "ثبت نشده";
   return String(value);
+}
+
+function customerCodeLabel(customer: Customer | null, shipment: ShipmentV2ShipmentSummary) {
+  return customer?.customerCode || customer?.code || shipment.customerCode || shipment.customerId || shipment.customerName || "";
+}
+
+function customerManagerLabel(customer: Customer | null, shipment: ShipmentV2ShipmentSummary, role?: UserRole) {
+  const code = customerCodeLabel(customer, shipment);
+  if (role !== "CEO" && role !== "MANAGER") return code;
+
+  const name = customer?.company || customer?.name || shipment.customerName || "";
+  if (!name || name === code) return code;
+  if (!code) return name;
+  return `${name} — ${code}`;
 }
 
 function optionalNumber(value: string) {
@@ -453,163 +467,6 @@ function BaseInfoCard({
   );
 }
 
-function formatTimerDate(value?: string | null) {
-  if (!value) return "ثبت نشده";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString("fa-IR-u-ca-persian", { dateStyle: "short", timeStyle: "short" });
-}
-
-function formatTimerDuration(milliseconds: number) {
-  const totalMinutes = Math.max(0, Math.floor(milliseconds / 60000));
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const minutes = totalMinutes % 60;
-  const parts = [
-    days ? `${toPersianDigits(days)} روز` : "",
-    hours ? `${toPersianDigits(hours)} ساعت` : "",
-    !days && minutes ? `${toPersianDigits(minutes)} دقیقه` : "",
-  ].filter(Boolean);
-  return parts.length ? parts.join(" و ") : "کمتر از یک دقیقه";
-}
-
-function ShipmentTimerPanel({
-  shipment,
-  canUpdate,
-  onShipmentUpdate,
-}: {
-  shipment: ShipmentV2ShipmentSummary;
-  canUpdate: boolean;
-  onShipmentUpdate: (shipment: Partial<ShipmentV2ShipmentSummary>) => void;
-}) {
-  const [deadlineDraft, setDeadlineDraft] = React.useState(shipment.timerDeadlineAt || "");
-  const [now, setNow] = React.useState(() => Date.now());
-  const [isSaving, setIsSaving] = React.useState(false);
-  const deadlineMs = shipment.timerDeadlineAt ? new Date(shipment.timerDeadlineAt).getTime() : NaN;
-  const startedMs = shipment.timerStartedAt ? new Date(shipment.timerStartedAt).getTime() : NaN;
-  const completedMs = shipment.timerCompletedAt ? new Date(shipment.timerCompletedAt).getTime() : NaN;
-  const hasActiveDeadline = Number.isFinite(deadlineMs);
-  const isCompleted = Number.isFinite(completedMs);
-  const comparisonMs = isCompleted ? completedMs : now;
-  const remainingMs = hasActiveDeadline ? deadlineMs - comparisonMs : 0;
-  const elapsedMs = Number.isFinite(startedMs) ? Math.max(0, comparisonMs - startedMs) : 0;
-  const overdue = hasActiveDeadline && remainingMs < 0 && !isCompleted;
-
-  React.useEffect(() => {
-    setDeadlineDraft(shipment.timerDeadlineAt || "");
-  }, [shipment.timerDeadlineAt]);
-
-  React.useEffect(() => {
-    if (!hasActiveDeadline || isCompleted) return undefined;
-    const timer = window.setInterval(() => setNow(Date.now()), 30000);
-    return () => window.clearInterval(timer);
-  }, [hasActiveDeadline, isCompleted]);
-
-  const saveDeadline = async () => {
-    const parsed = parseShamsiDateTimeValue(deadlineDraft);
-    if (!parsed) {
-      toast.error("زمان پایان تایمر را با تقویم شمسی وارد کنید.");
-      return;
-    }
-    setIsSaving(true);
-    try {
-      const updated = await shipmentApi.updateOperationalFields(shipment.id, {
-        timerDeadlineAt: parsed.toISOString(),
-      });
-      onShipmentUpdate(updated);
-      toast.success("تایمر محموله بروزرسانی شد.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "بروزرسانی تایمر ناموفق بود.");
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const removeDeadline = async () => {
-    setIsSaving(true);
-    try {
-      const updated = await shipmentApi.updateOperationalFields(shipment.id, {
-        timerDeadlineAt: null,
-      });
-      onShipmentUpdate(updated);
-      toast.success("تایمر فعال حذف شد.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "حذف تایمر ناموفق بود.");
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  return (
-    <Card data-testid="shipment-v2-timer-panel" className="rounded-xl border-border bg-card shadow-sm">
-      <CardContent className="p-3 sm:p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <TimerReset className="h-4 w-4 text-primary" />
-              <p className="text-xs font-black text-foreground sm:text-sm">تایمر محموله</p>
-              {isCompleted ? (
-                <Badge className="border-none bg-emerald-500/10 text-[10px] font-black text-emerald-700">تکمیل شده</Badge>
-              ) : overdue ? (
-                <Badge className="border-none bg-rose-500/10 text-[10px] font-black text-rose-700">عقب‌افتاده</Badge>
-              ) : hasActiveDeadline ? (
-                <Badge className="border-none bg-primary/10 text-[10px] font-black text-primary">فعال</Badge>
-              ) : (
-                <Badge variant="outline" className="text-[10px] font-black">بدون تایمر</Badge>
-              )}
-            </div>
-            <div className="mt-3 grid gap-2 sm:grid-cols-4">
-              <BaseInfoCard label="مهلت پایان" testId="shipment-v2-timer-deadline-display">
-                {formatTimerDate(shipment.timerDeadlineAt)}
-              </BaseInfoCard>
-              <BaseInfoCard label={overdue ? "تاخیر" : "زمان باقی‌مانده"} testId="shipment-v2-timer-remaining">
-                {hasActiveDeadline ? formatTimerDuration(Math.abs(remainingMs)) : "ثبت نشده"}
-              </BaseInfoCard>
-              <BaseInfoCard label="زمان سپری‌شده" testId="shipment-v2-timer-elapsed">
-                {Number.isFinite(startedMs) ? formatTimerDuration(elapsedMs) : "ثبت نشده"}
-              </BaseInfoCard>
-              <BaseInfoCard label="مدت تکمیل" testId="shipment-v2-timer-completed-duration">
-                {isCompleted && Number.isFinite(startedMs) ? formatTimerDuration(completedMs - startedMs) : "ثبت نشده"}
-              </BaseInfoCard>
-            </div>
-          </div>
-          {canUpdate ? (
-            <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto] lg:w-[520px]">
-              <ShamsiDateTimeField
-                value={deadlineDraft}
-                onChange={setDeadlineDraft}
-                showTime
-                className="min-w-0"
-                triggerClassName="h-9 rounded-lg text-[11px] font-bold"
-              />
-              <Button
-                type="button"
-                data-testid="shipment-v2-timer-save"
-                className="h-9 rounded-lg px-3 text-[11px] font-black"
-                onClick={() => void saveDeadline()}
-                disabled={isSaving}
-              >
-                {isSaving ? <Loader2 className="ml-1 h-3.5 w-3.5 animate-spin" /> : <Save className="ml-1 h-3.5 w-3.5" />}
-                {hasActiveDeadline ? "تنظیم" : "ثبت تایمر"}
-              </Button>
-              <Button
-                type="button"
-                data-testid="shipment-v2-timer-remove"
-                variant="outline"
-                className="h-9 rounded-lg px-3 text-[11px] font-black"
-                onClick={() => void removeDeadline()}
-                disabled={isSaving || !hasActiveDeadline}
-              >
-                حذف
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 function DialogFactRow({ label, value }: { label: string; value?: string | number | null }) {
   return (
     <div className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 px-2.5 py-2">
@@ -675,6 +532,7 @@ function BaseSection({
   updatedAt,
   updatedByName,
   canUpdate,
+  currentUserRole,
   isSaving,
   onSave,
 }: {
@@ -692,6 +550,7 @@ function BaseSection({
   updatedAt?: string | null;
   updatedByName: string;
   canUpdate: boolean;
+  currentUserRole?: UserRole;
   isSaving: boolean;
   onSave: (payload: ShipmentV2BaseSection) => void;
 }) {
@@ -716,7 +575,8 @@ function BaseSection({
       ? "در دسترس نیست"
       : documentCount.toLocaleString("fa-IR");
   const displayStatus = shipmentStatusLabel(shipment.status);
-  const customerIdentifier = customer?.customerCode || customer?.code || shipment.customerCode || shipment.customerId || shipment.customerName || "";
+  const customerIdentifier = customerCodeLabel(customer, shipment);
+  const customerDisplayLabel = customerManagerLabel(customer, shipment, currentUserRole);
   const totalQuantity = sumGoodsMetric(goodsData.goodsRows || [], "quantity");
   const totalContainerCount = sumContainerCount(goodsData);
 
@@ -976,7 +836,7 @@ function BaseSection({
                 className="inline-flex max-w-full items-center gap-1 rounded-md text-right text-[11px] font-black text-primary underline-offset-4 hover:underline sm:text-xs"
                 onClick={() => setIsCustomerDialogOpen(true)}
               >
-                <span className="truncate">{displayValue(customerIdentifier)}</span>
+                <span className="truncate">{displayValue(customerDisplayLabel)}</span>
                 <ExternalLink className="h-3 w-3 shrink-0" />
               </button>
             </BaseInfoCard>
@@ -2309,16 +2169,6 @@ export default function ShipmentDetail() {
     }
   };
 
-  const updateShipmentSummary = React.useCallback((updated: Partial<ShipmentV2ShipmentSummary>) => {
-    setData((current) => current ? {
-      ...current,
-      shipment: {
-        ...current.shipment,
-        ...updated,
-      },
-    } : current);
-  }, []);
-
   if (isLoading) {
     return (
       <div className="app-page flex min-h-[50vh] items-center justify-center font-sans" dir="rtl">
@@ -2414,9 +2264,17 @@ export default function ShipmentDetail() {
         </Card>
       ) : (
         <div className="grid gap-4">
-          <ShipmentTimerPanel shipment={shipment} canUpdate={canUpdate} onShipmentUpdate={updateShipmentSummary} />
+          <SectionCard sectionKey="notes" title="یادداشت ها" icon={NotebookText}>
+            <NotesSection
+              data={profile.sections.notes}
+              canUpdate={canUpdate}
+              isSaving={savingSection === "notes"}
+              onSave={(payload) => void saveSection("notes", payload)}
+            />
+          </SectionCard>
           {sectionDefinitions.map((section) => {
             const Icon = section.icon;
+            if (section.key === "notes") return null;
             if (section.key === "base") {
               return (
                 <React.Fragment key={section.key}>
@@ -2436,6 +2294,7 @@ export default function ShipmentDetail() {
                       updatedAt={updatedAt}
                       updatedByName={updatedByName}
                       canUpdate={canUpdate}
+                      currentUserRole={currentUser?.role}
                       isSaving={savingSection === "base"}
                       onSave={(payload) => void saveSection("base", payload)}
                     />
@@ -2514,20 +2373,6 @@ export default function ShipmentDetail() {
                       canUpdate={canUpdate}
                       isSaving={savingSection === "banking"}
                       onSave={(payload) => void saveSection("banking", payload)}
-                    />
-                  </SectionCard>
-                </React.Fragment>
-              );
-            }
-            if (section.key === "notes") {
-              return (
-                <React.Fragment key={section.key}>
-                  <SectionCard sectionKey={section.key} title={section.title} icon={Icon}>
-                    <NotesSection
-                      data={profile.sections.notes}
-                      canUpdate={canUpdate}
-                      isSaving={savingSection === "notes"}
-                      onSave={(payload) => void saveSection("notes", payload)}
                     />
                   </SectionCard>
                 </React.Fragment>

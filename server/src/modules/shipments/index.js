@@ -7,7 +7,6 @@ export * from "./list-shipments/index.js";
 export * from "./status/index.js";
 export * from "./steps/index.js";
 export * from "./tasks/index.js";
-export * from "./timer/index.js";
 export * from "./tracking/index.js";
 export * from "./update-basic-info/index.js";
 export * from "./update-operational-fields/index.js";

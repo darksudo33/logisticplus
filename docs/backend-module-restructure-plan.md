@@ -106,11 +106,6 @@ server/src/modules/shipments/
     shipment-status.service.*
     shipment-status.mapper.*
 
-  timer/
-    shipment-timer.service.*
-    shipment-timer.repository.*
-    shipment-timer.validation.*
-
   kootaj/
     shipment-kootaj.service.*
     shipment-kootaj.repository.*
@@ -383,7 +378,6 @@ Scope:
 - Move daily status route/service/repository logic.
 - Preserve:
   - shipment status filters
-  - timer sorting
   - kootaj fields
   - editable shipment basic info from daily kootaj page
   - tenant-scoped reads/writes
@@ -419,7 +413,6 @@ Scope:
   - `update-basic-info/`
   - `update-operational-fields/`
   - `status/`
-  - `timer/`
   - `containers/`
   - `tracking/`
   - `archive/`
@@ -427,8 +420,6 @@ Scope:
 - Preserve:
   - five-pillar shipment statuses
   - `مرحله فعلی` custom stage
-  - timer set/adjust/remove/complete behavior
-  - timer sorting
   - exited archive behavior
   - public tracking DTO allowlist
   - workflow template integration

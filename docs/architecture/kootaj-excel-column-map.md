@@ -69,7 +69,7 @@ There is no standalone Kootaj Board edit surface. Daily Status and Shipment Deta
 | Origin | `shipment.origin`, `baseInfo.origin` | `shipments.origin` plus V2 base mirror | Implemented/read-only | Later, only through shared shipment service | Yes | Yes | No | Requires clear route semantics with ports. |
 | Destination / delivery port | `shipment.destination`, `baseInfo.deliveryPort` | `shipments.destination` plus V2 base mirror | Implemented/read-only | Later, only through shared shipment service | Yes | Yes | No | Do not split destination vs delivery port without client confirmation. |
 | Discharge port | `baseInfo.dischargePort` | `shipment_v2_profiles.sections_json.base.dischargePort` | Projection/read-only | Client confirmation first | Yes | Yes | No | Not shown as its own Kootaj column yet. |
-| Shipment status | `shipment.status` | `shipments.status` | Implemented/read-only | Not yet | Yes | Yes | No | Status changes affect workflow/timers; use existing transition path only. |
+| Shipment status | `shipment.status` | `shipments.status` | Implemented/read-only | Not yet | Yes | Yes | No | Status changes affect workflow; use existing transition path only. |
 | Current stage | `baseInfo.currentStage` | V2 base section, workflow fallback | Projection/read-only | Not next | Yes | Yes | No | Needs ownership decision between manual stage and workflow step. |
 | Workflow phase | `workflow.currentPhase` | Workflow projection | Implemented/read-only | No | Yes if useful | Workflow module | No | Derived; edit workflow through workflow APIs only. |
 | Workflow current step | `workflow.currentStepLabel` | Workflow projection | Implemented/read-only | No | Yes | Workflow module | No | Derived label, not a writable board field. |

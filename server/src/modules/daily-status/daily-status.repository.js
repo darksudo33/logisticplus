@@ -12,9 +12,8 @@ import {
   getIranImportPhase,
   getIranImportStep,
 } from "../../../../src/shared/iran-import-customs-workflow.js";
-import { isShipmentTerminalStatus, normalizeShipmentStatus, shipmentStatusLabel } from "../../../../src/shared/shipment-statuses.js";
+import { normalizeShipmentStatus, shipmentStatusLabel } from "../../../../src/shared/shipment-statuses.js";
 import { normalizeWorkflowDefinition } from "../../../../src/server/repositories/shipment-workflow-templates.js";
-import { shipmentTimerOrderBy } from "../../../../src/server/repositories/shipment-sort.js";
 import {
   getActiveShipmentFormTemplateForShipment,
   validateCustomFieldPatchForTemplate,
@@ -646,7 +645,7 @@ function dailyStatusQuery(filters = {}, organizationId, { includeCustomerPrivate
         ON assigned_manager.id = s.assigned_manager_id
        AND assigned_manager.organization_id = s.organization_id
       WHERE ${conditions.join(" AND ")}
-      ORDER BY ${shipmentTimerOrderBy("s")}
+      ORDER BY s.created_at DESC
       LIMIT ${limitParam}
     `,
   };
@@ -765,7 +764,7 @@ export async function updateDailyStatusRow(pool, {
     }
 
     const shipment = await client.query(
-      `SELECT id, shipment_code, status, shipment_type_code, origin, destination, timer_started_at, timer_completed_at
+      `SELECT id, shipment_code, status, shipment_type_code, origin, destination
        FROM shipments
        WHERE id = $1
          AND organization_id = $2
@@ -863,13 +862,6 @@ export async function updateDailyStatusRow(pool, {
       if (hasOwn(baseInfoUpdates, "status")) {
         const nextStatus = normalizeShipmentStatus(baseInfoUpdates.status);
         addShipmentColumn("status", nextStatus);
-        const wasTerminal = isShipmentTerminalStatus(shipmentRow.status);
-        const isTerminal = isShipmentTerminalStatus(nextStatus);
-        if (isTerminal && !wasTerminal && shipmentRow.timer_started_at && !shipmentRow.timer_completed_at) {
-          addShipmentColumn("timer_completed_at", new Date().toISOString());
-        } else if (!isTerminal && wasTerminal) {
-          addShipmentColumn("timer_completed_at", null);
-        }
       }
       if (hasOwn(baseInfoUpdates, "origin")) addShipmentColumn("origin", trimNullableText(baseInfoUpdates.origin));
       if (hasOwn(baseInfoUpdates, "deliveryPort")) addShipmentColumn("destination", trimNullableText(baseInfoUpdates.deliveryPort));
