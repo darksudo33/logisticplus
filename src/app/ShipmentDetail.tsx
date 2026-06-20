@@ -31,11 +31,17 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import {
+  customsStatusOptions,
+  labelForOption,
+  releaseStatusOptions,
+} from "@/src/app/dailyStatusColumns";
 import { ApiError, apiGet } from "@/src/lib/api";
 import { businessEntitiesApi } from "@/src/lib/businessEntitiesApi";
 import { getShamsiDatePart, parseShamsiDateTimeValue, ShamsiDateTimeField, toEnglishDigits, toPersianDigits } from "@/src/components/ShamsiDateTimeField";
 import { ShipmentChatPanel } from "@/src/components/shipments/ShipmentChatPanel";
 import { ShipmentDocumentsPanel } from "@/src/components/shipments/ShipmentDocumentsPanel";
+import { dailyStatusApi } from "@/src/lib/dailyStatusApi";
 import { shipmentApi } from "@/src/lib/shipmentApi";
 import { shipmentV2Api } from "@/src/lib/shipmentV2Api";
 import {
@@ -48,6 +54,7 @@ import type {
   CommercialCard,
   BusinessEntityContact,
   Customer,
+  DailyStatusBoardRow,
   MalvaniProfile,
   Shipment,
   ShipmentV2BankingSection,
@@ -1366,11 +1373,13 @@ function GoodsSection({
 function DeclarationKootajSection({
   data,
   canUpdate,
+  dailyStatusRow,
   isSaving,
   onSave,
 }: {
   data: ShipmentV2DeclarationKootajSection;
   canUpdate: boolean;
+  dailyStatusRow: DailyStatusBoardRow | null;
   isSaving: boolean;
   onSave: (payload: ShipmentV2DeclarationKootajSection) => void;
 }) {
@@ -1386,6 +1395,8 @@ function DeclarationKootajSection({
   };
 
   const routeLabel = data.customsRoute ? customsRouteLabels[data.customsRoute] : "";
+  const customsStatusLabel = labelForOption(customsStatusOptions, dailyStatusRow?.kootaj.customsStatus);
+  const releaseStatusLabel = labelForOption(releaseStatusOptions, dailyStatusRow?.kootaj.releaseStatus);
   const totalCurrency = draft.totalValueCurrency || data.totalValueCurrency || "IRR";
   const finalPaidCurrency = draft.finalPaidCurrency || data.finalPaidCurrency || "IRR";
 
@@ -1497,6 +1508,14 @@ function DeclarationKootajSection({
           </BaseInfoCard>
         </div>
       )}
+      <div className="grid grid-cols-2 gap-2">
+        <BaseInfoCard label="وضعیت گمرکی" testId="shipment-v2-declaration-customs-status-value">
+          {displayValue(customsStatusLabel)}
+        </BaseInfoCard>
+        <BaseInfoCard label="وضعیت ترخیص / خروج" testId="shipment-v2-declaration-release-status-value">
+          {displayValue(releaseStatusLabel)}
+        </BaseInfoCard>
+      </div>
       <SectionActions
         canUpdate={canUpdate}
         isSaving={isSaving}
@@ -2151,6 +2170,7 @@ export default function ShipmentDetail() {
   const [errorMessage, setErrorMessage] = React.useState("");
   const [documentCount, setDocumentCount] = React.useState<number | null>(null);
   const [isDocumentCountLoading, setIsDocumentCountLoading] = React.useState(false);
+  const [dailyStatusRow, setDailyStatusRow] = React.useState<DailyStatusBoardRow | null>(null);
   const [malvaniProfiles, setMalvaniProfiles] = React.useState<MalvaniProfile[]>([]);
   const [isMalvaniLoading, setIsMalvaniLoading] = React.useState(false);
   const profileFlowCode = data?.profile?.flowCode || "IMPORT_SHIP";
@@ -2227,6 +2247,26 @@ export default function ShipmentDetail() {
       })
       .finally(() => {
         if (isActive) setIsDocumentCountLoading(false);
+      });
+    return () => {
+      isActive = false;
+    };
+  }, [id]);
+
+  React.useEffect(() => {
+    if (!id) return;
+    let isActive = true;
+    setDailyStatusRow(null);
+    dailyStatusApi.getForShipment(id)
+      .then((row) => {
+        if (isActive) setDailyStatusRow(row);
+      })
+      .catch((error) => {
+        if (!isActive) return;
+        if (!(error instanceof ApiError && error.status === 403)) {
+          console.error("Load shipment daily status failed", error);
+        }
+        setDailyStatusRow(null);
       });
     return () => {
       isActive = false;
@@ -2423,6 +2463,7 @@ export default function ShipmentDetail() {
                     <DeclarationKootajSection
                       data={profile.sections.declarationKootaj}
                       canUpdate={canUpdate}
+                      dailyStatusRow={dailyStatusRow}
                       isSaving={savingSection === "declarationKootaj"}
                       onSave={(payload) => void saveSection("declarationKootaj", payload)}
                     />

@@ -341,6 +341,7 @@ test.describe.serial("kootaj board", () => {
       const rowTestId = safeTestId(shipmentId);
       const initialCotageNumber = `UI-COTAGE-${suffix}`;
       const nextCotageNumber = `UI-COTAGE-SAVED-${suffix}`;
+      const startedAt = new Date(Date.now() - 1000).toISOString();
       const initial = await readOk<any>(
         await owner.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
           data: {
@@ -391,6 +392,10 @@ test.describe.serial("kootaj board", () => {
       await expect(page.getByTestId(`kootaj-board-row-${rowTestId}`)).toContainText(nextCotageNumber);
       await expect(page.locator('[data-testid="kootaj-board-customer-input"], [data-testid="kootaj-board-shipment-code-input"], [data-testid="kootaj-board-task-count-input"], [data-testid="kootaj-board-document-count-input"]')).toHaveCount(0);
 
+      await page.reload();
+      await page.getByTestId("kootaj-board-search").fill(nextCotageNumber);
+      await expect(page.getByTestId(`kootaj-board-row-${rowTestId}`)).toContainText(nextCotageNumber);
+
       const kootajRows = await readOk<any[]>(
         await owner.get(`/api/kootaj-board?shipmentId=${encodeURIComponent(shipmentId)}`)
       );
@@ -405,9 +410,55 @@ test.describe.serial("kootaj board", () => {
         await owner.get(`/api/shipments/${encodeURIComponent(shipmentId)}/daily-status`)
       );
       expect(detailAlias.kootaj).toMatchObject(kootajRows[0].kootaj);
+
+      const audit = await dbQuery(
+        `SELECT after_json, metadata_json
+         FROM audit_logs
+         WHERE event_type = 'daily_status.update'
+           AND resource_id = $1
+           AND metadata_json->>'source' = 'kootaj-board'
+           AND created_at >= $2
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [shipmentId, startedAt]
+      );
+      expect(audit.rows[0]?.metadata_json?.changedFields).toEqual(
+        expect.arrayContaining(["cotageNumber", "customsRoute", "customsStatus", "releaseStatus"])
+      );
+      expect(audit.rows[0]?.after_json).toEqual(expect.objectContaining({
+        cotageNumber: nextCotageNumber,
+        customsRoute: "red",
+        customsStatus: "ready_for_release",
+        releaseStatus: "released",
+      }));
+
+      await page.goto(`/shipments/${encodeURIComponent(shipmentId)}`);
+      await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
+      await expect(page.getByTestId("shipment-v2-declaration-cotage-number-value")).toContainText(nextCotageNumber);
+      await expect(page.getByTestId("shipment-v2-declaration-customs-route-value")).toContainText("قرمز");
+      await expect(page.getByTestId("shipment-v2-declaration-customs-status-value")).toContainText("آماده ترخیص");
+      await expect(page.getByTestId("shipment-v2-declaration-release-status-value")).toContainText("ترخیص شده");
+      await expect(page.locator('[data-testid="shipment-v2-declaration-customs-status-input"], [data-testid="shipment-v2-declaration-release-status-input"]')).toHaveCount(0);
     } finally {
       await disposeContexts(owner);
     }
+  });
+
+  test("hides edit controls when the hydrated session lacks update permission", async ({ page }) => {
+    await loginPageByApi(page);
+    await page.route("**/api/auth/me", async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json();
+      if (payload?.data) payload.data.permissions = ["dashboard.view", "shipments.view_all"];
+      if (payload?.data?.user) payload.data.user.permissions = ["dashboard.view", "shipments.view_all"];
+      await route.fulfill({ response, json: payload });
+    });
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/kootaj-board");
+    await expect(page.getByTestId("kootaj-board-page")).toBeVisible();
+    await expect(page.getByTestId("kootaj-board-row-s1")).toBeVisible();
+    await expect(page.locator('[data-testid^="kootaj-board-edit-"], [data-testid^="kootaj-board-mobile-edit-"]')).toHaveCount(0);
   });
 
   test("handles stale Kootaj edit versions without overwriting newer data", async ({ page }) => {
