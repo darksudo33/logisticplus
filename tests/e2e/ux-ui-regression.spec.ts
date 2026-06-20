@@ -184,10 +184,33 @@ test.describe.serial("UX/UI regression sweep", () => {
   test("shipment edit route opens a CEO-only limited popup form", async ({ page }) => {
     const api = await loginApi();
     const trackingNumber = await nextValidShipmentCode();
+    const customerMarker = `UXEDIT${Date.now()}`;
+    const originalCustomer = await readOk<any>(
+      await api.post("/api/customers", {
+        data: {
+          name: `${customerMarker} Original`,
+          company: `${customerMarker} Original Co`,
+          email: `${customerMarker.toLowerCase()}-original@example.test`,
+          phone: "09120000000",
+        },
+      })
+    );
+    const correctedCustomer = await readOk<any>(
+      await api.post("/api/customers", {
+        data: {
+          name: `${customerMarker} Corrected`,
+          company: `${customerMarker} Corrected Co`,
+          email: `${customerMarker.toLowerCase()}-corrected@example.test`,
+          phone: "09120000001",
+        },
+      })
+    );
     const shipment = await readOk<any>(
       await api.post("/api/shipments", {
         data: {
           trackingNumber,
+          customerId: originalCustomer.id,
+          customerName: originalCustomer.company,
           origin: "Edit origin before",
           destination: "Edit destination before",
           status: "LOADING",
@@ -200,6 +223,7 @@ test.describe.serial("UX/UI regression sweep", () => {
       await page.goto(`/shipments/${shipment.id}/edit`);
       await expect(page.getByRole("dialog")).toBeVisible();
       await expect(page.getByTestId("shipment-edit-tracking-number-input")).toHaveValue(trackingNumber);
+      await expect(page.getByTestId("shipment-edit-customer-select")).toHaveValue(originalCustomer.id);
       await expect(page.getByTestId("shipment-edit-origin-input")).toBeVisible();
       await expect(page.getByTestId("shipment-edit-destination-input")).toBeVisible();
       await expect(page.getByTestId("shipment-edit-discharge-port-input")).toBeVisible();
@@ -207,6 +231,7 @@ test.describe.serial("UX/UI regression sweep", () => {
       await expect(page.getByText("وضعیت فعلی")).toHaveCount(0);
       await expect(page.getByText("نوع محموله")).toHaveCount(0);
 
+      await page.getByTestId("shipment-edit-customer-select").selectOption(correctedCustomer.id);
       await page.getByTestId("shipment-edit-tracking-number-input").fill(nextTrackingNumber);
       await page.getByTestId("shipment-edit-origin-input").fill("Edit origin after");
       await page.getByTestId("shipment-edit-destination-input").fill("Edit destination after");
@@ -224,10 +249,13 @@ test.describe.serial("UX/UI regression sweep", () => {
       expect(updated.origin).toBe("Edit origin after");
       expect(updated.destination).toBe("Edit destination after");
       expect(updated.dischargePort).toBe("Edit discharge after");
+      expect(updated.customerId).toBe(correctedCustomer.id);
+      expect(updated.customerCode).toBe(correctedCustomer.customerCode);
     } finally {
       const client = await dbClient();
       try {
         await client.query("DELETE FROM shipments WHERE id = $1", [shipment.id]);
+        await client.query("DELETE FROM customers WHERE id = ANY($1::text[])", [[originalCustomer.id, correctedCustomer.id]]);
       } finally {
         await client.end();
         await api.dispose();
