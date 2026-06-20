@@ -76,6 +76,7 @@ import type {
   ShipmentV2SectionPayload,
   ShipmentV2ShipmentSummary,
   User,
+  UserRole,
 } from "@/src/types";
 
 type EditableSectionProps = {
@@ -175,6 +176,20 @@ const permitNameSuggestions = [
 function displayValue(value?: string | number | null) {
   if (value === undefined || value === null || value === "") return "ثبت نشده";
   return String(value);
+}
+
+function customerCodeLabel(customer: Customer | null, shipment: ShipmentV2ShipmentSummary) {
+  return customer?.customerCode || customer?.code || shipment.customerCode || shipment.customerId || shipment.customerName || "";
+}
+
+function customerManagerLabel(customer: Customer | null, shipment: ShipmentV2ShipmentSummary, role?: UserRole) {
+  const code = customerCodeLabel(customer, shipment);
+  if (role !== "CEO" && role !== "MANAGER") return code;
+
+  const name = customer?.company || customer?.name || shipment.customerName || "";
+  if (!name || name === code) return code;
+  if (!code) return name;
+  return `${name} — ${code}`;
 }
 
 function optionalNumber(value: string) {
@@ -675,6 +690,7 @@ function BaseSection({
   updatedAt,
   updatedByName,
   canUpdate,
+  currentUserRole,
   isSaving,
   onSave,
 }: {
@@ -692,6 +708,7 @@ function BaseSection({
   updatedAt?: string | null;
   updatedByName: string;
   canUpdate: boolean;
+  currentUserRole?: UserRole;
   isSaving: boolean;
   onSave: (payload: ShipmentV2BaseSection) => void;
 }) {
@@ -716,7 +733,8 @@ function BaseSection({
       ? "در دسترس نیست"
       : documentCount.toLocaleString("fa-IR");
   const displayStatus = shipmentStatusLabel(shipment.status);
-  const customerIdentifier = customer?.customerCode || customer?.code || shipment.customerCode || shipment.customerId || shipment.customerName || "";
+  const customerIdentifier = customerCodeLabel(customer, shipment);
+  const customerDisplayLabel = customerManagerLabel(customer, shipment, currentUserRole);
   const totalQuantity = sumGoodsMetric(goodsData.goodsRows || [], "quantity");
   const totalContainerCount = sumContainerCount(goodsData);
 
@@ -976,7 +994,7 @@ function BaseSection({
                 className="inline-flex max-w-full items-center gap-1 rounded-md text-right text-[11px] font-black text-primary underline-offset-4 hover:underline sm:text-xs"
                 onClick={() => setIsCustomerDialogOpen(true)}
               >
-                <span className="truncate">{displayValue(customerIdentifier)}</span>
+                <span className="truncate">{displayValue(customerDisplayLabel)}</span>
                 <ExternalLink className="h-3 w-3 shrink-0" />
               </button>
             </BaseInfoCard>
@@ -2436,6 +2454,7 @@ export default function ShipmentDetail() {
                       updatedAt={updatedAt}
                       updatedByName={updatedByName}
                       canUpdate={canUpdate}
+                      currentUserRole={currentUser?.role}
                       isSaving={savingSection === "base"}
                       onSave={(payload) => void saveSection("base", payload)}
                     />
