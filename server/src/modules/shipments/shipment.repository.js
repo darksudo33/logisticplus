@@ -29,6 +29,11 @@ export function toUiShipment(row, { includeCustomerPrivateDetails = true } = {})
   const v2Origin = textValue(v2Base.origin);
   const v2DischargePort = textValue(v2Base.dischargePort);
   const v2DeliveryPort = textValue(v2Base.deliveryPort);
+  const v2GoodsRows = Array.isArray(v2Sections.goods?.goodsRows) ? v2Sections.goods.goodsRows : [];
+  const goodsQuantityTotal = v2GoodsRows.reduce((sum, item) => {
+    const quantity = Number(item?.quantity);
+    return Number.isFinite(quantity) ? sum + quantity : sum;
+  }, 0);
   const freeTimeDays = Number(legacy.freeTimeDays || row.free_time_days || 0);
   const customerCode = row.customer_code || legacy.customerCode || legacy.customer_code || row.customer_id || legacy.customerId || "";
   const customerName = customerCode;
@@ -55,6 +60,8 @@ export function toUiShipment(row, { includeCustomerPrivateDetails = true } = {})
     createdAt: row.created_at || legacy.createdAt || new Date().toISOString(),
     estimatedDelivery: row.estimated_delivery_at || legacy.estimatedDelivery || "",
     actualDelivery: row.actual_delivery_at || legacy.actualDelivery || undefined,
+    goodsTotalCount: goodsQuantityTotal || v2GoodsRows.length || 0,
+    firstGoodsName: textValue(v2GoodsRows[0]?.description),
     freeTimeDays: Number.isFinite(freeTimeDays) ? freeTimeDays : 0,
     isArchived: Boolean(row.archived_at || legacy.isArchived),
     isExitedArchived: Boolean(row.exited_archived_at),

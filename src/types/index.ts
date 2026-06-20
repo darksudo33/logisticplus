@@ -89,6 +89,8 @@ export interface Shipment {
   createdAt: string;
   estimatedDelivery: string;
   actualDelivery?: string;
+  goodsTotalCount?: number;
+  firstGoodsName?: string;
   freeTimeDays: number;
   isArchived?: boolean;
   isExitedArchived?: boolean;

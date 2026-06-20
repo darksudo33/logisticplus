@@ -333,12 +333,16 @@ test.describe.serial("shipment module v2", () => {
     expect(listShipment.deliveryPort).toBe("Tehran");
     expect(listShipment.displayStatusText).toBe(detailStatusText);
     expect(listShipment.currentStage).toBe(detailCurrentStage);
+    expect(listShipment.goodsTotalCount).toBe(15);
+    expect(listShipment.firstGoodsName).toBe("کالای تست V2");
 
     await page.goto("/shipments");
     const shipmentRow = page.getByTestId(`shipment-row-${shipmentId}`);
     await expect(shipmentRow).toContainText(customerIdentifier);
     await expect(shipmentRow).toContainText("Dubai");
     await expect(shipmentRow).toContainText("Tehran");
+    await expect(page.getByTestId(`shipment-row-goods-count-${shipmentId}`)).toContainText(persianNumber(15));
+    await expect(page.getByTestId(`shipment-row-first-goods-${shipmentId}`)).toContainText("کالای تست V2");
     await expect(shipmentRow).toContainText("کوتاژ شده");
     await expect(shipmentRow).toContainText(detailCurrentStage);
     await expect(shipmentRow).not.toContainText(`${marker} Company`);

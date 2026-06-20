@@ -15,9 +15,10 @@ import { Label } from "@/components/ui/label";
 import { shipmentApi } from "@/src/lib/shipmentApi";
 import { shipmentV2Api } from "@/src/lib/shipmentV2Api";
 import { useAppStore } from "@/src/store/useAppStore";
-import type { Shipment } from "@/src/types";
+import type { Customer, Shipment } from "@/src/types";
 
 type ShipmentEditFormData = {
+  customerId: string;
   trackingNumber: string;
   origin: string;
   destination: string;
@@ -25,18 +26,28 @@ type ShipmentEditFormData = {
 };
 
 const formFromShipment = (shipment: Shipment): ShipmentEditFormData => ({
+  customerId: shipment.customerId || "",
   trackingNumber: shipment.trackingNumber || "",
   origin: shipment.origin || "",
   destination: shipment.deliveryPort || shipment.destination || "",
   dischargePort: shipment.dischargePort || "",
 });
 
+const customerLabel = (customer: Customer) => {
+  const name = customer.company || customer.name || customer.customerCode || customer.code || customer.id;
+  const code = customer.customerCode || customer.code;
+  return code && code !== name ? `${name} — ${code}` : name;
+};
+
 export function ShipmentEdit() {
   const { id } = useParams();
   const navigate = useNavigate();
   const currentUser = useAppStore((state) => state.currentUser);
+  const customers = useAppStore((state) => state.customers);
+  const refreshCustomers = useAppStore((state) => state.refreshCustomers);
   const [shipment, setShipment] = React.useState<Shipment | null>(null);
   const [formData, setFormData] = React.useState<ShipmentEditFormData>({
+    customerId: "",
     trackingNumber: "",
     origin: "",
     destination: "",
@@ -66,12 +77,20 @@ export function ShipmentEdit() {
     };
   }, [id]);
 
+  React.useEffect(() => {
+    if (!currentUser || customers.length > 0) return;
+    void refreshCustomers().catch(() => {
+      toast.error("بارگذاری مشتری‌ها ناموفق بود.");
+    });
+  }, [currentUser, customers.length, refreshCustomers]);
+
   const close = () => navigate(shipment ? `/shipments/${shipment.id}` : "/shipments");
 
   const saveShipment = async () => {
     if (!shipment) return;
     setIsSaving(true);
     try {
+      const customerChanged = Boolean(formData.customerId) && formData.customerId !== shipment.customerId;
       if (shipment.hasV2Profile) {
         const profile = await shipmentV2Api.get(shipment.id);
         const base = profile.profile?.sections.base || {};
@@ -82,8 +101,14 @@ export function ShipmentEdit() {
           deliveryPort: formData.destination,
           dischargePort: formData.dischargePort,
         });
+        if (customerChanged) {
+          await shipmentApi.updateOperationalFields(shipment.id, {
+            customerId: formData.customerId,
+          });
+        }
       } else {
         await shipmentApi.updateOperationalFields(shipment.id, {
+          customerId: formData.customerId || undefined,
           trackingNumber: formData.trackingNumber,
           origin: formData.origin,
           destination: formData.destination,
@@ -116,7 +141,7 @@ export function ShipmentEdit() {
           <DialogHeader>
             <DialogTitle className="text-base font-black">ویرایش اطلاعات اصلی محموله</DialogTitle>
             <DialogDescription className="text-xs font-bold">
-              فقط شماره رهگیری، مبدا، مقصد و محل تخلیه قابل تغییر است.
+              فقط مشتری، شماره رهگیری، مبدا، مقصد و محل تخلیه قابل تغییر است.
             </DialogDescription>
           </DialogHeader>
 
@@ -135,6 +160,24 @@ export function ShipmentEdit() {
                 void saveShipment();
               }}
             >
+              <div className="space-y-1.5">
+                <Label className="text-xs font-black text-muted-foreground">مشتری</Label>
+                <select
+                  value={formData.customerId}
+                  onChange={(event) => setFormData((current) => ({ ...current, customerId: event.target.value }))}
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm font-bold text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  data-testid="shipment-edit-customer-select"
+                >
+                  <option value="" disabled>انتخاب مشتری</option>
+                  {customers
+                    .filter((customer) => !customer.isArchived || customer.id === formData.customerId)
+                    .map((customer) => (
+                      <option key={customer.id} value={customer.id}>
+                        {customerLabel(customer)}
+                      </option>
+                    ))}
+                </select>
+              </div>
               <div className="space-y-1.5">
                 <Label className="text-xs font-black text-muted-foreground">شماره رهگیری</Label>
                 <Input
