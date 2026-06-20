@@ -1618,34 +1618,6 @@ function RowDetailsPanel({
   );
 }
 
-function FilterSelect({
-  value,
-  allLabel,
-  options,
-  onChange,
-  widthClass,
-  testId,
-}: {
-  value?: string;
-  allLabel: string;
-  options: Array<{ value: string; label: string }>;
-  onChange: (value: string) => void;
-  widthClass?: string;
-  testId?: string;
-}) {
-  return (
-    <Select value={value || ALL_VALUE} onValueChange={onChange}>
-      <SelectTrigger className={cn("h-10 rounded-lg bg-background text-xs font-bold", widthClass)} data-testid={testId}>
-        <span className="truncate">{value ? labelForOption(options, value) : allLabel}</span>
-      </SelectTrigger>
-      <SelectContent className="bg-card text-foreground" dir="rtl">
-        <SelectItem value={ALL_VALUE}>{allLabel}</SelectItem>
-        {options.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
-      </SelectContent>
-    </Select>
-  );
-}
-
 function CompactRow({
   row,
   isActive,
@@ -1825,19 +1797,15 @@ export default function DailyStatus() {
   const [draft, setDraft] = React.useState<DailyStatusPatch>({});
   const [savingId, setSavingId] = React.useState<string | null>(null);
   const [showMobileFilters, setShowMobileFilters] = React.useState(false);
-  const [customsStatusFilter, setCustomsStatusFilter] = React.useState("");
-  const [releaseStatusFilter, setReleaseStatusFilter] = React.useState("");
   const hasLoadedRowsRef = React.useRef(false);
 
   const visibleRows = React.useMemo(() => {
     const query = searchText.trim().toLowerCase();
     return rows.filter((row) => {
       if (query && !rowSearchText(row).includes(query)) return false;
-      if (customsStatusFilter && row.kootaj.customsStatus !== customsStatusFilter) return false;
-      if (releaseStatusFilter && row.kootaj.releaseStatus !== releaseStatusFilter) return false;
       return true;
     });
-  }, [rows, searchText, customsStatusFilter, releaseStatusFilter]);
+  }, [rows, searchText]);
 
   const activeRow = React.useMemo(() => rows.find((row) => row.id === activeRowId) || null, [rows, activeRowId]);
   const sectionsForRow = React.useCallback((row: DailyStatusBoardRow | null) => dailyStatusSectionsForRow(row), []);
@@ -1951,14 +1919,12 @@ export default function DailyStatus() {
   const clearFilters = () => {
     const nextFilters = { limit: 50 };
     setSearchText("");
-    setCustomsStatusFilter("");
-    setReleaseStatusFilter("");
     setFilters(nextFilters);
     loadRows(nextFilters);
   };
 
   const refreshRows = () => loadRows({ ...filters, q: searchText || undefined });
-  const hasFilters = Boolean(searchText || filters.customsRoute || filters.shipmentStatus || customsStatusFilter || releaseStatusFilter);
+  const hasFilters = Boolean(searchText || filters.shipmentStatus);
   const totalOpenTasks = visibleRows.reduce((sum, row) => sum + row.tasks.openCount, 0);
   const withCotage = visibleRows.filter((row) => row.kootaj.cotageNumber).length;
   const blockedRows = visibleRows.filter((row) => row.kootaj.customsStatus === "blocked" || row.kootaj.releaseStatus === "blocked").length;
@@ -1990,14 +1956,11 @@ export default function DailyStatus() {
           </Button>
         ))}
       </div>
-      <FilterSelect value={filters.customsRoute} allLabel="همه مسیرها" options={routeOptions} onChange={(value) => setFilterValue("customsRoute", value)} widthClass="w-full lg:w-36" />
-      <FilterSelect value={customsStatusFilter} allLabel="همه وضعیت‌های گمرکی" options={customsStatusOptions} onChange={(value) => setCustomsStatusFilter(value === ALL_VALUE ? "" : value)} widthClass="w-full lg:w-44" testId="daily-status-customs-status-filter" />
-      <FilterSelect value={releaseStatusFilter} allLabel="همه وضعیت‌های ترخیص" options={releaseStatusOptions} onChange={(value) => setReleaseStatusFilter(value === ALL_VALUE ? "" : value)} widthClass="w-full lg:w-44" testId="daily-status-release-status-filter" />
     </>
   );
 
   return (
-    <div className="min-h-screen max-w-full overflow-x-hidden bg-background p-3 text-foreground md:p-4 lg:p-6" dir="rtl" data-testid="daily-status-page">
+    <div className="min-h-screen max-w-full overflow-x-clip bg-background p-3 text-foreground md:p-4 lg:p-6" dir="rtl" data-testid="daily-status-page">
       <div className="mx-auto flex w-full max-w-[1380px] flex-col gap-4">
         <div className="rounded-2xl border border-border bg-card/80 p-4 shadow-sm">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
@@ -2091,7 +2054,7 @@ export default function DailyStatus() {
               ))
             )}
           </div>
-          <aside className="min-w-0 lg:sticky lg:top-16 lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto" data-testid="daily-status-detail-panel">
+          <aside className="min-w-0 lg:sticky lg:top-16 lg:h-[calc(100dvh-5rem)] lg:self-start lg:overflow-hidden" data-testid="daily-status-detail-panel">
             {activeRow ? (
               <RowDetailsPanel
                 row={activeRow}
