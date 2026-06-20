@@ -48,7 +48,7 @@ export function toUiShipment(row, { includeCustomerPrivateDetails = true } = {})
     hasV2Profile,
     displayStatusText: shipmentStatusLabel(row.status || legacy.status),
     currentStage: v2CurrentStage,
-    dischargePort: v2DischargePort,
+    dischargePort: v2DischargePort || legacy.dischargePort || "",
     deliveryPort: v2DeliveryPort || row.destination || legacy.destination || "",
     shipmentDirection: row.shipment_direction || legacy.shipmentDirection || legacy.shipment_direction || "import",
     transportMode: row.transport_mode || legacy.transportMode || legacy.transport_mode || "",

@@ -307,6 +307,7 @@ const shipmentOperationalFieldsBaseSchema = z.object({
   customerName: optionalTrimmedText(180),
   origin: optionalTrimmedText(180),
   destination: optionalTrimmedText(180),
+  dischargePort: optionalTrimmedText(180),
   status: shipmentStatus.optional(),
   shipmentDirection: shipmentDirection.optional(),
   shipment_direction: shipmentDirection.optional(),

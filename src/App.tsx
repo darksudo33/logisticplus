@@ -110,7 +110,7 @@ function AppRoutes() {
         <Route path="/shipments/:id/legacy" element={<ShipmentDetailAliasRedirect />} />
         <Route path="/shipments/:id/v2" element={<ShipmentDetailAliasRedirect />} />
         <Route path="/shipments/:id" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentDetail /></ProtectedAppLayout>} />
-        <Route path="/shipments/:id/edit" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentEdit /></ProtectedAppLayout>} />
+        <Route path="/shipments/:id/edit" element={<ProtectedAppLayout anyOf={["shipments.view_all"]} roles={["CEO"]}><ShipmentEdit /></ProtectedAppLayout>} />
         <Route path="/changelog" element={<ProtectedAppLayout anyOf={["changes.view"]}><ChangeLog /></ProtectedAppLayout>} />
         <Route path="/customers" element={<ProtectedAppLayout anyOf={["customers.view"]} roles={["CEO"]}><Customers /></ProtectedAppLayout>} />
         <Route path="/customers/:id" element={<ProtectedAppLayout anyOf={["customers.view"]} roles={["CEO"]}><CustomerDetail /></ProtectedAppLayout>} />
