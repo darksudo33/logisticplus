@@ -1,6 +1,14 @@
 import { ApiError, apiGet, apiPatch } from "@/src/lib/api";
 import type { DailyStatusBoardRow, DailyStatusPatch } from "@/src/types";
 
+export type KootajBoardPatch = {
+  cotageNumber?: string | null;
+  customsRoute?: string | null;
+  customsStatus?: string | null;
+  releaseStatus?: string | null;
+  expectedKootajUpdatedAt: string | null;
+};
+
 export type DailyStatusListFilters = Partial<{
   q: string;
   shipmentId: string;
@@ -50,5 +58,8 @@ export const dailyStatusApi = {
 export const kootajBoardApi = {
   list(filters: DailyStatusListFilters = {}) {
     return apiGet<DailyStatusBoardRow[]>(`/api/kootaj-board${dailyStatusQuery(filters)}`);
+  },
+  update(shipmentId: string, patch: KootajBoardPatch) {
+    return apiPatch<DailyStatusBoardRow>(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, patch);
   },
 };
