@@ -443,7 +443,7 @@ export default function Shipments() {
                      <ArrowUpDown className="w-3 h-3 text-muted-foreground rotate-90 opacity-50" />
                      <div className="flex flex-col">
                         <span data-testid={`shipment-mobile-destination-${shipment.id}`} className="text-[11px] text-foreground font-bold">{destinationDisplay}</span>
-                        <span className="text-[9px] text-muted-foreground">مقصد</span>
+                        <span className="text-[9px] text-muted-foreground">محل تخلیه</span>
                      </div>
                   </div>
                   <div data-testid={`shipment-mobile-status-${shipment.id}`} className="flex max-w-[45%] flex-col items-end gap-1">
@@ -475,9 +475,9 @@ export default function Shipments() {
                 <tr className="border-b border-border bg-muted/50">
                   <th className="px-3 py-3 font-medium text-muted-foreground">شماره رهگیری</th>
                   <th className="px-3 py-3 font-medium text-muted-foreground">تعداد کالا</th>
-                  <th className="px-3 py-3 font-medium text-muted-foreground">نام کالای اول</th>
+                  <th className="px-3 py-3 font-medium text-muted-foreground">کالا</th>
                   <th className="px-3 py-3 font-medium text-muted-foreground">مبدأ</th>
-                  <th className="px-3 py-3 font-medium text-muted-foreground">مقصد</th>
+                  <th className="px-3 py-3 font-medium text-muted-foreground">محل تخلیه</th>
                   <th className="px-3 py-3 font-medium text-muted-foreground">مشتری</th>
                   <th 
                     className="px-3 py-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground transition-colors"
