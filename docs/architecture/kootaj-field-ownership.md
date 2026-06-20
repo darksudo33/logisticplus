@@ -65,8 +65,8 @@ This table covers every data field currently shown or used by `/kootaj-board`, i
 | Customs route | `kootaj.customsRoute`, fallback `workflow.route` | `shipment_kootaj_details.customs_route`; workflow route is fallback/derived | Yes | Yes, currently through Shipment Detail `declarationKootaj.customsRoute` | Yes | No when stored; fallback is derived | Yes | Yes | Phase 2 should edit the stored Kootaj/customs route through a shared service and keep Shipment Detail consistent. |
 | Shipment status | `shipment.status` | Shipment canonical status | Defer for initial Phase 2 | Yes, via Shipment Detail base status | Yes, via Daily Status `baseInfo.status` | No | Yes | Yes | Status can affect timers/workflow. Keep out of the first editable Kootaj subset unless status-transition rules are reused exactly. |
 | Latest operational status | `kootaj.customsStatus`, `kootaj.releaseStatus`, fallback `workflow.currentStepLabel` / `baseInfo.currentStage` | Stored Kootaj statuses plus workflow/base projections | Partially yes: customs/release statuses only | Not currently for customs/release statuses; `currentStage` from detail base | Yes | Composite display is derived | Yes for stored status edits | Yes | Display combines multiple owners. Edits must target the specific underlying field, not the label string. |
-| Customs status | `kootaj.customsStatus` | `shipment_kootaj_details.customs_status` | Yes | No current direct field in Shipment Detail | Yes | No | Yes | Yes | Recommended Phase 2 editable field. |
-| Release status | `kootaj.releaseStatus` | `shipment_kootaj_details.release_status` | Yes | No current direct field in Shipment Detail | Yes | No | Yes | Yes | Recommended Phase 2 editable field. |
+| Customs status | `kootaj.customsStatus` | `shipment_kootaj_details.customs_status` | Yes | Display-only via the Daily Status projection; no Shipment Detail edit control | Yes | No | Yes | Yes | Recommended Phase 2 editable field. |
+| Release status | `kootaj.releaseStatus` | `shipment_kootaj_details.release_status` | Yes | Display-only via the Daily Status projection; no Shipment Detail edit control | Yes | No | Yes | Yes | Recommended Phase 2 editable field. |
 | Workflow phase | `workflow.currentPhase` | Workflow state/projection | No | No direct profile edit | No direct profile edit | Yes | Audit workflow transitions in workflow module | Yes in workflow module | Use workflow APIs/events, not board field overwrites. |
 | Workflow current step label | `workflow.currentStepLabel` | Workflow state/projection | No | No direct profile edit | No direct profile edit | Yes | Audit workflow transitions in workflow module | Yes in workflow module | Display only on board. |
 | Current stage fallback | `baseInfo.currentStage` | V2 base section / Daily Status base projection | Yes, if shared service owns it | Yes | Yes | No | Yes | Yes | Can be included after customs fields if the shared service updates V2/base consistently. |
@@ -192,7 +192,7 @@ Do not allow blind last-write-wins updates for staff-facing operational board fi
 
 Phase 2 tests should prove two-way consistency:
 
-- Editing `cotageNumber` from Kootaj Board appears in Shipment Detail.
+- Editing `cotageNumber`, `customsRoute`, `customsStatus`, and `releaseStatus` from Kootaj Board appears in Shipment Detail; `customsStatus` and `releaseStatus` are display-only there.
 - Editing `cotageNumber` from Shipment Detail appears in Kootaj Board.
 - Editing `customsRoute`, `customsStatus`, or `releaseStatus` from Kootaj Board appears in Daily Status.
 - Editing the same overlapping field from Daily Status appears in Kootaj Board.
