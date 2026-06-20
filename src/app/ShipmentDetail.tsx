@@ -2203,7 +2203,7 @@ export default function ShipmentDetail() {
   const routeSteps = [
     { key: "origin", label: "مبدا", value: baseSection?.origin || shipment.origin },
     { key: "dischargePort", label: "محل تخلیه", value: baseSection?.dischargePort },
-    { key: "deliveryPort", label: "بندر تحویل", value: baseSection?.deliveryPort || shipment.destination },
+    { key: "deliveryPort", label: "محل تحویل", value: baseSection?.deliveryPort || shipment.destination },
   ];
 
   return (
