@@ -68,6 +68,12 @@ const shipmentDestinationDisplay = (shipment: Shipment) =>
 const shipmentDisplayStatusText = (shipment: Shipment) =>
   String(shipment.currentStage || "").trim();
 
+const shipmentGoodsCountDisplay = (shipment: Shipment) =>
+  shipment.goodsTotalCount ? shipment.goodsTotalCount.toLocaleString("fa-IR") : "ثبت نشده";
+
+const shipmentFirstGoodsDisplay = (shipment: Shipment) =>
+  shipment.firstGoodsName || "ثبت نشده";
+
 const statusOptions = [
   { value: "ALL", label: "همه وضعیت‌ها" },
   ...SHIPMENT_STATUS_OPTIONS,
@@ -167,7 +173,7 @@ export default function Shipments() {
         const normalizedSearch = searchTerm.trim().toLowerCase();
         const searchableText = [
           s.trackingNumber,
-          s.containerNumber,
+          s.firstGoodsName,
           s.customerCode,
           s.customerName,
           s.customerId,
@@ -282,7 +288,7 @@ export default function Shipments() {
         <div className="relative flex-1">
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
           <Input 
-            placeholder="جستجو با شماره پیگیری یا کانتینر..." 
+            placeholder="جستجو با شماره پیگیری، مشتری یا کالا..."
             className="bg-muted border-border pr-10 h-10 text-xs focus-visible:ring-primary/50 rounded-xl"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -324,7 +330,7 @@ export default function Shipments() {
                <div className="flex items-start justify-between mb-4">
                   <div className="flex flex-col gap-1">
                      <span className="font-mono text-sm font-black text-primary">{shipment.trackingNumber}</span>
-                     <span className="text-[10px] text-muted-foreground font-mono">{shipment.containerNumber}</span>
+                     <span className="text-[10px] text-muted-foreground font-bold">{shipmentFirstGoodsDisplay(shipment)}</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <Button 
@@ -410,8 +416,8 @@ export default function Shipments() {
                      <span data-testid={`shipment-mobile-customer-${shipment.id}`} className="text-[11px] text-foreground font-bold truncate">{customerDisplay}</span>
                   </div>
                   <div className="flex flex-col gap-1">
-                     <span className="text-[9px] text-muted-foreground font-black uppercase tracking-widest">تحویل تخمینی</span>
-                     <span className="text-[11px] text-foreground font-mono">{shipment.estimatedDelivery}</span>
+                     <span className="text-[9px] text-muted-foreground font-black uppercase tracking-widest">تعداد کالا</span>
+                     <span className="text-[11px] text-foreground font-bold">{shipmentGoodsCountDisplay(shipment)}</span>
                   </div>
                </div>
 
@@ -468,7 +474,8 @@ export default function Shipments() {
               <thead>
                 <tr className="border-b border-border bg-muted/50">
                   <th className="px-3 py-3 font-medium text-muted-foreground">شماره رهگیری</th>
-                  <th className="hidden px-3 py-3 font-medium text-muted-foreground lg:table-cell">کانتینر</th>
+                  <th className="px-3 py-3 font-medium text-muted-foreground">تعداد کالا</th>
+                  <th className="px-3 py-3 font-medium text-muted-foreground">نام کالای اول</th>
                   <th className="px-3 py-3 font-medium text-muted-foreground">مبدأ</th>
                   <th className="px-3 py-3 font-medium text-muted-foreground">مقصد</th>
                   <th className="px-3 py-3 font-medium text-muted-foreground">مشتری</th>
@@ -479,15 +486,6 @@ export default function Shipments() {
                     <div className="flex items-center gap-2">
                       وضعیت
                       {getSortIcon('status')}
-                    </div>
-                  </th>
-                  <th 
-                    className="px-3 py-3 font-medium text-muted-foreground cursor-pointer hover:text-foreground transition-colors"
-                    onClick={() => requestSort('estimatedDelivery')}
-                  >
-                    <div className="flex items-center gap-2">
-                      تحویل تخمینی
-                      {getSortIcon('estimatedDelivery')}
                     </div>
                   </th>
                   <th className="px-3 py-3 font-medium text-muted-foreground">عملیات</th>
@@ -508,7 +506,8 @@ export default function Shipments() {
                         <td className="px-3 py-3">
                           <span className="block truncate font-mono text-xs font-bold text-primary">{shipment.trackingNumber}</span>
                         </td>
-                        <td className="hidden px-3 py-3 font-mono text-[10px] text-muted-foreground lg:table-cell">{shipment.containerNumber}</td>
+                        <td data-testid={`shipment-row-goods-count-${shipment.id}`} className="px-3 py-3 font-bold text-foreground">{shipmentGoodsCountDisplay(shipment)}</td>
+                        <td data-testid={`shipment-row-first-goods-${shipment.id}`} className="px-3 py-3 text-muted-foreground"><span className="block truncate">{shipmentFirstGoodsDisplay(shipment)}</span></td>
                         <td data-testid={`shipment-row-origin-${shipment.id}`} className="px-3 py-3 text-muted-foreground"><span className="block truncate">{originDisplay}</span></td>
                         <td data-testid={`shipment-row-destination-${shipment.id}`} className="px-3 py-3 text-muted-foreground"><span className="block truncate">{destinationDisplay}</span></td>
                         <td data-testid={`shipment-row-customer-${shipment.id}`} className="px-3 py-3 font-medium text-foreground"><span className="block truncate">{customerDisplay}</span></td>
@@ -529,7 +528,6 @@ export default function Shipments() {
                             ) : null}
                           </div>
                         </td>
-                        <td className="px-3 py-3 text-muted-foreground font-mono"><span className="block truncate">{shipment.estimatedDelivery}</span></td>
                         <td className="px-3 py-3">
                           <div className="flex items-center gap-2 opacity-100 transition-opacity">
                             <Button 
