@@ -117,11 +117,6 @@ const isRealIsoDate = (value) => {
     date.getUTCDate() === day
   );
 };
-const isRealDateTime = (value) => {
-  if (!value) return true;
-  const date = new Date(String(value));
-  return Number.isFinite(date.getTime());
-};
 const optionalId = z.preprocess(
   blankToUndefined,
   z.string().trim().min(1, "Identifier is required.").max(128).optional().nullable()
@@ -254,10 +249,6 @@ const dailyStatusCustomsStatus = z.enum(DAILY_STATUS_CUSTOMS_STATUSES);
 const dailyStatusTaxPaymentStatus = z.enum(DAILY_STATUS_TAX_PAYMENT_STATUSES);
 const dailyStatusReleaseStatus = z.enum(DAILY_STATUS_RELEASE_STATUSES);
 const dailyStatusCommonStatus = z.enum(DAILY_STATUS_COMMON_STATUSES);
-const expectedKootajUpdatedAt = z.preprocess(
-  blankToNull,
-  z.string().trim().refine(isRealDateTime, "Expected Kootaj version must be a valid date/time.").nullable().optional()
-);
 const dailyStatusDate = z.preprocess(
   normalizeIsoDateInput,
   z
@@ -458,27 +449,6 @@ export const dailyStatusPatchBodySchema = z.object({
 }).refine(
   (value) => Object.values(value).some((item) => item !== undefined),
   { message: "At least one daily status field is required." }
-);
-
-export const kootajBoardPatchBodySchema = z.object({
-  cotageNumber: optionalNullableTrimmedText(120),
-  cotageDate: dailyStatusDate,
-  customsStatus: z.preprocess(blankToNull, dailyStatusCustomsStatus.nullable().optional()),
-  customsRoute: z.preprocess(blankToNull, dailyStatusCustomsRoute.nullable().optional()),
-  customsOffice: optionalNullableTrimmedText(180),
-  declarationReference: optionalNullableTrimmedText(180),
-  releaseStatus: z.preprocess(blankToNull, dailyStatusReleaseStatus.nullable().optional()),
-  expectedKootajUpdatedAt,
-}).strict().refine(
-  (value) =>
-    value.cotageNumber !== undefined ||
-    value.cotageDate !== undefined ||
-    value.customsStatus !== undefined ||
-    value.customsRoute !== undefined ||
-    value.customsOffice !== undefined ||
-    value.declarationReference !== undefined ||
-    value.releaseStatus !== undefined,
-  { message: "At least one Kootaj operation field is required." }
 );
 
 export const shipmentPublicStatusBodySchema = z.object({

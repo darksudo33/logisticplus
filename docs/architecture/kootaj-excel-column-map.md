@@ -2,13 +2,13 @@
 
 ## Purpose
 
-This document maps the current Kootaj Board and the likely staff Excel-style operational columns to existing LogisticPlus data ownership before any new Kootaj fields are added.
+This document maps Kootaj/customs operation fields and the likely staff Excel-style operational columns to existing LogisticPlus data ownership before any new Kootaj fields are added.
 
-The actual customer Excel workbook is not present in the repository, so this map uses the current `/kootaj-board`, Daily Status projection, and canonical Shipment Detail fields as the source inventory. Any column whose exact Excel label, meaning, or workflow timing is not proven from the app is marked for client confirmation.
+There is no standalone Kootaj Board page. Daily Status is the operational board surface, and Shipment Detail is the canonical detail surface. The actual customer Excel workbook is not present in the repository, so this map uses the Daily Status projection and canonical Shipment Detail fields as the source inventory. Any column whose exact Excel label, meaning, or workflow timing is not proven from the app is marked for client confirmation.
 
 ## Current implemented Kootaj fields
 
-`/kootaj-board` currently reads `GET /api/kootaj-board`, which reuses the Daily Status projection.
+Kootaj/customs fields currently read through `GET /api/daily-status` and the Shipment Detail daily-status projection.
 
 Current visible fields:
 
@@ -32,18 +32,19 @@ Current filters:
 - Shipment status: `shipmentStatus`
 - Customs route: `customsRoute`
 
-## Fields currently editable from Kootaj Board
+## Fields currently editable through shared operation surfaces
 
-Only these four fields are editable from `/kootaj-board`:
+There is no standalone Kootaj Board edit surface. Daily Status and Shipment Detail use shared shipment operation data for Kootaj/customs fields.
 
 - `cotageNumber`
+- `cotageDate`
 - `customsRoute`
+- `customsOffice`
+- `declarationReference`
 - `customsStatus`
 - `releaseStatus`
 
-Every save sends `expectedKootajUpdatedAt` from the row concurrency token.
-
-## Fields currently read-only from Kootaj Board
+## Fields currently read-only from the operational board
 
 - Customer labels/codes/ids
 - Shipment/reference number
@@ -160,7 +161,7 @@ Every save sends `expectedKootajUpdatedAt` from the row concurrency token.
 | Missing required document count | `documents.missingRequiredCount` | Placeholder projection currently `0` | Projection/read-only | No | Later | Document/template module | Yes | Requires real requirement model before use. |
 | Last updated timestamp | `kootaj.updatedAt`, `baseInfo.updatedAt`, `shipment.updatedAt` | Latest source timestamps | Implemented/read-only | No | Yes | Underlying edit audit | No | Derived display. |
 | Last updated user | `baseInfo.updatedByName`, `kootaj.updatedById` | V2 updater name or Kootaj updater id | Implemented/read-only | No | Yes | Underlying edit audit | Maybe | User-name display for Kootaj updater may need safe join. |
-| Kootaj row version | `kootajUpdatedAt` | `shipment_kootaj_details.updated_at` | API/read-only | No direct edit | No | No direct audit | No | Required on every frontend Kootaj save as `expectedKootajUpdatedAt`. |
+| Kootaj row version | `kootajUpdatedAt` | `shipment_kootaj_details.updated_at` | API/read-only | No direct edit | No | No direct audit | No | Version marker for future guarded inline edits. |
 | Daily follow-up note | No dedicated field; `kootaj.internalNote` exists | Not decided | Missing | Yes, if client needs daily note | Maybe as history | Yes | Yes | Should be history/event rows, not overwriting one note. |
 | Follow-up owner/reminder | No dedicated field | Not decided | Missing | Client confirmation first | Maybe | Yes | Yes | Use tasks if it is actionable work; otherwise board event/reminder model. |
 | Attention/pinned flag | No dedicated field | Not decided | Missing | Client confirmation first | Maybe | Yes | Yes | Add only if staff need board triage. |
@@ -235,4 +236,4 @@ Confirm exact Excel labels, column order, and workflow meaning before implementi
 4. Add commercial card relationship editing only after confirming board users should change it from the Excel workflow.
 5. Add daily notes/follow-up only with a history/event design, not as a duplicated spreadsheet cell.
 
-Each expansion should keep the same rule: Kootaj Board, Daily Status, and Shipment Detail must write through the same backend service/repository path for overlapping fields.
+Each expansion should keep the same rule: Daily Status and Shipment Detail must write through the same backend service/repository path for overlapping Kootaj/customs fields.

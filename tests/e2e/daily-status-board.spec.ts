@@ -313,6 +313,7 @@ test.describe.serial("daily status board", () => {
             orderRegistrationNumber,
             bankTrackingNumber,
             cotageNumber,
+            cotageDate: "1405-04-15",
             customsRoute: "green",
             customsStatus: "in_customs_review",
             customsOffice: "Shahid Rajaee",
@@ -327,8 +328,13 @@ test.describe.serial("daily status board", () => {
         })
       );
       expect(updated.kootaj.cotageNumber).toBe(cotageNumber);
+      expect(updated.kootaj.cotageDate).toBe("1405-04-15");
       expect(updated.kootaj.orderRegistrationNumber).toBe(orderRegistrationNumber);
       expect(updated.kootaj.bankTrackingNumber).toBe(bankTrackingNumber);
+      expect(updated.kootaj.customsOffice).toBe("Shahid Rajaee");
+      expect(updated.kootaj.declarationReference).toBe(`DECL-${suffix}`);
+      expect(updated.kootaj.customsStatus).toBe("in_customs_review");
+      expect(updated.kootaj.releaseStatus).toBe("ready");
       expect(updated.kootaj.customsPaymentStatus).toBe("pending");
       expect(updated.kootaj.paymentReference).toBe(paymentReference);
       expect(updated.kootaj.truckPlate).toBe(truckPlate);
