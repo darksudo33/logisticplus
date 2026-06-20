@@ -1512,9 +1512,6 @@ function RowDetailsPanel({
             <p className="truncate text-sm font-black text-foreground">
               {isEdit ? "ویرایش وضعیت روزانه" : "جزئیات وضعیت روزانه"} {shipmentCode}
             </p>
-            <p className="mt-1 text-[11px] font-bold text-muted-foreground">
-              داده‌های محموله، مشتری، workflow، اسناد و وظایف از ماژول‌های اصلی خوانده می‌شوند.
-            </p>
           </div>
           <div className="flex items-center gap-2">
             {!isEdit ? (
