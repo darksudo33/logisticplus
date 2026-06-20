@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ShamsiDateTimeField } from "@/src/components/ShamsiDateTimeField";
 import { ApiError } from "@/src/lib/api";
 import {
   customsStatusOptions,
@@ -47,7 +48,10 @@ const KOOTAJ_CONFLICT_MESSAGE = "اطلاعات این ردیف توسط کار�
 
 type KootajEditDraft = {
   cotageNumber: string;
+  cotageDate: string;
   customsRoute: string;
+  customsOffice: string;
+  declarationReference: string;
   customsStatus: string;
   releaseStatus: string;
 };
@@ -80,6 +84,12 @@ function shipmentRoute(row: DailyStatusBoardRow) {
 
 function customsRouteLabel(row: DailyStatusBoardRow) {
   return labelForOption(routeOptions, row.kootaj.customsRoute || row.workflow?.route) || "ثبت نشده";
+}
+
+function kootajCustomsDetails(row: DailyStatusBoardRow) {
+  return [row.kootaj.declarationReference, row.kootaj.customsOffice, row.kootaj.cotageDate]
+    .filter(Boolean)
+    .join(" · ") || "جزئیات اظهار ثبت نشده";
 }
 
 function latestOperationalStatus(row: DailyStatusBoardRow) {
@@ -115,7 +125,10 @@ function lastUpdatedText(row: DailyStatusBoardRow) {
 function draftFromRow(row: DailyStatusBoardRow): KootajEditDraft {
   return {
     cotageNumber: row.kootaj.cotageNumber || "",
+    cotageDate: row.kootaj.cotageDate || "",
     customsRoute: row.kootaj.customsRoute || "",
+    customsOffice: row.kootaj.customsOffice || "",
+    declarationReference: row.kootaj.declarationReference || "",
     customsStatus: row.kootaj.customsStatus || "",
     releaseStatus: row.kootaj.releaseStatus || "",
   };
@@ -212,6 +225,9 @@ function KootajDesktopRow({
       </div>
       <div className="min-w-0">
         <p className="truncate font-bold text-foreground">{row.kootaj.cotageNumber || "بدون کوتاژ"}</p>
+        <p className="truncate text-[10px] font-bold text-muted-foreground" data-testid={`kootaj-board-customs-details-${testId}`}>
+          {kootajCustomsDetails(row)}
+        </p>
         <p className="truncate text-[10px] font-bold text-muted-foreground">{row.commercialCard?.displayName || "کارت ثبت نشده"}</p>
       </div>
       <div className="min-w-0">
@@ -283,6 +299,9 @@ function KootajMobileCard({
             <div className="rounded-lg bg-muted/50 p-2">
               <p className="text-[10px] font-bold text-muted-foreground">کوتاژ</p>
               <p className="mt-1 truncate font-black">{row.kootaj.cotageNumber || "ثبت نشده"}</p>
+              <p className="mt-1 line-clamp-2 text-[10px] font-bold text-muted-foreground" data-testid={`kootaj-board-mobile-customs-details-${testId}`}>
+                {kootajCustomsDetails(row)}
+              </p>
             </div>
             <div className="rounded-lg bg-muted/50 p-2">
               <p className="text-[10px] font-bold text-muted-foreground">وظایف / اسناد</p>
@@ -334,7 +353,7 @@ function KootajEditDialog({
         <DialogHeader>
           <DialogTitle className="text-base font-black">ویرایش وضعیت کوتاژ</DialogTitle>
           <DialogDescription className="text-xs font-bold leading-6">
-            فقط شماره کوتاژ، مسیر گمرکی، وضعیت گمرکی و وضعیت ترخیص قابل ویرایش هستند.
+            فقط شماره و تاریخ کوتاژ، گمرک، مرجع اظهار، مسیر گمرکی، وضعیت گمرکی و وضعیت ترخیص قابل ویرایش هستند.
             سایر اطلاعات از محموله، مشتری، اسناد و وظایف به‌صورت خواندنی نمایش داده می‌شود.
           </DialogDescription>
         </DialogHeader>
@@ -356,6 +375,37 @@ function KootajEditDialog({
               className="h-10 rounded-lg text-xs font-bold"
               maxLength={120}
               data-testid="kootaj-board-cotage-input"
+            />
+          </Label>
+
+          <ShamsiDateTimeField
+            id="kootaj-board-cotage-date"
+            label="تاریخ کوتاژ"
+            value={draft.cotageDate}
+            onChange={(value) => onChange("cotageDate", value)}
+            showTime={false}
+            triggerClassName="h-10 rounded-lg text-xs font-bold"
+          />
+
+          <Label className="grid gap-1 text-xs font-black">
+            گمرک / محل اظهار
+            <Input
+              value={draft.customsOffice}
+              onChange={(event) => onChange("customsOffice", event.target.value)}
+              className="h-10 rounded-lg text-xs font-bold"
+              maxLength={180}
+              data-testid="kootaj-board-customs-office-input"
+            />
+          </Label>
+
+          <Label className="grid gap-1 text-xs font-black">
+            شماره / مرجع اظهار
+            <Input
+              value={draft.declarationReference}
+              onChange={(event) => onChange("declarationReference", event.target.value)}
+              className="h-10 rounded-lg text-xs font-bold"
+              maxLength={180}
+              data-testid="kootaj-board-declaration-reference-input"
             />
           </Label>
 
@@ -442,7 +492,10 @@ export default function KootajBoard() {
   const [editingRow, setEditingRow] = React.useState<DailyStatusBoardRow | null>(null);
   const [editDraft, setEditDraft] = React.useState<KootajEditDraft>({
     cotageNumber: "",
+    cotageDate: "",
     customsRoute: "",
+    customsOffice: "",
+    declarationReference: "",
     customsStatus: "",
     releaseStatus: "",
   });
@@ -494,7 +547,10 @@ export default function KootajBoard() {
     setEditingRow(null);
     setEditDraft({
       cotageNumber: "",
+      cotageDate: "",
       customsRoute: "",
+      customsOffice: "",
+      declarationReference: "",
       customsStatus: "",
       releaseStatus: "",
     });
@@ -505,7 +561,10 @@ export default function KootajBoard() {
     try {
       const updated = await kootajBoardApi.update(editingRow.id, {
         cotageNumber: patchValue(editDraft.cotageNumber),
+        cotageDate: patchValue(editDraft.cotageDate),
         customsRoute: editDraft.customsRoute || null,
+        customsOffice: patchValue(editDraft.customsOffice),
+        declarationReference: patchValue(editDraft.declarationReference),
         customsStatus: editDraft.customsStatus || null,
         releaseStatus: editDraft.releaseStatus || null,
         expectedKootajUpdatedAt: editingRow.kootajUpdatedAt || null,
@@ -611,7 +670,7 @@ export default function KootajBoard() {
         </section>
 
         <section className="rounded-xl border border-blue-200 bg-blue-50/70 p-3 text-xs font-bold text-blue-900 dark:border-blue-900/50 dark:bg-blue-950/30 dark:text-blue-100" data-testid="kootaj-board-readonly-notice">
-          <span className="block">در این فاز فقط شماره کوتاژ، مسیر گمرکی، وضعیت گمرکی و وضعیت ترخیص قابل ویرایش هستند. مشتری، شماره محموله، مسیر، شمارش وظایف/اسناد و زمان آخرین بروزرسانی خواندنی می‌مانند.</span>
+          <span className="block">در این فاز فقط شماره و تاریخ کوتاژ، گمرک، مرجع اظهار، مسیر گمرکی، وضعیت گمرکی و وضعیت ترخیص قابل ویرایش هستند. مشتری، شماره محموله، مسیر، شمارش وظایف/اسناد و زمان آخرین بروزرسانی خواندنی می‌مانند.</span>
         </section>
 
         {error ? (

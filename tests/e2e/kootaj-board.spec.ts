@@ -158,10 +158,13 @@ test.describe.serial("kootaj board", () => {
       );
       const shipmentId = created.shipment.id;
       const cotageNumber = `KB-COTAGE-${suffix}`;
+      const customsOffice = `KB-OFFICE-${suffix}`;
+      const declarationReference = `KB-DECLARATION-${suffix}`;
+      const cotageDate = "1405-04-15";
       const startedAt = new Date(Date.now() - 1000).toISOString();
 
       const unauthorized = await anonymous.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
-        data: { cotageNumber },
+        data: { customsOffice },
       });
       await expectForbidden(unauthorized);
 
@@ -175,18 +178,29 @@ test.describe.serial("kootaj board", () => {
       });
       expect(invalidRoute.status(), await invalidRoute.text()).toBe(400);
 
+      const invalidCotageDate = await owner.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
+        data: { cotageDate: "not-a-date" },
+      });
+      expect(invalidCotageDate.status(), await invalidCotageDate.text()).toBe(400);
+
       const updated = await readOk<any>(
         await owner.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
           data: {
             cotageNumber,
+            cotageDate,
             customsRoute: "yellow",
+            customsOffice,
+            declarationReference,
             customsStatus: "inspection",
             releaseStatus: "ready",
           },
         })
       );
       expect(updated.kootaj.cotageNumber).toBe(cotageNumber);
+      expect(updated.kootaj.cotageDate).toBe(cotageDate);
       expect(updated.kootaj.customsRoute).toBe("yellow");
+      expect(updated.kootaj.customsOffice).toBe(customsOffice);
+      expect(updated.kootaj.declarationReference).toBe(declarationReference);
       expect(updated.kootaj.customsStatus).toBe("inspection");
       expect(updated.kootaj.releaseStatus).toBe("ready");
       expect(updated.kootajUpdatedAt).toBeTruthy();
@@ -197,7 +211,10 @@ test.describe.serial("kootaj board", () => {
       expect(kootajRows[0].kootajUpdatedAt).toBe(updated.kootajUpdatedAt);
       expect(kootajRows[0].kootaj).toMatchObject({
         cotageNumber,
+        cotageDate,
         customsRoute: "yellow",
+        customsOffice,
+        declarationReference,
         customsStatus: "inspection",
         releaseStatus: "ready",
       });
@@ -211,6 +228,7 @@ test.describe.serial("kootaj board", () => {
       const v2Profile = await readOk<any>(await owner.get(`/api/shipments/${encodeURIComponent(shipmentId)}/v2-profile`));
       expect(v2Profile.profile.sections.declarationKootaj.cotageNumber).toBe(cotageNumber);
       expect(v2Profile.profile.sections.declarationKootaj.customsRoute).toBe("YELLOW");
+      expect(v2Profile.profile.sections.declarationKootaj.cotageRegistrationDate).toBe(cotageDate);
 
       const audit = await dbQuery(
         `SELECT organization_id, actor_user_id, resource_id, after_json, metadata_json
@@ -227,11 +245,22 @@ test.describe.serial("kootaj board", () => {
       expect(audit.rows[0]?.actor_user_id).toBe(ownerAuth.user.id);
       expect(audit.rows[0]?.metadata_json?.shipmentId).toBe(shipmentId);
       expect(audit.rows[0]?.metadata_json?.changedFields).toEqual(
-        expect.arrayContaining(["cotageNumber", "customsRoute", "customsStatus", "releaseStatus"])
+        expect.arrayContaining([
+          "cotageNumber",
+          "cotageDate",
+          "customsRoute",
+          "customsOffice",
+          "declarationReference",
+          "customsStatus",
+          "releaseStatus",
+        ])
       );
       expect(audit.rows[0]?.after_json).toEqual(expect.objectContaining({
         cotageNumber,
+        cotageDate,
         customsRoute: "yellow",
+        customsOffice,
+        declarationReference,
         customsStatus: "inspection",
         releaseStatus: "ready",
       }));
@@ -281,7 +310,7 @@ test.describe.serial("kootaj board", () => {
       contexts.push(tenant);
       const tenantConflictProbe = await tenant.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
         data: {
-          cotageNumber: `CROSS-${suffix}`,
+          declarationReference: `CROSS-${suffix}`,
           expectedKootajUpdatedAt: matchingVersion,
         },
       });
@@ -341,11 +370,14 @@ test.describe.serial("kootaj board", () => {
       const rowTestId = safeTestId(shipmentId);
       const initialCotageNumber = `UI-COTAGE-${suffix}`;
       const nextCotageNumber = `UI-COTAGE-SAVED-${suffix}`;
+      const nextCustomsOffice = `UI-OFFICE-${suffix}`;
+      const nextDeclarationReference = `UI-DECLARATION-${suffix}`;
       const startedAt = new Date(Date.now() - 1000).toISOString();
       const initial = await readOk<any>(
         await owner.patch(`/api/kootaj-board/${encodeURIComponent(shipmentId)}`, {
           data: {
             cotageNumber: initialCotageNumber,
+            cotageDate: "1405-03-01",
             customsRoute: "yellow",
             customsStatus: "inspection",
             releaseStatus: "ready",
@@ -369,6 +401,11 @@ test.describe.serial("kootaj board", () => {
       await page.getByTestId(`kootaj-board-edit-${rowTestId}`).click();
       await expect(page.getByTestId("kootaj-board-edit-dialog")).toBeVisible();
       await page.getByTestId("kootaj-board-cotage-input").fill(nextCotageNumber);
+      await page.locator("#kootaj-board-cotage-date").click();
+      await page.getByTestId("shamsi-date-day").nth(5).click();
+      await page.locator("#kootaj-board-cotage-date").click();
+      await page.getByTestId("kootaj-board-customs-office-input").fill(nextCustomsOffice);
+      await page.getByTestId("kootaj-board-declaration-reference-input").fill(nextDeclarationReference);
       await page.getByTestId("kootaj-board-customs-route-select").selectOption("red");
       await page.getByTestId("kootaj-board-customs-status-select").selectOption("ready_for_release");
       await page.getByTestId("kootaj-board-release-status-select").selectOption("released");
@@ -381,9 +418,15 @@ test.describe.serial("kootaj board", () => {
       await page.getByTestId("kootaj-board-save-edit").click();
       const response = await responsePromise;
       expect(response.status(), await response.text()).toBeLessThan(400);
+      const submittedCotageDate = String(patchPayload?.cotageDate || "");
+      expect(submittedCotageDate).toMatch(/^\d{4}\/\d{2}\/\d{2}$/);
+      expect(submittedCotageDate).not.toBe("1405/03/01");
       expect(patchPayload).toEqual({
         cotageNumber: nextCotageNumber,
+        cotageDate: submittedCotageDate,
         customsRoute: "red",
+        customsOffice: nextCustomsOffice,
+        declarationReference: nextDeclarationReference,
         customsStatus: "ready_for_release",
         releaseStatus: "released",
         expectedKootajUpdatedAt: initial.kootajUpdatedAt,
@@ -395,13 +438,20 @@ test.describe.serial("kootaj board", () => {
       await page.reload();
       await page.getByTestId("kootaj-board-search").fill(nextCotageNumber);
       await expect(page.getByTestId(`kootaj-board-row-${rowTestId}`)).toContainText(nextCotageNumber);
+      await expect(page.getByTestId(`kootaj-board-customs-details-${rowTestId}`)).toContainText(nextCustomsOffice);
+      await expect(page.getByTestId(`kootaj-board-customs-details-${rowTestId}`)).toContainText(nextDeclarationReference);
+
+      const storedCotageDate = submittedCotageDate.replaceAll("/", "-");
 
       const kootajRows = await readOk<any[]>(
         await owner.get(`/api/kootaj-board?shipmentId=${encodeURIComponent(shipmentId)}`)
       );
       expect(kootajRows[0].kootaj).toMatchObject({
         cotageNumber: nextCotageNumber,
+        cotageDate: storedCotageDate,
         customsRoute: "red",
+        customsOffice: nextCustomsOffice,
+        declarationReference: nextDeclarationReference,
         customsStatus: "ready_for_release",
         releaseStatus: "released",
       });
@@ -423,11 +473,22 @@ test.describe.serial("kootaj board", () => {
         [shipmentId, startedAt]
       );
       expect(audit.rows[0]?.metadata_json?.changedFields).toEqual(
-        expect.arrayContaining(["cotageNumber", "customsRoute", "customsStatus", "releaseStatus"])
+        expect.arrayContaining([
+          "cotageNumber",
+          "cotageDate",
+          "customsRoute",
+          "customsOffice",
+          "declarationReference",
+          "customsStatus",
+          "releaseStatus",
+        ])
       );
       expect(audit.rows[0]?.after_json).toEqual(expect.objectContaining({
         cotageNumber: nextCotageNumber,
+        cotageDate: storedCotageDate,
         customsRoute: "red",
+        customsOffice: nextCustomsOffice,
+        declarationReference: nextDeclarationReference,
         customsStatus: "ready_for_release",
         releaseStatus: "released",
       }));
@@ -435,10 +496,13 @@ test.describe.serial("kootaj board", () => {
       await page.goto(`/shipments/${encodeURIComponent(shipmentId)}`);
       await expect(page.getByTestId("shipment-v2-detail-page")).toBeVisible();
       await expect(page.getByTestId("shipment-v2-declaration-cotage-number-value")).toContainText(nextCotageNumber);
+      await expect(page.getByTestId("shipment-v2-declaration-cotage-date-value")).not.toContainText("ثبت نشده");
       await expect(page.getByTestId("shipment-v2-declaration-customs-route-value")).toContainText("قرمز");
+      await expect(page.getByTestId("shipment-v2-declaration-customs-office-value")).toContainText(nextCustomsOffice);
+      await expect(page.getByTestId("shipment-v2-declaration-reference-value")).toContainText(nextDeclarationReference);
       await expect(page.getByTestId("shipment-v2-declaration-customs-status-value")).toContainText("آماده ترخیص");
       await expect(page.getByTestId("shipment-v2-declaration-release-status-value")).toContainText("ترخیص شده");
-      await expect(page.locator('[data-testid="shipment-v2-declaration-customs-status-input"], [data-testid="shipment-v2-declaration-release-status-input"]')).toHaveCount(0);
+      await expect(page.locator('[data-testid="shipment-v2-declaration-customs-office-input"], [data-testid="shipment-v2-declaration-reference-input"], [data-testid="shipment-v2-declaration-customs-status-input"], [data-testid="shipment-v2-declaration-release-status-input"]')).toHaveCount(0);
     } finally {
       await disposeContexts(owner);
     }

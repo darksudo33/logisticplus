@@ -102,10 +102,10 @@ Every save sends `expectedKootajUpdatedAt` from the row concurrency token.
 | Bill of lading number | `kootaj.billOfLadingNumber` | `shipment_kootaj_details.bill_of_lading_number` | Projection/read-only | Safe after client confirmation | Yes | Yes | No | Existing transport identifier. |
 | Transport document number | `kootaj.transportDocumentNumber` | `shipment_kootaj_details.transport_document_number` | Projection/read-only | Client confirmation first | Yes | Yes | No | Confirm overlap with bill of lading. |
 | Pre-alert date | `kootaj.preAlertDate` | `shipment_kootaj_details.pre_alert_date` | Projection/read-only | Client confirmation first | Possibly | Yes | No | Date field. |
-| Customs office | `kootaj.customsOffice` | `shipment_kootaj_details.customs_office` | Projection/search exists, Kootaj read-only | Safe next candidate | Yes | Yes | No | Low-risk text field if client confirms Excel column. |
-| Declaration reference | `kootaj.declarationReference` | `shipment_kootaj_details.declaration_reference` | Projection/search exists, Kootaj read-only | Safe next candidate | Yes | Yes | No | Low-risk text identifier. |
+| Customs office | `kootaj.customsOffice` | `shipment_kootaj_details.customs_office` | Implemented/editable | Yes | Yes, display-only | Yes | No | Uses the shared Kootaj update path and row version. |
+| Declaration reference | `kootaj.declarationReference` | `shipment_kootaj_details.declaration_reference` | Implemented/editable | Yes | Yes, display-only | Yes | No | Uses the shared Kootaj update path and row version. |
 | Declaration date | `kootaj.declarationDate` | `shipment_kootaj_details.declaration_date` | Projection/read-only | Safe after date UX confirmed | Yes | Yes | No | Date field. |
-| Cotage date | `kootaj.cotageDate` | `shipment_kootaj_details.cotage_date` | Projection/read-only | Safe after date UX confirmed | Yes | Yes | No | Natural companion to cotage number. |
+| Cotage date | `kootaj.cotageDate` | `shipment_kootaj_details.cotage_date` | Implemented/editable | Yes | Yes; synchronized with the declaration section | Yes | No | Uses the shared Shamsi date control and Kootaj row version. |
 | Container summary | `kootaj.containerSummary`, `baseInfo.goods.container20Count`, `baseInfo.goods.container40Count` | Kootaj field plus V2 goods projection | Projection/read-only | Client confirmation first | Yes | Yes | No | Avoid duplicating structured V2 goods/container data. |
 | Goods summary | `kootaj.goodsSummary`, `baseInfo.goods.goodsSummary` | Kootaj field plus V2 goods projection | Projection/read-only | Client confirmation first | Yes | Yes | No | Confirm whether Excel value is free text or structured goods rows. |
 | Package count | `kootaj.packageCount`, `baseInfo.goods.totalQuantity` | `shipment_kootaj_details.package_count`, V2 goods projection | Projection/read-only | Client confirmation first | Yes | Yes | No | Numeric; may overlap goods rows. |
@@ -184,13 +184,13 @@ Every save sends `expectedKootajUpdatedAt` from the row concurrency token.
 
 ## Fields safe to add next
 
-The safest next fields are existing `shipment_kootaj_details` fields that are single-purpose, low-coupling, already projected, and do not require a new table:
+The previously recommended low-risk fields are now implemented through the shared Kootaj update path:
 
 1. `customsOffice`
 2. `declarationReference`
 3. `cotageDate`
 
-These are good Phase 3 candidates because they are operational Kootaj/customs fields, already in the Daily Status projection, searchable or closely related to current editable Kootaj fields, and do not create customer/privacy or workflow-transition risk.
+No additional Kootaj field should become editable without client confirmation of its Excel meaning and owner.
 
 Close alternates after client confirmation:
 
@@ -229,8 +229,8 @@ Confirm exact Excel labels, column order, and workflow meaning before implementi
 
 ## Recommended Phase 3 field expansion order
 
-1. Add a small Kootaj customs-details edit group: `customsOffice`, `declarationReference`, `cotageDate`.
-2. Add transport identifiers after client confirmation: `bookingNumber`, `billOfLadingNumber`, `manifestNumber`, `deliveryOrderNumber`.
+1. Completed: Kootaj customs-details edit group `customsOffice`, `declarationReference`, `cotageDate`.
+2. Add transport identifiers only after client confirmation: `bookingNumber`, `billOfLadingNumber`, `manifestNumber`, `deliveryOrderNumber`.
 3. Add date/status companions using shared date/status controls: `declarationDate`, `documentControlStatus`, `physicalInspectionStatus`, `loadingPermitNumber`, `loadingPermitDate`.
 4. Add commercial card relationship editing only after confirming board users should change it from the Excel workflow.
 5. Add daily notes/follow-up only with a history/event design, not as a duplicated spreadsheet cell.

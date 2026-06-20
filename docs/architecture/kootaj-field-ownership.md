@@ -71,6 +71,9 @@ This table covers every data field currently shown or used by `/kootaj-board`, i
 | Workflow current step label | `workflow.currentStepLabel` | Workflow state/projection | No | No direct profile edit | No direct profile edit | Yes | Audit workflow transitions in workflow module | Yes in workflow module | Display only on board. |
 | Current stage fallback | `baseInfo.currentStage` | V2 base section / Daily Status base projection | Yes, if shared service owns it | Yes | Yes | No | Yes | Yes | Can be included after customs fields if the shared service updates V2/base consistently. |
 | Cotage number | `kootaj.cotageNumber` | `shipment_kootaj_details.cotage_number`; Shipment Detail also stores/edits `declarationKootaj.cotageNumber` | Yes | Yes | Yes | No | Yes | Yes | Recommended Phase 2 editable field, but only after unifying Kootaj and Shipment Detail writes through one service. |
+| Cotage date | `kootaj.cotageDate` | `shipment_kootaj_details.cotage_date`; synchronized with Shipment Detail `declarationKootaj.cotageRegistrationDate` | Yes | Yes, through the shared declaration update path | Yes | No | Yes | Yes | Use the shared Shamsi date control and Kootaj version token. |
+| Customs office | `kootaj.customsOffice` | `shipment_kootaj_details.customs_office` | Yes | Display-only from the Daily Status projection | Yes | No | Yes | Yes | Single canonical Kootaj text field. |
+| Declaration reference | `kootaj.declarationReference` | `shipment_kootaj_details.declaration_reference` | Yes | Display-only from the Daily Status projection | Yes | No | Yes | Yes | Single canonical Kootaj text field. |
 | Commercial card display | `commercialCard.displayName`, `holderName`, `cardNumber`, `status` | Commercial card record plus Kootaj relationship | No direct display edit | No direct display edit | No direct display edit | Yes | Audit in commercial card module for display changes | Yes in owning module | Display text is read-only. |
 | Commercial card relationship | `kootaj.commercialCardId`, `commercialCard.id` | `shipment_kootaj_details.commercial_card_id` validated against tenant commercial cards | Yes | Yes, via Shipment Detail base `commercialCardId` | Yes | No | Yes | Yes | Board may edit relationship only through server-side tenant validation. |
 | Open task count | `tasks.openCount` | Task projection | No | No | No | Yes | Audit task create/status changes | Yes in task module | Count must remain derived. |
@@ -89,11 +92,14 @@ Start with fields that are operational, visible on the current board, already te
 Recommended first editable subset:
 
 1. `cotageNumber`
-2. `customsRoute`
-3. `customsStatus`
-4. `releaseStatus`
-5. `commercialCardId`
-6. `baseInfo.currentStage`, only if the shared service updates the canonical base/V2 projection used by Shipment Detail
+2. `cotageDate`
+3. `customsRoute`
+4. `customsOffice`
+5. `declarationReference`
+6. `customsStatus`
+7. `releaseStatus`
+
+`commercialCardId` and `baseInfo.currentStage` remain deferred and are not part of this editable subset.
 
 Do not start Phase 2 by editing broad shipment identity, customer identity, route semantics, workflow state, task counts, or document counts.
 

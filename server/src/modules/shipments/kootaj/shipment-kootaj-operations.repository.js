@@ -5,7 +5,10 @@ import { defaultV2SectionsForShipment } from "./shipment-kootaj.service.js";
 
 export const KOOTAJ_OPERATION_UPDATE_FIELDS = [
   "cotageNumber",
+  "cotageDate",
   "customsRoute",
+  "customsOffice",
+  "declarationReference",
   "customsStatus",
   "releaseStatus",
 ];
@@ -104,6 +107,7 @@ export function dailyStatusRouteFromShipmentV2Route(route) {
 export function kootajOperationUpdatesFromShipmentV2Declaration(payload = {}) {
   const updates = {};
   if (hasOwn(payload, "cotageNumber")) updates.cotageNumber = trimNullableText(payload.cotageNumber);
+  if (hasOwn(payload, "cotageRegistrationDate")) updates.cotageDate = trimNullableText(payload.cotageRegistrationDate);
   if (hasOwn(payload, "customsRoute")) {
     const mappedRoute = dailyStatusRouteFromShipmentV2Route(payload.customsRoute);
     // DIRECT_CARRIAGE has no current Daily Status/Kootaj enum equivalent, so Phase 2A
@@ -122,6 +126,7 @@ async function syncShipmentV2DeclarationFromKootaj(queryable, {
 } = {}) {
   const v2DeclarationPatch = {};
   if (hasOwn(updates, "cotageNumber")) v2DeclarationPatch.cotageNumber = trimNullableText(updates.cotageNumber) || "";
+  if (hasOwn(updates, "cotageDate")) v2DeclarationPatch.cotageRegistrationDate = trimNullableText(updates.cotageDate) || "";
   if (hasOwn(updates, "customsRoute")) {
     const mappedRoute = shipmentV2RouteFromDailyStatusRoute(updates.customsRoute);
     if (mappedRoute !== undefined) v2DeclarationPatch.customsRoute = mappedRoute;

@@ -462,15 +462,21 @@ export const dailyStatusPatchBodySchema = z.object({
 
 export const kootajBoardPatchBodySchema = z.object({
   cotageNumber: optionalNullableTrimmedText(120),
+  cotageDate: dailyStatusDate,
   customsStatus: z.preprocess(blankToNull, dailyStatusCustomsStatus.nullable().optional()),
   customsRoute: z.preprocess(blankToNull, dailyStatusCustomsRoute.nullable().optional()),
+  customsOffice: optionalNullableTrimmedText(180),
+  declarationReference: optionalNullableTrimmedText(180),
   releaseStatus: z.preprocess(blankToNull, dailyStatusReleaseStatus.nullable().optional()),
   expectedKootajUpdatedAt,
 }).strict().refine(
   (value) =>
     value.cotageNumber !== undefined ||
+    value.cotageDate !== undefined ||
     value.customsStatus !== undefined ||
     value.customsRoute !== undefined ||
+    value.customsOffice !== undefined ||
+    value.declarationReference !== undefined ||
     value.releaseStatus !== undefined,
   { message: "At least one Kootaj operation field is required." }
 );

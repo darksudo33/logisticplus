@@ -3,7 +3,10 @@ import type { DailyStatusBoardRow, DailyStatusPatch } from "@/src/types";
 
 export type KootajBoardPatch = {
   cotageNumber?: string | null;
+  cotageDate?: string | null;
   customsRoute?: string | null;
+  customsOffice?: string | null;
+  declarationReference?: string | null;
   customsStatus?: string | null;
   releaseStatus?: string | null;
   expectedKootajUpdatedAt: string | null;
