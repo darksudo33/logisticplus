@@ -2095,7 +2095,7 @@ export default function DailyStatus() {
               ))
             )}
           </div>
-          <aside className="min-w-0" data-testid="daily-status-detail-panel">
+          <aside className="min-w-0 lg:sticky lg:top-16 lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto" data-testid="daily-status-detail-panel">
             {activeRow ? (
               <RowDetailsPanel
                 row={activeRow}
