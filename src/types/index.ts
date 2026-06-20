@@ -689,6 +689,11 @@ export interface DailyStatusKootajProfile {
 
 export interface DailyStatusBoardRow {
   id: string;
+  /**
+   * Optimistic concurrency token for Kootaj-owned operation fields.
+   * Source: shipment_kootaj_details.updated_at.
+   */
+  kootajUpdatedAt: string | null;
   shipment: {
     id: string;
     code: string;

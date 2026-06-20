@@ -233,8 +233,11 @@ export function composeDailyStatusRow(row, { includeCustomerPrivateDetails = tru
   const customerName = customerCode;
   const commercialCard = summarizeCommercialCard(row);
   const workflow = summarizeWorkflow(row);
+  const kootajUpdatedAt = row.kootaj_updated_at || null;
   return {
     id: row.shipment_id,
+    // Client-facing optimistic concurrency token for Kootaj-owned operation fields.
+    kootajUpdatedAt,
     shipment: {
       id: row.shipment_id,
       code: row.shipment_code || row.shipment_id,
@@ -335,7 +338,7 @@ export function composeDailyStatusRow(row, { includeCustomerPrivateDetails = tru
       deliveryDate: row.delivery_date || null,
       internalNote: normalizeText(row.internal_note),
       customFields: row.custom_fields_json || {},
-      updatedAt: row.kootaj_updated_at || null,
+      updatedAt: kootajUpdatedAt,
       updatedById: row.kootaj_updated_by_id || null,
     },
     v2Profile: row.v2_profile_id
@@ -749,6 +752,7 @@ export async function updateDailyStatusRow(pool, {
   shipmentId,
   actorUserId,
   updates = {},
+  expectedKootajUpdatedAt,
   includeCustomerPrivateDetails = true,
 } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "updateDailyStatusRow");
@@ -801,6 +805,16 @@ export async function updateDailyStatusRow(pool, {
       includeCustomerPrivateDetails,
     });
 
+    await applyKootajOperationUpdates(client, {
+      organizationId: scopedOrganizationId,
+      shipmentId,
+      actorUserId,
+      shipmentRow,
+      updates: kootajUpdates,
+      expectedKootajUpdatedAt,
+      syncShipmentV2Profile: true,
+    });
+
     await client.query(
       `INSERT INTO shipment_kootaj_details (
          id, organization_id, shipment_id, updated_by_id
@@ -809,15 +823,6 @@ export async function updateDailyStatusRow(pool, {
        ON CONFLICT (organization_id, shipment_id) DO NOTHING`,
       [crypto.randomUUID(), scopedOrganizationId, shipmentId, actorUserId || null]
     );
-
-    await applyKootajOperationUpdates(client, {
-      organizationId: scopedOrganizationId,
-      shipmentId,
-      actorUserId,
-      shipmentRow,
-      updates: kootajUpdates,
-      syncShipmentV2Profile: true,
-    });
 
     const columns = [];
     const values = [scopedOrganizationId, shipmentId];

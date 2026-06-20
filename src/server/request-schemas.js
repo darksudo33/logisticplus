@@ -117,6 +117,11 @@ const isRealIsoDate = (value) => {
     date.getUTCDate() === day
   );
 };
+const isRealDateTime = (value) => {
+  if (!value) return true;
+  const date = new Date(String(value));
+  return Number.isFinite(date.getTime());
+};
 const optionalId = z.preprocess(
   blankToUndefined,
   z.string().trim().min(1, "Identifier is required.").max(128).optional().nullable()
@@ -249,6 +254,10 @@ const dailyStatusCustomsStatus = z.enum(DAILY_STATUS_CUSTOMS_STATUSES);
 const dailyStatusTaxPaymentStatus = z.enum(DAILY_STATUS_TAX_PAYMENT_STATUSES);
 const dailyStatusReleaseStatus = z.enum(DAILY_STATUS_RELEASE_STATUSES);
 const dailyStatusCommonStatus = z.enum(DAILY_STATUS_COMMON_STATUSES);
+const expectedKootajUpdatedAt = z.preprocess(
+  blankToNull,
+  z.string().trim().refine(isRealDateTime, "Expected Kootaj version must be a valid date/time.").nullable().optional()
+);
 const dailyStatusDate = z.preprocess(
   normalizeIsoDateInput,
   z
@@ -456,8 +465,13 @@ export const kootajBoardPatchBodySchema = z.object({
   customsStatus: z.preprocess(blankToNull, dailyStatusCustomsStatus.nullable().optional()),
   customsRoute: z.preprocess(blankToNull, dailyStatusCustomsRoute.nullable().optional()),
   releaseStatus: z.preprocess(blankToNull, dailyStatusReleaseStatus.nullable().optional()),
+  expectedKootajUpdatedAt,
 }).strict().refine(
-  (value) => Object.values(value).some((item) => item !== undefined),
+  (value) =>
+    value.cotageNumber !== undefined ||
+    value.customsStatus !== undefined ||
+    value.customsRoute !== undefined ||
+    value.releaseStatus !== undefined,
   { message: "At least one Kootaj operation field is required." }
 );
 

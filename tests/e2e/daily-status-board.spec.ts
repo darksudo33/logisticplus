@@ -151,6 +151,7 @@ test.describe.serial("daily status board", () => {
         "documents",
         "id",
         "kootaj",
+        "kootajUpdatedAt",
         "links",
         "shipment",
         "tasks",

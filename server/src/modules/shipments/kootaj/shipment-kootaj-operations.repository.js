@@ -44,6 +44,30 @@ function hasAnyField(value) {
   return Object.keys(value || {}).length > 0;
 }
 
+function kootajVersionValue(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = new Date(value);
+  const time = parsed.getTime();
+  return Number.isFinite(time) ? time : String(value);
+}
+
+function kootajVersionResponseValue(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : String(value);
+}
+
+function assertExpectedKootajVersion(currentUpdatedAt, expectedKootajUpdatedAt) {
+  if (expectedKootajUpdatedAt === undefined) return;
+  if (kootajVersionValue(currentUpdatedAt) === kootajVersionValue(expectedKootajUpdatedAt)) return;
+
+  const error = new Error("Kootaj operation fields changed. Refresh the board and try again.");
+  error.statusCode = 409;
+  error.code = "KOOTAJ_VERSION_CONFLICT";
+  error.currentKootajUpdatedAt = kootajVersionResponseValue(currentUpdatedAt);
+  throw error;
+}
+
 function kootajOperationDbValue(field, value) {
   if (field === "cotageNumber") return trimNullableText(value);
   return value ?? null;
@@ -160,33 +184,34 @@ export async function applyKootajOperationUpdates(queryable, {
   actorUserId,
   shipmentRow,
   updates = {},
+  expectedKootajUpdatedAt,
   syncShipmentV2Profile = true,
 } = {}) {
   const scopedOrganizationId = requireOrganizationScope(organizationId, "applyKootajOperationUpdates");
   const operationUpdates = pickKootajOperationUpdates(updates);
   if (!hasAnyField(operationUpdates)) return [];
 
-  // Phase 2A concurrency limitation: shipment_kootaj_details has updated_at but no
-  // client-facing expectedVersion/row_version yet. This shared path serializes writes
-  // with row locks and audit logs; optimistic conflict detection should be added before
-  // inline multi-user editing is exposed in the Kootaj Board UI.
-  await queryable.query(
-    `INSERT INTO shipment_kootaj_details (
-       id, organization_id, shipment_id, updated_by_id
-     )
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (organization_id, shipment_id) DO NOTHING`,
-    [crypto.randomUUID(), scopedOrganizationId, shipmentId, actorUserId || null]
-  );
-
-  await queryable.query(
-    `SELECT shipment_id
+  const lockedKootaj = await queryable.query(
+    `SELECT shipment_id, updated_at
      FROM shipment_kootaj_details
      WHERE organization_id = $1
        AND shipment_id = $2
      FOR UPDATE`,
     [scopedOrganizationId, shipmentId]
   );
+  const currentKootaj = lockedKootaj.rows[0] || null;
+  assertExpectedKootajVersion(currentKootaj?.updated_at || null, expectedKootajUpdatedAt);
+
+  if (!currentKootaj) {
+    await queryable.query(
+      `INSERT INTO shipment_kootaj_details (
+         id, organization_id, shipment_id, updated_by_id
+       )
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (organization_id, shipment_id) DO NOTHING`,
+      [crypto.randomUUID(), scopedOrganizationId, shipmentId, actorUserId || null]
+    );
+  }
 
   const values = [scopedOrganizationId, shipmentId];
   const columns = [];
