@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
-import { BASE_URL, expectPublicTrackingPayloadIsSafe, loginApi, loginViaUi, readOk } from "./helpers";
+import { BASE_URL, expectPublicTrackingPayloadIsSafe, loginApi, loginViaUi, nextValidShipmentCode, readOk } from "./helpers";
 
 const { Client } = pg;
 const testDatabaseUrl = process.env.TEST_DATABASE_URL || "postgres://postgres@localhost:5432/logisticplus_test";
@@ -178,6 +178,60 @@ test.describe.serial("UX/UI regression sweep", () => {
       await expect(page.getByText("Shipment was not found.")).toHaveCount(0);
     } finally {
       await api.dispose();
+    }
+  });
+
+  test("shipment edit route opens a CEO-only limited popup form", async ({ page }) => {
+    const api = await loginApi();
+    const trackingNumber = await nextValidShipmentCode();
+    const shipment = await readOk<any>(
+      await api.post("/api/shipments", {
+        data: {
+          trackingNumber,
+          origin: "Edit origin before",
+          destination: "Edit destination before",
+          status: "LOADING",
+        },
+      })
+    );
+    const nextTrackingNumber = await nextValidShipmentCode();
+    try {
+      await loginViaUi(page);
+      await page.goto(`/shipments/${shipment.id}/edit`);
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await expect(page.getByTestId("shipment-edit-tracking-number-input")).toHaveValue(trackingNumber);
+      await expect(page.getByTestId("shipment-edit-origin-input")).toBeVisible();
+      await expect(page.getByTestId("shipment-edit-destination-input")).toBeVisible();
+      await expect(page.getByTestId("shipment-edit-discharge-port-input")).toBeVisible();
+      await expect(page.getByText("شماره کانتینر")).toHaveCount(0);
+      await expect(page.getByText("وضعیت فعلی")).toHaveCount(0);
+      await expect(page.getByText("نوع محموله")).toHaveCount(0);
+
+      await page.getByTestId("shipment-edit-tracking-number-input").fill(nextTrackingNumber);
+      await page.getByTestId("shipment-edit-origin-input").fill("Edit origin after");
+      await page.getByTestId("shipment-edit-destination-input").fill("Edit destination after");
+      await page.getByTestId("shipment-edit-discharge-port-input").fill("Edit discharge after");
+      const saveResponse = page.waitForResponse((response) => (
+        response.url().includes(`/api/shipments/${shipment.id}/operational-fields`) &&
+        response.request().method() === "PATCH"
+      ));
+      await page.getByTestId("shipment-edit-save").click();
+      expect((await saveResponse).status()).toBeLessThan(400);
+      await expect(page).toHaveURL(new RegExp(`/shipments/${shipment.id}$`));
+
+      const updated = await readOk<any>(await api.get(`/api/shipments/${shipment.id}`));
+      expect(updated.trackingNumber).toBe(nextTrackingNumber);
+      expect(updated.origin).toBe("Edit origin after");
+      expect(updated.destination).toBe("Edit destination after");
+      expect(updated.dischargePort).toBe("Edit discharge after");
+    } finally {
+      const client = await dbClient();
+      try {
+        await client.query("DELETE FROM shipments WHERE id = $1", [shipment.id]);
+      } finally {
+        await client.end();
+        await api.dispose();
+      }
     }
   });
 

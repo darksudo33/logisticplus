@@ -81,6 +81,7 @@ export default function Shipments() {
   const tasks = tasksResource.data;
   const refreshStoreShipments = useAppStore(state => state.refreshShipments);
   const currentUser = useAppStore(state => state.currentUser);
+  const canEditShipmentBasics = currentUser?.role === "CEO";
   const [shipmentSteps, setShipmentSteps] = useState<ShipmentStep[]>([]);
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -343,13 +344,15 @@ export default function Shipments() {
                         )}
                       />
                       <DropdownMenuContent className="bg-card border-border text-foreground w-52 shadow-2xl" align="end" dir="rtl">
-                         <DropdownMenuItem 
-                           className="text-xs cursor-pointer hover:bg-muted flex items-center gap-2 rounded-lg"
-                           onClick={() => navigate(`/shipments/${shipment.id}/edit`)}
-                         >
-                           <Edit className="w-3.5 h-3.5" />
-                           ویرایش محموله
-                         </DropdownMenuItem>
+                         {canEditShipmentBasics ? (
+                           <DropdownMenuItem
+                             className="text-xs cursor-pointer hover:bg-muted flex items-center gap-2 rounded-lg"
+                             onClick={() => navigate(`/shipments/${shipment.id}/edit`)}
+                           >
+                             <Edit className="w-3.5 h-3.5" />
+                             ویرایش محموله
+                           </DropdownMenuItem>
+                         ) : null}
                           {isShipmentTerminalStatus(shipment.status) && (
                             <DropdownMenuItem 
                               className="text-xs cursor-pointer hover:bg-amber-500/10 text-amber-500 font-bold flex items-center gap-2 rounded-lg"
@@ -546,13 +549,15 @@ export default function Shipments() {
                                 )}
                               />
                               <DropdownMenuContent className="bg-card border-border text-foreground w-48 shadow-2xl" align="end" dir="rtl">
-                                 <DropdownMenuItem 
-                                   className="text-xs cursor-pointer hover:bg-muted flex items-center gap-2 rounded-lg"
-                                   onClick={() => navigate(`/shipments/${shipment.id}/edit`)}
-                                 >
-                                   <Edit className="w-3.5 h-3.5" />
-                                   ویرایش محموله
-                                 </DropdownMenuItem>
+                                 {canEditShipmentBasics ? (
+                                   <DropdownMenuItem
+                                     className="text-xs cursor-pointer hover:bg-muted flex items-center gap-2 rounded-lg"
+                                     onClick={() => navigate(`/shipments/${shipment.id}/edit`)}
+                                   >
+                                     <Edit className="w-3.5 h-3.5" />
+                                     ویرایش محموله
+                                   </DropdownMenuItem>
+                                 ) : null}
                                  {isShipmentTerminalStatus(shipment.status) && (
                                    <DropdownMenuItem 
                                      className="text-xs cursor-pointer hover:bg-amber-500/10 text-amber-500 font-bold flex items-center gap-2 rounded-lg"

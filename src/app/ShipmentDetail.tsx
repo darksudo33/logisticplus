@@ -1498,7 +1498,13 @@ function DeclarationKootajSection({
             {displayValue(routeLabel)}
           </BaseInfoCard>
           <BaseInfoCard label="تاریخ ثبت کوتاژ" testId="shipment-v2-declaration-cotage-date-value">
-            {displayShamsiDate(data.cotageRegistrationDate)}
+            {displayShamsiDate(dailyStatusRow?.kootaj.cotageDate || data.cotageRegistrationDate)}
+          </BaseInfoCard>
+          <BaseInfoCard label="گمرک / محل اظهار" testId="shipment-v2-declaration-customs-office-value">
+            {displayValue(dailyStatusRow?.kootaj.customsOffice)}
+          </BaseInfoCard>
+          <BaseInfoCard label="شماره / مرجع اظهار" testId="shipment-v2-declaration-reference-value">
+            {displayValue(dailyStatusRow?.kootaj.declarationReference)}
           </BaseInfoCard>
           <BaseInfoCard label="ارزش کل" testId="shipment-v2-declaration-total-value-value">
             {displayMoneyValue(data.totalValueAmount, data.totalValueCurrency)}

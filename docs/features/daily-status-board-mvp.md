@@ -2,7 +2,7 @@
 
 ## Scope
 
-`وضعیت روزانه` is a protected operational board at `/daily-status` with `/kootaj-board` as an alias. Each row is a live projection based on one active shipment. The board does not create frontend-only rows and does not copy source-module data.
+`وضعیت روزانه` is the protected operational board at `/daily-status`. There is no standalone `/kootaj-board` page or API alias. Each row is a live projection based on one active shipment. The board does not create frontend-only rows and does not copy source-module data.
 
 Shipment Detail exposes the same data through an inline `اطلاعات واردات، کوتاژ و ترخیص` form. That form must use `shipment_kootaj_details` through the daily-status repository/API and must not create a shipment-detail-only table, JSON cache, or duplicated frontend source. It is a structured Iran import/customs data profile, not the real workflow timeline; the actual workflow/progress UI remains separate.
 

@@ -2,7 +2,6 @@ import {
   dailyStatusListQuerySchema,
   dailyStatusParamsSchema,
   dailyStatusPatchBodySchema,
-  kootajBoardPatchBodySchema,
 } from "./daily-status.validation.js";
 import { parseRequestValue } from "../../shared/middleware/validate.middleware.js";
 import {
@@ -90,9 +89,7 @@ export function registerDailyStatusRoutes(
     }
   }
 
-  function createPatchHandler(auditSource, summary, bodySchema = dailyStatusPatchBodySchema, {
-    useKootajVersionGuard = false,
-  } = {}) {
+  function createPatchHandler(auditSource, summary) {
     return async function handlePatch(req, res) {
       try {
         const tenantRequest = await requireAuthenticatedTenantUser(req, res, "daily status update API");
@@ -101,16 +98,14 @@ export function registerDailyStatusRoutes(
         await requirePermission(user, "shipments.update");
         const params = parseRequestValue(res, dailyStatusParamsSchema, req.params);
         if (!params) return;
-        const body = parseRequestValue(res, bodySchema, req.body || {});
+        const body = parseRequestValue(res, dailyStatusPatchBodySchema, req.body || {});
         if (!body) return;
-        const { expectedKootajUpdatedAt, ...updates } = body;
 
         const result = await updateDailyStatusRow(pool, {
           organizationId,
           shipmentId: params.shipmentId,
           actorUserId: user.id,
-          updates,
-          expectedKootajUpdatedAt: useKootajVersionGuard ? expectedKootajUpdatedAt : undefined,
+          updates: body,
           includeCustomerPrivateDetails: user.role === "CEO",
         });
         if (!result) return createApiError(res, 404, "NOT_FOUND", "Shipment was not found.");
@@ -170,17 +165,9 @@ export function registerDailyStatusRoutes(
     "shipment-detail-daily-status",
     "Shipment detail daily status fields were updated."
   );
-  const handleKootajBoardPatch = createPatchHandler(
-    "kootaj-board",
-    "Kootaj board operation fields were updated.",
-    kootajBoardPatchBodySchema,
-    { useKootajVersionGuard: true }
-  );
 
   app.get("/api/daily-status", handleList);
-  app.get("/api/kootaj-board", handleList);
   app.get("/api/shipments/:shipmentId/daily-status", handleShipmentDetailGet);
   app.patch("/api/daily-status/:shipmentId", handleDailyStatusPatch);
-  app.patch("/api/kootaj-board/:shipmentId", handleKootajBoardPatch);
   app.patch("/api/shipments/:shipmentId/daily-status", handleShipmentDetailPatch);
 }

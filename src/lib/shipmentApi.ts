@@ -34,6 +34,7 @@ export type ShipmentMutation = Partial<
     | "customerName"
     | "origin"
     | "destination"
+    | "dischargePort"
     | "status"
     | "shipmentDirection"
     | "transportMode"

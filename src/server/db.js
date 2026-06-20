@@ -1360,6 +1360,7 @@ function cleanShipmentLegacyPatch(updates = {}) {
     "actualDelivery",
     "freeTimeDays",
     "notes",
+    "dischargePort",
     "customsDeclarationNumber",
     "customsStatus",
     "importPermitNumber",

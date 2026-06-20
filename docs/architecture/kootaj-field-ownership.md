@@ -2,18 +2,16 @@
 
 ## Executive decision
 
-Kootaj Board Phase 2 should edit shared canonical shipment operation fields, not local duplicated board fields.
+There is no standalone Kootaj Board page. Daily Status is the operational board surface, and Shipment Detail is the canonical shipment detail surface.
 
-The Phase 1 board is intentionally read-only. It renders `GET /api/kootaj-board`, which is an alias of the Daily Status projection. That is the right direction: Daily Status, Kootaj Board, and Shipment Detail should continue to read and write the same shipment/operation source of truth.
-
-Phase 2 must not introduce a spreadsheet-only persistence model. If Kootaj Board edits a field that is also visible in Shipment Detail or Daily Status, the edit must go through the same backend service or shared repository function used by the other surfaces.
+Kootaj/customs operation fields must remain shared canonical shipment operation fields, not local duplicated board fields. Any future editable Kootaj/customs field must go through the same backend service or shared repository function used by Daily Status and Shipment Detail.
 
 ## Current architecture summary
 
-- Frontend page: `src/app/KootajBoard.tsx`
+- Operational board surface: `src/app/DailyStatus.tsx` at `/daily-status`
 - API client: `src/lib/dailyStatusApi.ts`
-- Read endpoint: `GET /api/kootaj-board`
-- Backend route: Daily Status route alias handled by the same list handler as `GET /api/daily-status`
+- Read endpoint: `GET /api/daily-status`
+- Write endpoints: `PATCH /api/daily-status/:shipmentId` and `PATCH /api/shipments/:shipmentId/daily-status`
 - Backend projection: `server/src/modules/daily-status/daily-status.repository.js`
 - Shared field allowlist: `src/shared/daily-status-board.js`
 - Request validation: `src/server/request-schemas.js`
@@ -21,7 +19,7 @@ Phase 2 must not introduce a spreadsheet-only persistence model. If Kootaj Board
 - Shipment V2 profile API used by detail page: `src/lib/shipmentV2Api.ts`
 - Shipment V2 backend: `server/src/modules/shipments/shipment-v2.routes.js` and `server/src/modules/shipments/shipment-v2.repository.js`
 
-The current board row is a projection over existing shipment-related data:
+The Daily Status row is a projection over existing shipment-related data:
 
 - `shipments`
 - `shipment_kootaj_details`
@@ -45,9 +43,9 @@ The current board row is a projection over existing shipment-related data:
 
 ## Field ownership table
 
-This table covers every data field currently shown or used by `/kootaj-board`, including summary tiles and row controls.
+This table covers Kootaj/customs-related fields currently shown or used by the shared Daily Status / Shipment Detail projections.
 
-| Kootaj Board field | Current DTO path | Source of truth | Editable from Kootaj Board Phase 2 | Editable from Shipment Detail | Editable from Daily Status | Derived/read-only | Audit history required | Concurrency/version required | Rule |
+| Kootaj/customs field | Current DTO path | Source of truth | Editable from Daily Status operation board | Editable from Shipment Detail | Editable from Daily Status | Derived/read-only | Audit history required | Concurrency/version required | Rule |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Total rows summary | `rows.length` | Current API result set | No | No | No | Yes | No direct audit | No | Projection/UI count only. |
 | Cotage registered summary | rows where `kootaj.cotageNumber` exists | `shipment_kootaj_details.cotage_number` plus current result set | No direct aggregate edit | No direct aggregate edit | No direct aggregate edit | Yes | Audit underlying cotage edits | Yes, on underlying cotage edits | Aggregate must stay derived. |
@@ -71,6 +69,9 @@ This table covers every data field currently shown or used by `/kootaj-board`, i
 | Workflow current step label | `workflow.currentStepLabel` | Workflow state/projection | No | No direct profile edit | No direct profile edit | Yes | Audit workflow transitions in workflow module | Yes in workflow module | Display only on board. |
 | Current stage fallback | `baseInfo.currentStage` | V2 base section / Daily Status base projection | Yes, if shared service owns it | Yes | Yes | No | Yes | Yes | Can be included after customs fields if the shared service updates V2/base consistently. |
 | Cotage number | `kootaj.cotageNumber` | `shipment_kootaj_details.cotage_number`; Shipment Detail also stores/edits `declarationKootaj.cotageNumber` | Yes | Yes | Yes | No | Yes | Yes | Recommended Phase 2 editable field, but only after unifying Kootaj and Shipment Detail writes through one service. |
+| Cotage date | `kootaj.cotageDate` | `shipment_kootaj_details.cotage_date`; synchronized with Shipment Detail `declarationKootaj.cotageRegistrationDate` | Yes | Yes, through the shared declaration update path | Yes | No | Yes | Yes | Use the shared Shamsi date control and Kootaj version token. |
+| Customs office | `kootaj.customsOffice` | `shipment_kootaj_details.customs_office` | Yes | Display-only from the Daily Status projection | Yes | No | Yes | Yes | Single canonical Kootaj text field. |
+| Declaration reference | `kootaj.declarationReference` | `shipment_kootaj_details.declaration_reference` | Yes | Display-only from the Daily Status projection | Yes | No | Yes | Yes | Single canonical Kootaj text field. |
 | Commercial card display | `commercialCard.displayName`, `holderName`, `cardNumber`, `status` | Commercial card record plus Kootaj relationship | No direct display edit | No direct display edit | No direct display edit | Yes | Audit in commercial card module for display changes | Yes in owning module | Display text is read-only. |
 | Commercial card relationship | `kootaj.commercialCardId`, `commercialCard.id` | `shipment_kootaj_details.commercial_card_id` validated against tenant commercial cards | Yes | Yes, via Shipment Detail base `commercialCardId` | Yes | No | Yes | Yes | Board may edit relationship only through server-side tenant validation. |
 | Open task count | `tasks.openCount` | Task projection | No | No | No | Yes | Audit task create/status changes | Yes in task module | Count must remain derived. |
@@ -89,17 +90,20 @@ Start with fields that are operational, visible on the current board, already te
 Recommended first editable subset:
 
 1. `cotageNumber`
-2. `customsRoute`
-3. `customsStatus`
-4. `releaseStatus`
-5. `commercialCardId`
-6. `baseInfo.currentStage`, only if the shared service updates the canonical base/V2 projection used by Shipment Detail
+2. `cotageDate`
+3. `customsRoute`
+4. `customsOffice`
+5. `declarationReference`
+6. `customsStatus`
+7. `releaseStatus`
+
+`commercialCardId` and `baseInfo.currentStage` remain deferred and are not part of this editable subset.
 
 Do not start Phase 2 by editing broad shipment identity, customer identity, route semantics, workflow state, task counts, or document counts.
 
 ## Fields that must remain read-only
 
-These fields should stay read-only on Kootaj Board:
+These fields should stay read-only on the Daily Status operational board:
 
 - shipment/reference number
 - shipment detail link
@@ -123,7 +127,7 @@ No migration should be added in the read-only architecture pass, but Phase 2 sho
 - A board-specific history/event table if the product needs daily operational notes, follow-up owners, reminders, pinned attention flags, or per-day board comments.
 - A real document requirement model before `missingRequiredCount` can become more than a projection placeholder.
 - Safe updater display support for Kootaj changes if the UI should show user names instead of `updatedById`.
-- Explicit currency columns for any future monetary fields exposed on Kootaj Board. Amount-only fields must not be introduced.
+- Explicit currency columns for any future monetary fields exposed in Daily Status. Amount-only fields must not be introduced.
 
 ## Fields that should use history/event rows instead of direct overwrites
 
@@ -141,19 +145,18 @@ Direct overwrites are acceptable only for current-state profile fields like cota
 
 ## API design rule
 
-Kootaj Board and Shipment Detail edits must call the same backend service or shared repository function.
+Daily Status and Shipment Detail edits must call the same backend service or shared repository function.
 
 Recommended shape:
 
 - Introduce a shared operation update service, for example `updateShipmentOperationFields`.
 - Reuse it from:
-  - `PATCH /api/kootaj-board/:shipmentId`
   - `PATCH /api/daily-status/:shipmentId`
   - Shipment Detail section updates that overlap with Kootaj operation fields
 - Keep field validation server-side and allowlisted.
 - Derive tenant scope from the authenticated user; never trust client-supplied `organizationId`.
 - Emit audit metadata with:
-  - source surface: `kootaj-board`, `daily-status`, or `shipment-detail`
+  - source surface: `daily-status` or `shipment-detail`
   - shipment id
   - changed field names
   - before/after values where safe
@@ -165,7 +168,7 @@ The frontend should not know whether a field is stored in `shipments`, `shipment
 
 - All reads and writes must be scoped by `organization_id` from the authenticated session.
 - Customer names must come from existing safe DTO/projection rules.
-- Kootaj Board must not join or fetch private customer fields directly to improve labels.
+- Daily Status must not join or fetch private customer fields directly to improve labels.
 - If the current user is not allowed to see private customer details, show customer code or the privacy-safe customer label only.
 - Commercial card relationships must be validated against the same organization before save.
 - Commercial card display should be allowlisted to operationally necessary fields only.
@@ -174,28 +177,27 @@ The frontend should not know whether a field is stored in `shipments`, `shipment
 
 ## Concurrency rule
 
-Editable Phase 2 requests must include an expected version for the row or the specific field group being edited.
+Future inline edits for high-concurrency Kootaj/customs fields should include an expected version for the row or the specific field group being edited.
 
 Minimum rule:
 
 1. Client reads a board row with version metadata.
 2. For Kootaj-owned operation fields, the current version token is `kootajUpdatedAt`, sourced from `shipment_kootaj_details.updated_at`.
-3. Client sends the patch with `expectedKootajUpdatedAt`.
+3. A future guarded Daily Status save should send an expected Kootaj version with the patch.
 4. Server locks the shipment/Kootaj row inside the transaction.
-5. Server compares `expectedKootajUpdatedAt` with the current `shipment_kootaj_details.updated_at`.
+5. Server compares the expected version with the current `shipment_kootaj_details.updated_at`.
 6. If changed, return `409 Conflict` with `KOOTAJ_VERSION_CONFLICT` and the current safe version marker.
 7. If unchanged, apply the allowlisted patch, update version metadata, and audit the change.
 
-Do not allow blind last-write-wins updates for staff-facing operational board fields from inline editing. The backend can temporarily accept omitted `expectedKootajUpdatedAt` for compatibility with existing non-inline clients, but the Phase 2 Kootaj Board UI must send it on every save and must refresh/retry after a `409`.
+Do not introduce blind last-write-wins behavior for new high-concurrency inline editing. Daily Status currently remains the operational surface; add guarded save behavior there if staff start editing the same Kootaj/customs fields concurrently.
 
 ## E2E test requirements for Phase 2
 
 Phase 2 tests should prove two-way consistency:
 
-- Editing `cotageNumber`, `customsRoute`, `customsStatus`, and `releaseStatus` from Kootaj Board appears in Shipment Detail; `customsStatus` and `releaseStatus` are display-only there.
-- Editing `cotageNumber` from Shipment Detail appears in Kootaj Board.
-- Editing `customsRoute`, `customsStatus`, or `releaseStatus` from Kootaj Board appears in Daily Status.
-- Editing the same overlapping field from Daily Status appears in Kootaj Board.
+- Editing `cotageNumber`, `customsRoute`, `customsStatus`, and `releaseStatus` from Daily Status appears in Shipment Detail; `customsStatus` and `releaseStatus` are display-only there.
+- Editing `cotageNumber` from Shipment Detail appears in Daily Status.
+- Editing overlapping Kootaj/customs fields from Daily Status and Shipment Detail stays consistent through the shared projection.
 - Editing `commercialCardId` validates tenant ownership and updates all projections.
 - Customer display remains privacy-safe for users without private customer access.
 - Task/document counts remain read-only and cannot be changed through board editing controls.
@@ -204,10 +206,10 @@ Phase 2 tests should prove two-way consistency:
 
 ## Phase 2 implementation guardrails
 
-- Keep `/kootaj-board` connected to the Daily Status projection.
+- Do not recreate a standalone `/kootaj-board` page.
 - Do not create `kootaj_board_rows` as a duplicate spreadsheet table.
 - Do not add editable controls for derived counts or display labels.
-- Do not add route-specific business logic in the React page.
+- Do not add route-specific Kootaj business logic in React.
 - Add the shared backend write service before wiring frontend edit controls.
 - Add migrations only when the write design requires version/history support.
 - Preserve canonical `/shipments/:id` as the detail route for all board row links.
