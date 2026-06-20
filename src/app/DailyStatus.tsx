@@ -1501,7 +1501,7 @@ function RowDetailsPanel({
   onSave: () => void;
 }) {
   const isEdit = mode === "edit";
-  const panelHeightClass = surface === "desktop" ? "max-h-[calc(100dvh-15.5rem)]" : "max-h-[75dvh]";
+  const panelHeightClass = surface === "desktop" ? "h-[calc(100dvh-5rem)]" : "max-h-[75dvh]";
   const panelTestId = (name: string) => `daily-status-${surface}-${name}-${row.id}`;
   const shipmentCode = row.baseInfo?.code || row.shipment.code;
   return (
