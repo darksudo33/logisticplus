@@ -153,8 +153,9 @@ export default function Customers() {
   const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
   const [customerForm, setCustomerForm] = useState<CustomerFormState>(() => emptyCustomerForm());
   const isCeo = currentUser?.role === "CEO";
+  const canManageCustomers = currentUser?.role === "CEO" || currentUser?.role === "MANAGER";
 
-  if (currentUser && !isCeo) {
+  if (currentUser && !canManageCustomers) {
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -320,7 +321,7 @@ export default function Customers() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-xl border border-border bg-card p-4 shadow-sm">
         <div className="flex flex-col">
           <h1 className="text-xl font-bold tracking-tight text-foreground">پایگاه مشتریان</h1>
-          <p className="text-[12px] text-muted-foreground">اطلاعات محرمانه مشتریان فقط برای مدیرعامل قابل مشاهده و ویرایش است.</p>
+          <p className="text-[12px] text-muted-foreground">اطلاعات محرمانه مشتریان فقط برای مدیرعامل و مدیر عملیات قابل مشاهده و ویرایش است.</p>
         </div>
 
         <Button
@@ -480,16 +481,18 @@ export default function Customers() {
                                   ویرایش مشتری
                                 </DropdownMenuItem>
                                 <DropdownMenuItem className="text-xs cursor-pointer hover:bg-muted rounded-lg">مشاهده تاریخچه</DropdownMenuItem>
-                                <DropdownMenuItem
-                                  className="text-xs cursor-pointer hover:bg-destructive/10 text-destructive font-bold rounded-lg"
-                                  onClick={() => {
-                                    setCustomerToDelete(customer.id);
-                                    setIsDeleteDialogOpen(true);
-                                  }}
-                                >
-                                  <Trash className="ml-1.5 h-3.5 w-3.5" />
-                                  حذف مشتری
-                                </DropdownMenuItem>
+                                {isCeo ? (
+                                  <DropdownMenuItem
+                                    className="text-xs cursor-pointer hover:bg-destructive/10 text-destructive font-bold rounded-lg"
+                                    onClick={() => {
+                                      setCustomerToDelete(customer.id);
+                                      setIsDeleteDialogOpen(true);
+                                    }}
+                                  >
+                                    <Trash className="ml-1.5 h-3.5 w-3.5" />
+                                    حذف مشتری
+                                  </DropdownMenuItem>
+                                ) : null}
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </div>

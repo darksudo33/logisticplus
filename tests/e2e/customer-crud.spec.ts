@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { expect, test } from "@playwright/test";
 import pg from "pg";
-import { disposeContexts, loginApi, loginViaUi, readOk } from "./helpers";
+import { disposeContexts, loginApi, loginViaUi, readOk, uniqueEmail, USER_PASSWORD } from "./helpers";
 
 const { Client } = pg;
 
@@ -24,6 +24,36 @@ const sortTestCustomers = [
   { customerCode: "E2E-SORT-2", customerName: "Sort customer 2", companyName: "Sort company 2", email: "customer-sort-2@example.test" },
   { customerCode: "E2E-SORT-001", customerName: "Sort customer 1", companyName: "Sort company 1", email: "customer-sort-001@example.test" },
 ];
+
+const managerCustomer = {
+  customerCode: "E2E-MANAGER-CUSTOMER",
+  customerName: "Manager Customer E2E",
+  companyName: "Manager Customer Company",
+  editedCompanyName: "Manager Customer Company Edited",
+  phoneNumber: "09127771122",
+  email: "manager-customer@example.test",
+  address: "Tehran manager customer address",
+};
+
+async function createCompanyUser(role: string, prefix: string) {
+  const owner = await loginApi();
+  const email = uniqueEmail(prefix);
+  try {
+    await readOk(
+      await owner.post("/api/users", {
+        data: {
+          name: `E2E ${role} User`,
+          email,
+          password: USER_PASSWORD,
+          role,
+        },
+      })
+    );
+    return email;
+  } finally {
+    await disposeContexts(owner);
+  }
+}
 
 async function cleanupTestCustomer({
   email,
@@ -151,6 +181,61 @@ test.describe.serial("customer create and archive flow", () => {
     await page.goto("/archive");
     await expect(page.getByText(editedCompanyName).first()).toBeVisible();
     expect(consoleErrors).toEqual([]);
+  });
+});
+
+test.describe.serial("manager customer access", () => {
+  test.beforeEach(async () => {
+    await cleanupTestCustomer(managerCustomer);
+  });
+
+  test.afterEach(async () => {
+    await cleanupTestCustomer(managerCustomer);
+  });
+
+  test("allows managers to view, create, and edit customers without archive access", async ({ page }) => {
+    const managerEmail = await createCompanyUser("MANAGER", "e2e-manager-customer");
+
+    await loginViaUi(page, managerEmail, USER_PASSWORD);
+    await page.goto("/customers");
+    await expect(page).toHaveURL(/\/customers$/);
+    await expect(page.locator('a[href="/customers"]').first()).toBeVisible();
+
+    await page.getByRole("button", { name: /مشتری جدید/ }).first().click();
+    await page.locator("#customerCode").fill(managerCustomer.customerCode);
+    await page.locator("#name").fill(managerCustomer.customerName);
+    await page.locator("#company").fill(managerCustomer.companyName);
+    await page.locator("#email").fill(managerCustomer.email);
+    await page.locator("#customerPhone-0").fill(managerCustomer.phoneNumber);
+    await page.locator("#address").fill(managerCustomer.address);
+    await page.getByRole("button", { name: /ذخیره مشتری/ }).click();
+
+    const customerRow = page.locator("tbody tr", { hasText: managerCustomer.customerCode });
+    await expect(customerRow).toBeVisible();
+    await expect(customerRow).toContainText(managerCustomer.companyName);
+
+    await customerRow.getByRole("button").last().click();
+    await expect(page.getByRole("menuitem", { name: /حذف مشتری/ })).toHaveCount(0);
+    await page.getByRole("menuitem", { name: /ویرایش مشتری/ }).click();
+    await page.locator("#company").fill(managerCustomer.editedCompanyName);
+    await page.getByRole("button", { name: /ذخیره تغییرات مشتری/ }).click();
+    await expect(customerRow).toContainText(managerCustomer.editedCompanyName);
+
+    const manager = await loginApi(managerEmail, USER_PASSWORD);
+    try {
+      const customers = await readOk<any[]>(await manager.get("/api/customers?includeArchived=true"));
+      const created = customers.find((customer) => customer.customerCode === managerCustomer.customerCode);
+      expect(created).toBeTruthy();
+
+      await page.goto(`/customers/${created.id}`);
+      await expect(page).toHaveURL(new RegExp(`/customers/${created.id}$`));
+      await expect(page.locator("body")).toContainText(managerCustomer.editedCompanyName);
+
+      const archive = await manager.post(`/api/customers/${created.id}/archive`);
+      expect(archive.status(), await archive.text()).toBe(403);
+    } finally {
+      await disposeContexts(manager);
+    }
   });
 });
 

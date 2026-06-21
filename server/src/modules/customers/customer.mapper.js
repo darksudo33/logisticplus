@@ -1,5 +1,5 @@
 export function canViewCustomerPrivateDetails(user) {
-  return String(user?.role || user || "").toUpperCase() === "CEO";
+  return ["CEO", "MANAGER"].includes(String(user?.role || user || "").toUpperCase());
 }
 
 export function customerDisplayCode(row) {

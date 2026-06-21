@@ -5,6 +5,17 @@ export function requireCompanyCeoRole(user) {
   throw error;
 }
 
+export function canManageCustomers(user) {
+  return ["CEO", "MANAGER"].includes(String(user?.role || "").toUpperCase());
+}
+
+export function requireCustomerManagerRole(user) {
+  if (canManageCustomers(user)) return;
+  const error = new Error("Customer management access is required.");
+  error.statusCode = 403;
+  throw error;
+}
+
 export async function listCustomersService({
   user,
   tenantContext,
@@ -15,7 +26,7 @@ export async function listCustomersService({
     includeArchived: query.includeArchived === "true",
     search: query.search || "",
     organizationId: tenantContext.organizationId,
-    includePrivateDetails: user.role === "CEO",
+    includePrivateDetails: canManageCustomers(user),
   });
 }
 
@@ -26,7 +37,7 @@ export async function createCustomerService({
   auditLog,
   requestContext,
 }) {
-  requireCompanyCeoRole(user);
+  requireCustomerManagerRole(user);
   const created = await createCustomerRecord({ ownerUserId: user.id, actorUserId: user.id, customer: body });
   await auditLog({
     actorUserId: user.id,
@@ -48,7 +59,7 @@ export async function getCustomerService({
 }) {
   return getCustomerRecord(params.id, {
     organizationId: tenantContext.organizationId,
-    includePrivateDetails: user.role === "CEO",
+    includePrivateDetails: canManageCustomers(user),
   });
 }
 
@@ -61,7 +72,7 @@ export async function updateCustomerService({
   auditLog,
   requestContext,
 }) {
-  requireCompanyCeoRole(user);
+  requireCustomerManagerRole(user);
   const result = await updateCustomerRecord(params.id, body, {
     organizationId: tenantContext.organizationId,
     actorUserId: user.id,
@@ -88,7 +99,7 @@ export async function listCustomerRelatedService({
 }) {
   return listCustomerRelated(params.id, params.related, {
     organizationId: tenantContext.organizationId,
-    includePrivateDetails: user.role === "CEO",
+    includePrivateDetails: canManageCustomers(user),
   });
 }
 

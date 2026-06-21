@@ -12,6 +12,7 @@ import {
   listCustomerRelatedService,
   listCustomersService,
   requireCompanyCeoRole,
+  requireCustomerManagerRole,
   updateCustomerService,
 } from "./customer.service.js";
 
@@ -50,7 +51,7 @@ export function createCustomerController(deps) {
         const tenantContext = deps.requireTenantContext(req, res, "create customer");
         if (!tenantContext) return;
         await deps.requirePermission(user, "customers.create");
-        requireCompanyCeoRole(user);
+        requireCustomerManagerRole(user);
         const body = parseRequestValue(res, customerCreateBodySchema, req.body || {});
         if (!body) return;
         const created = await createCustomerService({
@@ -100,7 +101,7 @@ export function createCustomerController(deps) {
         const tenantContext = deps.requireTenantContext(req, res, "update customer");
         if (!tenantContext) return;
         await deps.requirePermission(user, "customers.update");
-        requireCompanyCeoRole(user);
+        requireCustomerManagerRole(user);
         const params = parseRequestValue(res, customerParamsSchema, req.params);
         if (!params) return;
         const body = parseRequestValue(res, customerUpdateBodySchema, req.body || {});

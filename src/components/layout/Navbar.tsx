@@ -40,7 +40,7 @@ const sidebarItems = [
   { icon: Users, label: "مراجعات حضوری", path: "/compliance-meetings" },
   { icon: CheckSquare, label: "وظایف", path: "/tasks" },
   { icon: IdCard, label: "کارت‌های بازرگانی", path: "/commercial-cards" },
-  { icon: Users, label: "مشتریان", path: "/customers", ceoOnly: true },
+  { icon: Users, label: "مشتریان", path: "/customers", roles: ["CEO", "MANAGER"] },
   { icon: ShieldCheck, label: "مدیریت کاربران", path: "/management", ceoOnly: true },
   { icon: FileText, label: "اسناد", path: "/documents" },
   { icon: CreditCard, label: "چک‌ها", path: "/cheques" },
@@ -60,6 +60,8 @@ function canShowSidebarItem(item: (typeof sidebarItems)[number], currentUser: an
   if ((item as any).enabled === false) return false;
   if ((item as any).platformOnly) return false;
   if ((item as any).ceoOnly && currentUser?.role !== "CEO") return false;
+  const roles = (item as any).roles;
+  if (Array.isArray(roles) && roles.length && !roles.includes(currentUser?.role)) return false;
   const permission = (item as any).permission;
   const permissions = (item as any).permissions;
   const userPermissions = Array.isArray(currentUser?.permissions) ? currentUser.permissions : [];

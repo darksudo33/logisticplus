@@ -34,7 +34,7 @@ export default function CustomerDetail() {
   const shipments = useAppStore(state => state.shipments);
   const currentUser = useAppStore(state => state.currentUser);
   const [remoteShipments, setRemoteShipments] = React.useState<any[]>([]);
-  const isCeo = currentUser?.role === "CEO";
+  const canManageCustomers = currentUser?.role === "CEO" || currentUser?.role === "MANAGER";
 
   React.useEffect(() => {
     let isActive = true;
@@ -54,7 +54,7 @@ export default function CustomerDetail() {
     };
   }, [id]);
 
-  if (currentUser && !isCeo) {
+  if (currentUser && !canManageCustomers) {
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -78,7 +78,7 @@ export default function CustomerDetail() {
   }
 
   const activeShipments = customerShipments.filter(s => !isShipmentTerminalStatus(s.status) && !s.isArchived && !s.isExitedArchived);
-  const canViewPrivateDetails = currentUser?.role === "CEO" && customer.canViewPrivateDetails !== false;
+  const canViewPrivateDetails = canManageCustomers && customer.canViewPrivateDetails !== false;
   const displayCustomerCode = customer.customerCode || customer.code || customer.id;
   const phoneNumbers = customer.phoneNumbers?.length
     ? customer.phoneNumbers

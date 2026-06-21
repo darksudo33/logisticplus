@@ -112,8 +112,8 @@ function AppRoutes() {
         <Route path="/shipments/:id" element={<ProtectedAppLayout anyOf={["shipments.view_all"]}><ShipmentDetail /></ProtectedAppLayout>} />
         <Route path="/shipments/:id/edit" element={<ProtectedAppLayout anyOf={["shipments.view_all"]} roles={["CEO"]}><ShipmentEdit /></ProtectedAppLayout>} />
         <Route path="/changelog" element={<ProtectedAppLayout anyOf={["changes.view"]}><ChangeLog /></ProtectedAppLayout>} />
-        <Route path="/customers" element={<ProtectedAppLayout anyOf={["customers.view"]} roles={["CEO"]}><Customers /></ProtectedAppLayout>} />
-        <Route path="/customers/:id" element={<ProtectedAppLayout anyOf={["customers.view"]} roles={["CEO"]}><CustomerDetail /></ProtectedAppLayout>} />
+        <Route path="/customers" element={<ProtectedAppLayout anyOf={["customers.view"]} roles={["CEO", "MANAGER"]}><Customers /></ProtectedAppLayout>} />
+        <Route path="/customers/:id" element={<ProtectedAppLayout anyOf={["customers.view"]} roles={["CEO", "MANAGER"]}><CustomerDetail /></ProtectedAppLayout>} />
         <Route path="/tasks" element={<ProtectedAppLayout anyOf={["tasks.view_own", "tasks.view_all"]}><Tasks /></ProtectedAppLayout>} />
         <Route path="/documents" element={<ProtectedAppLayout anyOf={["documents.view_all"]}><Documents /></ProtectedAppLayout>} />
         <Route path="/documents/management-center" element={<ProtectedAppLayout allOf={["documents.view_all", "shipments.view_all"]}><DocumentManagementCenter /></ProtectedAppLayout>} />
