@@ -1474,6 +1474,7 @@ async function startServer() {
       res.json({ ok: true, data: sanitizeDocumentEntityResponse(params.entityType, data) });
     } catch (error) {
       if (error.statusCode === 403) return createApiError(res, 403, "FORBIDDEN", error.message);
+      if (error.code === "23505") return createApiError(res, 409, "CONFLICT", "The record conflicts with an active record.");
       createApiError(res, 500, "RESTORE_FAILED", "Could not restore record.");
     }
   });

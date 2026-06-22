@@ -94,6 +94,7 @@ export async function assertShipmentCodeAvailable(queryable, {
      FROM shipments
      WHERE organization_id = $1
        AND shipment_code = $2
+       AND archived_at IS NULL
        ${excludeClause}
      LIMIT 1`,
     values
@@ -135,19 +136,45 @@ export async function reserveNextShipmentCode(queryable, {
     [organizationId, dateParts.shamsiYear]
   );
 
-  const counter = await queryable.query(
-    `UPDATE shipment_code_counters
-     SET last_sequence = last_sequence + 1,
-         updated_at = NOW()
+  await queryable.query(
+    `SELECT last_sequence
+     FROM shipment_code_counters
      WHERE organization_id = $1
        AND shamsi_year = $2
-     RETURNING last_sequence`,
+     FOR UPDATE`,
     [organizationId, dateParts.shamsiYear]
   );
-  const sequence = Number(counter.rows[0]?.last_sequence || 0);
+  const active = await queryable.query(
+    `SELECT COALESCE(MAX(COALESCE(
+       shamsi_sequence,
+       CASE WHEN shipment_code ~ '^\\d{11}$' THEN substring(shipment_code from 9 for 3)::int END
+     )), 0)::int AS last_sequence
+     FROM shipments
+     WHERE organization_id = $1
+       AND archived_at IS NULL
+       AND (
+         shamsi_year = $2
+         OR (
+           shamsi_year IS NULL
+           AND shipment_code ~ '^\\d{11}$'
+           AND substring(shipment_code from 1 for 4)::int = $2
+         )
+       )`,
+    [organizationId, dateParts.shamsiYear]
+  );
+  const sequence = Number(active.rows[0]?.last_sequence || 0) + 1;
   if (!Number.isInteger(sequence) || sequence < 1 || sequence > 999) {
     throw shipmentCodeError("INVALID_SHIPMENT_CODE_SEQUENCE", SHIPMENT_CODE_ERRORS.invalidSequence);
   }
+
+  await queryable.query(
+    `UPDATE shipment_code_counters
+     SET last_sequence = $3,
+         updated_at = NOW()
+     WHERE organization_id = $1
+       AND shamsi_year = $2`,
+    [organizationId, dateParts.shamsiYear, sequence]
+  );
 
   const shipmentCode = `${dateParts.compactDate}${String(sequence).padStart(3, "0")}`;
   return {

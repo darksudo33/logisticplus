@@ -218,4 +218,28 @@ test.describe.serial("strict Shamsi shipment code generation", () => {
 
     await disposeContexts(owner);
   });
+
+  test("reuses the latest sequence after its shipment is archived", async () => {
+    const owner = await loginApi();
+    const customer = await createCustomer(owner, `ShipmentCodeReuse${Date.now()}`);
+    const created = await readOk<any>(
+      await owner.post("/api/shipments/v2", {
+        data: shipmentBody(customer.id),
+      })
+    );
+
+    await readOk(await owner.post(`/api/archive/shipment/${created.shipment.id}`));
+
+    const replacement = await readOk<any>(
+      await owner.post("/api/shipments/v2", {
+        data: shipmentBody(customer.id),
+      })
+    );
+    expect(replacement.shipment.trackingNumber).toBe(created.shipment.trackingNumber);
+
+    const restore = await owner.post(`/api/archive/shipment/${created.shipment.id}/restore`);
+    expect(restore.status()).toBe(409);
+
+    await disposeContexts(owner);
+  });
 });

@@ -1422,7 +1422,7 @@ CREATE INDEX IF NOT EXISTS shipments_free_time_ends_at_idx ON shipments (free_ti
 CREATE INDEX IF NOT EXISTS shipments_customer_access_token_hash_idx ON shipments (customer_access_token_hash);
 CREATE INDEX IF NOT EXISTS shipments_org_updated_idx ON shipments (organization_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS shipments_org_code_idx ON shipments (organization_id, shipment_code);
-CREATE UNIQUE INDEX IF NOT EXISTS shipments_org_shipment_code_unique_idx ON shipments (organization_id, shipment_code) WHERE organization_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS shipments_org_shipment_code_unique_idx ON shipments (organization_id, shipment_code) WHERE organization_id IS NOT NULL AND archived_at IS NULL;
 CREATE INDEX IF NOT EXISTS shipments_org_shamsi_year_idx ON shipments (organization_id, shamsi_year);
 CREATE INDEX IF NOT EXISTS shipments_org_shamsi_date_idx ON shipments (organization_id, shamsi_date);
 CREATE INDEX IF NOT EXISTS shipments_org_customer_access_idx ON shipments (organization_id, customer_access_enabled, updated_at DESC);
