@@ -74,6 +74,12 @@ const shipmentGoodsCountDisplay = (shipment: Shipment) =>
 const shipmentFirstGoodsDisplay = (shipment: Shipment) =>
   shipment.firstGoodsName || "ثبت نشده";
 
+const normalizeSearchText = (value: unknown) =>
+  String(value ?? "")
+    .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
+    .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+    .toLowerCase();
+
 const statusOptions = [
   { value: "ALL", label: "همه وضعیت‌ها" },
   ...SHIPMENT_STATUS_OPTIONS,
@@ -87,7 +93,9 @@ export default function Shipments() {
   const tasks = tasksResource.data;
   const refreshStoreShipments = useAppStore(state => state.refreshShipments);
   const currentUser = useAppStore(state => state.currentUser);
-  const canEditShipmentBasics = currentUser?.role === "CEO" || currentUser?.role === "MANAGER";
+  const userPermissions = currentUser?.permissions || [];
+  const canEditShipmentBasics = userPermissions.includes("shipments.update") || userPermissions.includes("platform.admin");
+  const canArchiveShipment = userPermissions.includes("shipments.archive") || userPermissions.includes("platform.admin");
   const [shipmentSteps, setShipmentSteps] = useState<ShipmentStep[]>([]);
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -170,12 +178,13 @@ export default function Shipments() {
     return [...shipments]
       .filter(s => {
         const isNotArchived = !s.isArchived && !s.isExitedArchived;
-        const normalizedSearch = searchTerm.trim().toLowerCase();
+        const normalizedSearch = normalizeSearchText(searchTerm.trim());
         const searchableText = [
           s.trackingNumber,
           s.firstGoodsName,
           s.goodsTotalCount,
           s.goodsTotalCount?.toLocaleString("fa-IR"),
+          shipmentGoodsCountDisplay(s),
           s.customerCode,
           s.customerName,
           s.customerId,
@@ -189,7 +198,7 @@ export default function Shipments() {
           .filter(Boolean)
           .join(" ")
           .toLowerCase();
-        const matchesSearch = !normalizedSearch || searchableText.includes(normalizedSearch);
+        const matchesSearch = !normalizedSearch || normalizeSearchText(searchableText).includes(normalizedSearch);
         const matchesStatus = statusFilter === "ALL" || s.status === statusFilter;
         return isNotArchived && matchesSearch && matchesStatus;
       })
@@ -236,9 +245,8 @@ export default function Shipments() {
     navigate(`/shipments/${shipment.id}`);
   };
 
-  const canMoveToExitedArchive = Boolean(currentUser?.permissions?.includes("shipments.archive"));
   const isExitArchiveEligible = (shipment: { status: ShipmentStatus }) =>
-    canMoveToExitedArchive && shipment.status === "EXITED";
+    canArchiveShipment && shipment.status === "EXITED";
 
   return (
     <div className="app-page space-y-5 font-sans">
@@ -361,7 +369,7 @@ export default function Shipments() {
                              ویرایش محموله
                            </DropdownMenuItem>
                          ) : null}
-                          {isShipmentTerminalStatus(shipment.status) && (
+                           {canArchiveShipment && isShipmentTerminalStatus(shipment.status) && (
                             <DropdownMenuItem 
                               className="text-xs cursor-pointer hover:bg-amber-500/10 text-amber-500 font-bold flex items-center gap-2 rounded-lg"
                               onClick={() => void handleArchiveShipment(shipment.id)}
@@ -370,7 +378,7 @@ export default function Shipments() {
                               بایگانی محموله
                             </DropdownMenuItem>
                           )}
-                          {isExitArchiveEligible(shipment) && (
+                          {canArchiveShipment && isExitArchiveEligible(shipment) && (
                             <DropdownMenuItem
                               className="text-xs cursor-pointer hover:bg-primary/10 text-primary font-bold flex items-center gap-2 rounded-lg"
                               onClick={() => {
@@ -382,17 +390,21 @@ export default function Shipments() {
                               انتقال به محموله‌های خروج‌شده
                             </DropdownMenuItem>
                           )}
-                          <DropdownMenuSeparator className="bg-border" />
-                          <DropdownMenuItem 
-                            className="text-xs cursor-pointer hover:bg-red-500/10 text-red-500 font-bold flex items-center gap-2 rounded-lg"
-                            onClick={() => {
-                              setShipmentToDelete(shipment.id);
-                              setIsDeleteDialogOpen(true);
-                            }}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            حذف محموله
-                          </DropdownMenuItem>
+                          {canArchiveShipment ? (
+                            <>
+                              <DropdownMenuSeparator className="bg-border" />
+                              <DropdownMenuItem
+                                className="text-xs cursor-pointer hover:bg-red-500/10 text-red-500 font-bold flex items-center gap-2 rounded-lg"
+                                onClick={() => {
+                                  setShipmentToDelete(shipment.id);
+                                  setIsDeleteDialogOpen(true);
+                                }}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                حذف محموله
+                              </DropdownMenuItem>
+                            </>
+                          ) : null}
                           <DropdownMenuSeparator className="bg-border" />
                           <DropdownMenuGroup>
                             <DropdownMenuLabel className="text-[10px] text-muted-foreground font-black px-2 py-1">تغییر وضعیت</DropdownMenuLabel>
@@ -558,7 +570,7 @@ export default function Shipments() {
                                      ویرایش محموله
                                    </DropdownMenuItem>
                                  ) : null}
-                                 {isShipmentTerminalStatus(shipment.status) && (
+                                  {canArchiveShipment && isShipmentTerminalStatus(shipment.status) && (
                                    <DropdownMenuItem 
                                      className="text-xs cursor-pointer hover:bg-amber-500/10 text-amber-500 font-bold flex items-center gap-2 rounded-lg"
                                      onClick={() => void handleArchiveShipment(shipment.id)}
@@ -567,7 +579,7 @@ export default function Shipments() {
                                      بایگانی محموله
                                    </DropdownMenuItem>
                                  )}
-                                 {isExitArchiveEligible(shipment) && (
+                                  {canArchiveShipment && isExitArchiveEligible(shipment) && (
                                    <DropdownMenuItem
                                      className="text-xs cursor-pointer hover:bg-primary/10 text-primary font-bold flex items-center gap-2 rounded-lg"
                                      onClick={() => {
@@ -579,17 +591,21 @@ export default function Shipments() {
                                      انتقال به محموله‌های خروج‌شده
                                    </DropdownMenuItem>
                                  )}
-                                 <DropdownMenuSeparator className="bg-border" />
-                                 <DropdownMenuItem 
-                                   className="text-xs cursor-pointer hover:bg-red-500/10 text-red-500 font-bold flex items-center gap-2 rounded-lg"
-                                   onClick={() => {
-                                     setShipmentToDelete(shipment.id);
-                                     setIsDeleteDialogOpen(true);
-                                   }}
-                                 >
-                                   <Trash2 className="w-3.5 h-3.5" />
-                                   حذف محموله
-                                 </DropdownMenuItem>
+                                  {canArchiveShipment ? (
+                                    <>
+                                      <DropdownMenuSeparator className="bg-border" />
+                                      <DropdownMenuItem
+                                        className="text-xs cursor-pointer hover:bg-red-500/10 text-red-500 font-bold flex items-center gap-2 rounded-lg"
+                                        onClick={() => {
+                                          setShipmentToDelete(shipment.id);
+                                          setIsDeleteDialogOpen(true);
+                                        }}
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                        حذف محموله
+                                      </DropdownMenuItem>
+                                    </>
+                                  ) : null}
                                  <DropdownMenuSeparator className="bg-border" />
                                  <DropdownMenuGroup>
                                    <DropdownMenuLabel className="text-[10px] text-muted-foreground font-black px-2 py-1">تغییر وضعیت</DropdownMenuLabel>

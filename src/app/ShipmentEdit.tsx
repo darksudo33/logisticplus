@@ -124,7 +124,7 @@ export function ShipmentEdit() {
     }
   };
 
-  if (currentUser && currentUser.role !== "CEO" && currentUser.role !== "MANAGER") {
+  if (currentUser && !currentUser.permissions?.includes("shipments.update") && !currentUser.permissions?.includes("platform.admin")) {
     return (
       <div className="app-page flex min-h-[360px] flex-col items-center justify-center gap-3 text-center" dir="rtl">
         <AlertCircle className="h-10 w-10 text-muted-foreground" />
