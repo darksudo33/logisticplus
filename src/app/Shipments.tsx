@@ -87,7 +87,7 @@ export default function Shipments() {
   const tasks = tasksResource.data;
   const refreshStoreShipments = useAppStore(state => state.refreshShipments);
   const currentUser = useAppStore(state => state.currentUser);
-  const canEditShipmentBasics = currentUser?.role === "CEO";
+  const canEditShipmentBasics = currentUser?.role === "CEO" || currentUser?.role === "MANAGER";
   const [shipmentSteps, setShipmentSteps] = useState<ShipmentStep[]>([]);
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -174,6 +174,8 @@ export default function Shipments() {
         const searchableText = [
           s.trackingNumber,
           s.firstGoodsName,
+          s.goodsTotalCount,
+          s.goodsTotalCount?.toLocaleString("fa-IR"),
           s.customerCode,
           s.customerName,
           s.customerId,
@@ -630,9 +632,9 @@ export default function Shipments() {
       <DeleteConfirmDialog 
         isOpen={isDeleteDialogOpen}
         onClose={() => setIsDeleteDialogOpen(false)}
-        onConfirm={() => {
+        onConfirm={async () => {
           if (shipmentToDelete) {
-            void handleArchiveShipment(shipmentToDelete);
+            await handleArchiveShipment(shipmentToDelete);
             toast.message("محموله به سطل زباله منتقل شد", {
               description: "می‌توانید تا ۷ روز آینده آن را از بخش بایگانی بازیابی کنید.",
               icon: <Trash className="w-4 h-4 text-red-500" />

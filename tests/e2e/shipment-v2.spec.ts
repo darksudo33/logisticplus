@@ -338,6 +338,9 @@ test.describe.serial("shipment module v2", () => {
 
     await page.goto("/shipments");
     const shipmentRow = page.getByTestId(`shipment-row-${shipmentId}`);
+    await page.locator("input").first().fill("۱۵");
+    await expect(shipmentRow).toBeVisible();
+    await page.locator("input").first().fill("");
     await expect(shipmentRow).toContainText(customerIdentifier);
     await expect(shipmentRow).toContainText("Dubai");
     await expect(shipmentRow).toContainText("Tehran");

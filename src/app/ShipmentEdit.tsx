@@ -124,11 +124,11 @@ export function ShipmentEdit() {
     }
   };
 
-  if (currentUser && currentUser.role !== "CEO") {
+  if (currentUser && currentUser.role !== "CEO" && currentUser.role !== "MANAGER") {
     return (
       <div className="app-page flex min-h-[360px] flex-col items-center justify-center gap-3 text-center" dir="rtl">
         <AlertCircle className="h-10 w-10 text-muted-foreground" />
-        <p className="text-sm font-black text-foreground">ویرایش محموله فقط برای مدیر ارشد فعال است.</p>
+        <p className="text-sm font-black text-foreground">ویرایش محموله فقط برای مدیر ارشد و مدیر عملیات فعال است.</p>
         <Button variant="outline" onClick={() => navigate(id ? `/shipments/${id}` : "/shipments")}>بازگشت</Button>
       </div>
     );

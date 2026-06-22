@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import pg from "pg";
-import { BASE_URL, expectPublicTrackingPayloadIsSafe, loginApi, loginViaUi, nextValidShipmentCode, readOk } from "./helpers";
+import { BASE_URL, disposeContexts, expectPublicTrackingPayloadIsSafe, loginApi, loginViaUi, nextValidShipmentCode, readOk, uniqueEmail, USER_PASSWORD } from "./helpers";
 
 const { Client } = pg;
 const testDatabaseUrl = process.env.TEST_DATABASE_URL || "postgres://postgres@localhost:5432/logisticplus_test";
@@ -9,6 +9,26 @@ async function dbClient() {
   const client = new Client({ connectionString: testDatabaseUrl });
   await client.connect();
   return client;
+}
+
+async function createCompanyUser(role: string, prefix: string) {
+  const owner = await loginApi();
+  const email = uniqueEmail(prefix);
+  try {
+    await readOk(
+      await owner.post("/api/users", {
+        data: {
+          name: `E2E ${role} User`,
+          email,
+          password: USER_PASSWORD,
+          role,
+        },
+      })
+    );
+    return email;
+  } finally {
+    await disposeContexts(owner);
+  }
 }
 
 async function ownerOrganizationId() {
@@ -181,8 +201,9 @@ test.describe.serial("UX/UI regression sweep", () => {
     }
   });
 
-  test("shipment edit route opens a CEO-only limited popup form", async ({ page }) => {
+  test("manager can edit and delete shipments from the list", async ({ page }) => {
     const api = await loginApi();
+    const managerEmail = await createCompanyUser("MANAGER", "e2e-manager-shipment");
     const trackingNumber = await nextValidShipmentCode();
     const customerMarker = `UXEDIT${Date.now()}`;
     const originalCustomer = await readOk<any>(
@@ -219,8 +240,12 @@ test.describe.serial("UX/UI regression sweep", () => {
     );
     const nextTrackingNumber = await nextValidShipmentCode();
     try {
-      await loginViaUi(page);
-      await page.goto(`/shipments/${shipment.id}/edit`);
+      await loginViaUi(page, managerEmail, USER_PASSWORD);
+      await page.goto("/shipments");
+      const shipmentRow = page.locator("tbody tr", { hasText: trackingNumber });
+      await expect(shipmentRow).toBeVisible();
+      await shipmentRow.getByRole("button").last().click();
+      await page.getByRole("menuitem").first().click();
       await expect(page.getByRole("dialog")).toBeVisible();
       await expect(page.getByTestId("shipment-edit-tracking-number-input")).toHaveValue(trackingNumber);
       await expect(page.getByTestId("shipment-edit-customer-select")).toHaveValue(originalCustomer.id);
@@ -251,9 +276,19 @@ test.describe.serial("UX/UI regression sweep", () => {
       expect(updated.dischargePort).toBe("Edit discharge after");
       expect(updated.customerId).toBe(correctedCustomer.id);
       expect(updated.customerCode).toBe(correctedCustomer.customerCode);
+
+      await page.goto("/shipments");
+      const updatedShipmentRow = page.locator("tbody tr", { hasText: nextTrackingNumber });
+      await expect(updatedShipmentRow).toBeVisible();
+      await updatedShipmentRow.getByRole("button").last().click();
+      await page.getByRole("menuitem").nth(1).click();
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.getByRole("dialog").getByRole("button").first().click();
+      await expect(updatedShipmentRow).toHaveCount(0);
     } finally {
       const client = await dbClient();
       try {
+        await client.query("DELETE FROM archive_records WHERE entity_type = 'shipment' AND entity_id = $1", [shipment.id]);
         await client.query("DELETE FROM shipments WHERE id = $1", [shipment.id]);
         await client.query("DELETE FROM customers WHERE id = ANY($1::text[])", [[originalCustomer.id, correctedCustomer.id]]);
       } finally {
