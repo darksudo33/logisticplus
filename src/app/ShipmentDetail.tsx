@@ -35,7 +35,7 @@ import {
   labelForOption,
   releaseStatusOptions,
 } from "@/src/app/dailyStatusColumns";
-import { ApiError, apiGet } from "@/src/lib/api";
+import { ApiError, apiGet, apiPost } from "@/src/lib/api";
 import { businessEntitiesApi } from "@/src/lib/businessEntitiesApi";
 import { getShamsiDatePart, ShamsiDateTimeField, toEnglishDigits, toPersianDigits } from "@/src/components/ShamsiDateTimeField";
 import { ShipmentChatPanel } from "@/src/components/shipments/ShipmentChatPanel";
@@ -2029,6 +2029,10 @@ export default function ShipmentDetail() {
   const shipments = useAppDataStore((state) => state.shipments);
   const commercialCards = useAppDataStore((state) => state.commercialCards);
   const canUpdate = Boolean(currentUser?.permissions?.includes("shipments.update"));
+  const canManageCustomerTracking = Boolean(
+    currentUser?.permissions?.includes("customer_access.manage") &&
+    (currentUser.role === "CEO" || currentUser.role === "MANAGER")
+  );
   const [data, setData] = React.useState<ShipmentV2ProfileResponse | null>(null);
   const [isLoading, setIsLoading] = React.useState(true);
   const [isInitializing, setIsInitializing] = React.useState(false);
@@ -2036,6 +2040,7 @@ export default function ShipmentDetail() {
   const [errorMessage, setErrorMessage] = React.useState("");
   const [documentCount, setDocumentCount] = React.useState<number | null>(null);
   const [isDocumentCountLoading, setIsDocumentCountLoading] = React.useState(false);
+  const [isCustomerTrackingLoading, setIsCustomerTrackingLoading] = React.useState(false);
   const [dailyStatusRow, setDailyStatusRow] = React.useState<DailyStatusBoardRow | null>(null);
   const [malvaniProfiles, setMalvaniProfiles] = React.useState<MalvaniProfile[]>([]);
   const [isMalvaniLoading, setIsMalvaniLoading] = React.useState(false);
@@ -2169,6 +2174,21 @@ export default function ShipmentDetail() {
     }
   };
 
+  const copyCustomerTrackingLink = async () => {
+    if (!id) return;
+    setIsCustomerTrackingLoading(true);
+    try {
+      const access = await apiPost<{ url: string }>(`/api/shipments/${encodeURIComponent(id)}/customer-access/generate`);
+      await navigator.clipboard.writeText(access.url);
+      toast.success("لینک رهگیری مشتری کپی شد.");
+    } catch (error) {
+      console.error("Copy customer tracking link failed", error);
+      toast.error(error instanceof ApiError && error.status === 403 ? "دسترسی ساخت لینک رهگیری را ندارید." : "ساخت لینک رهگیری مشتری ناموفق بود.");
+    } finally {
+      setIsCustomerTrackingLoading(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="app-page flex min-h-[50vh] items-center justify-center font-sans" dir="rtl">
@@ -2237,6 +2257,19 @@ export default function ShipmentDetail() {
                 {headerCustomerIdentifier || "بدون مشتری"}
               </p>
             </div>
+            {canManageCustomerTracking ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9 shrink-0 rounded-lg text-xs font-black"
+                onClick={() => void copyCustomerTrackingLink()}
+                disabled={isCustomerTrackingLoading}
+                data-testid="shipment-v2-customer-tracking-link"
+              >
+                {isCustomerTrackingLoading ? <Loader2 className="ml-1 h-4 w-4 animate-spin" /> : <ExternalLink className="ml-1 h-4 w-4" />}
+                لینک رهگیری مشتری
+              </Button>
+            ) : null}
           </div>
           <HeaderRouteProgress steps={routeSteps} />
         </div>

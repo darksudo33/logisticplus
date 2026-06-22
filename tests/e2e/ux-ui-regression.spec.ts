@@ -277,6 +277,14 @@ test.describe.serial("UX/UI regression sweep", () => {
       expect(updated.customerId).toBe(correctedCustomer.id);
       expect(updated.customerCode).toBe(correctedCustomer.customerCode);
 
+      const customerAccessResponse = page.waitForResponse((response) => (
+        response.url().includes(`/api/shipments/${shipment.id}/customer-access/generate`) &&
+        response.request().method() === "POST"
+      ));
+      await page.getByTestId("shipment-v2-customer-tracking-link").click();
+      const customerAccessPayload = await (await customerAccessResponse).json();
+      expect(customerAccessPayload.data.url).toContain("/track/");
+
       await page.goto("/shipments");
       const updatedShipmentRow = page.locator("tbody tr", { hasText: nextTrackingNumber });
       await expect(updatedShipmentRow).toBeVisible();
