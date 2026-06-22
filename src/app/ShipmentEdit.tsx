@@ -23,14 +23,16 @@ type ShipmentEditFormData = {
   origin: string;
   destination: string;
   dischargePort: string;
+  consigneeName: string;
 };
 
-const formFromShipment = (shipment: Shipment): ShipmentEditFormData => ({
+const formFromShipment = (shipment: Shipment, consigneeName = ""): ShipmentEditFormData => ({
   customerId: shipment.customerId || "",
   trackingNumber: shipment.trackingNumber || "",
   origin: shipment.origin || "",
   destination: shipment.deliveryPort || shipment.destination || "",
   dischargePort: shipment.dischargePort || "",
+  consigneeName,
 });
 
 const customerLabel = (customer: Customer) => {
@@ -52,6 +54,7 @@ export function ShipmentEdit() {
     origin: "",
     destination: "",
     dischargePort: "",
+    consigneeName: "",
   });
   const [isLoading, setIsLoading] = React.useState(true);
   const [isSaving, setIsSaving] = React.useState(false);
@@ -61,10 +64,11 @@ export function ShipmentEdit() {
     if (!id) return;
     setIsLoading(true);
     shipmentApi.get(id)
-      .then((loaded) => {
+      .then(async (loaded) => {
+        const profile = loaded.hasV2Profile ? await shipmentV2Api.get(loaded.id) : null;
         if (!isMounted) return;
         setShipment(loaded);
-        setFormData(formFromShipment(loaded));
+        setFormData(formFromShipment(loaded, profile?.profile?.sections.base.consigneeName || ""));
       })
       .catch((error) => {
         toast.error(error instanceof Error ? error.message : "بارگذاری محموله ناموفق بود.");
@@ -100,6 +104,7 @@ export function ShipmentEdit() {
           origin: formData.origin,
           deliveryPort: formData.destination,
           dischargePort: formData.dischargePort,
+          consigneeName: formData.consigneeName.trim(),
         });
         if (customerChanged) {
           await shipmentApi.updateOperationalFields(shipment.id, {
@@ -133,6 +138,8 @@ export function ShipmentEdit() {
       </div>
     );
   }
+
+  const canEditConsignee = shipment?.hasV2Profile && shipment.v2FlowCode === "IMPORT_SHIP";
 
   return (
     <div className="app-page min-h-[calc(100vh-6rem)]" dir="rtl">
@@ -216,6 +223,17 @@ export function ShipmentEdit() {
                     data-testid="shipment-edit-discharge-port-input"
                   />
                 </div>
+                {canEditConsignee ? (
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <Label className="text-xs font-black text-muted-foreground">کانساینی</Label>
+                    <Input
+                      value={formData.consigneeName}
+                      onChange={(event) => setFormData((current) => ({ ...current, consigneeName: event.target.value }))}
+                      className="h-10 text-sm"
+                      data-testid="shipment-edit-consignee-input"
+                    />
+                  </div>
+                ) : null}
               </div>
 
               <div className="flex justify-end gap-2 border-t border-border pt-3">

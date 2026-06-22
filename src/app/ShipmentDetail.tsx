@@ -719,6 +719,7 @@ function BaseSection({
     const nextDraft: ShipmentV2BaseSection = {
       ...draft,
       trackingNumber: (draft.trackingNumber || shipment.trackingNumber || "").trim(),
+      consigneeName: (draft.consigneeName || "").trim(),
       orderRegistrationNumber: (draft.orderRegistrationNumber || "").trim(),
       commercialCardDisplayName: (draft.commercialCardDisplayName || "").trim(),
       malvaniDisplayName: (draft.malvaniDisplayName || "").trim(),
@@ -786,6 +787,17 @@ function BaseSection({
                 onChange={(event) => updateNumericDraft("orderRegistrationNumber", event.target.value)}
               />
             </div>
+            {!isLanjFlow ? (
+              <div className="space-y-1.5">
+                <Label className="text-[11px] font-bold text-muted-foreground sm:text-xs">کانساینی</Label>
+                <Input
+                  data-testid="shipment-v2-base-consignee-input"
+                  className="h-8 rounded-lg text-[11px] font-bold sm:h-9 sm:text-xs"
+                  value={draft.consigneeName || ""}
+                  onChange={(event) => updateDraft("consigneeName", event.target.value)}
+                />
+              </div>
+            ) : null}
             <div className="relative space-y-1.5 sm:col-span-2">
               <Label className="text-[11px] font-bold text-muted-foreground sm:text-xs">{credentialLabel}</Label>
               <Input
@@ -849,6 +861,11 @@ function BaseSection({
             <BaseInfoCard label="شماره ثبت سفارش" testId="shipment-v2-base-order-registration-number">
               <span dir="ltr">{displayValue(data.orderRegistrationNumber)}</span>
             </BaseInfoCard>
+            {!isLanjFlow ? (
+              <BaseInfoCard label="کانساینی" testId="shipment-v2-base-consignee">
+                {displayValue(data.consigneeName)}
+              </BaseInfoCard>
+            ) : null}
             <BaseInfoCard label={credentialLabel} testId="shipment-v2-base-business-credential">
               {(isLanjFlow ? linkedMalvaniProfile : linkedCommercialCard) ? (
                 <button

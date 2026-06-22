@@ -435,4 +435,36 @@ test.describe.serial("shipment module v2", () => {
       await disposeContexts(...contexts);
     }
   });
+
+  test("adds and edits an empty Import Ship consignee after creation", async ({ page }) => {
+    await loginViaUi(page);
+    const marker = `ShipmentV2Consignee${Date.now()}`;
+    const customer = await createCustomer(page.request, marker);
+    const created = await readOk<any>(
+      await page.request.post("/api/shipments/v2", {
+        data: {
+          flowCode: "IMPORT_SHIP",
+          customerId: customer.id,
+          origin: "Jebel Ali",
+          dischargePort: "Bandar Abbas",
+          deliveryPort: "Tehran",
+        },
+      })
+    );
+    const shipmentId = created.shipment.id;
+
+    await page.goto(`/shipments/${shipmentId}/edit`);
+    await expect(page.getByTestId("shipment-edit-consignee-input")).toHaveValue("");
+    await page.getByTestId("shipment-edit-consignee-input").fill("Consignee added after creation");
+    await page.getByTestId("shipment-edit-save").click();
+
+    await expect(page).toHaveURL(new RegExp(`/shipments/${shipmentId}$`));
+    await expect(page.getByTestId("shipment-v2-base-consignee")).toContainText("Consignee added after creation");
+
+    await page.getByTestId("shipment-v2-base-edit").click();
+    await expect(page.getByTestId("shipment-v2-base-consignee-input")).toHaveValue("Consignee added after creation");
+    await page.getByTestId("shipment-v2-base-consignee-input").fill("Consignee edited from details");
+    await page.getByTestId("shipment-v2-base-save").click();
+    await expect(page.getByTestId("shipment-v2-base-consignee")).toContainText("Consignee edited from details");
+  });
 });
